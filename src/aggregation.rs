@@ -299,6 +299,56 @@ impl Aggregator<i64, f64> for MaxAggI64 {
     }
 }
 
+/// Count aggregator for f64. Counts non-NaN values (matching Pandas behavior).
+#[derive(Clone, Default)]
+pub struct CountAggF64 {
+    pub count: u64,
+}
+
+impl Aggregator<f64, f64> for CountAggF64 {
+    fn init() -> Self {
+        Self { count: 0 }
+    }
+
+    fn update(&mut self, value: f64) {
+        if !value.is_nan() {
+            self.count += 1;
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.count += other.count;
+    }
+
+    fn finalize(&self) -> f64 {
+        self.count as f64
+    }
+}
+
+/// Count aggregator for i64. Counts all values (integers have no NaN).
+#[derive(Clone, Default)]
+pub struct CountAggI64 {
+    pub count: u64,
+}
+
+impl Aggregator<i64, f64> for CountAggI64 {
+    fn init() -> Self {
+        Self { count: 0 }
+    }
+
+    fn update(&mut self, _value: i64) {
+        self.count += 1;
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.count += other.count;
+    }
+
+    fn finalize(&self) -> f64 {
+        self.count as f64
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,5 +501,44 @@ mod tests {
 
         agg1.merge(agg2);
         assert!((agg1.finalize() - 10.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_count_f64_skips_nan() {
+        let mut agg = CountAggF64::init();
+        agg.update(1.0);
+        agg.update(f64::NAN);
+        agg.update(2.0);
+        assert!((agg.finalize() - 2.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_count_f64_all_nan_returns_zero() {
+        let mut agg = CountAggF64::init();
+        agg.update(f64::NAN);
+        agg.update(f64::NAN);
+        assert!((agg.finalize() - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_count_i64() {
+        let mut agg = CountAggI64::init();
+        agg.update(1);
+        agg.update(2);
+        agg.update(3);
+        assert!((agg.finalize() - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_count_merge() {
+        let mut agg1 = CountAggF64::init();
+        agg1.update(1.0);
+        agg1.update(2.0);
+
+        let mut agg2 = CountAggF64::init();
+        agg2.update(3.0);
+
+        agg1.merge(agg2);
+        assert!((agg1.finalize() - 3.0).abs() < 1e-10);
     }
 }

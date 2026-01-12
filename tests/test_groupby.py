@@ -114,11 +114,66 @@ class TestBoosterGroupBy:
         booster_result = small_df.booster.groupby("key", "val_float", "sum")
         pandas_result = small_df.groupby("key")["val_float"].sum()
 
+
+class TestGroupbyCount:
+    def test_count_f64_matches_pandas(self, large_df):
+        import pandas_booster
+
+        booster_result = large_df.booster.groupby("key", "val_float", "count")
+        pandas_result = large_df.groupby("key")["val_float"].count()
+
+        booster_sorted = booster_result.sort_index()
+        pandas_sorted = pandas_result.sort_index()
+
+        # Check values match
+        pd.testing.assert_series_equal(
+            booster_sorted,
+            pandas_sorted,
+            check_exact=True,
+        )
+
+        # Check dtype is int64
+        assert pd.api.types.is_integer_dtype(booster_result.dtype)
+
+    def test_count_i64_matches_pandas(self, large_df):
+        import pandas_booster
+
+        booster_result = large_df.booster.groupby("key", "val_int", "count")
+        pandas_result = large_df.groupby("key")["val_int"].count()
+
+        booster_sorted = booster_result.sort_index()
+        pandas_sorted = pandas_result.sort_index()
+
+        pd.testing.assert_series_equal(
+            booster_sorted,
+            pandas_sorted,
+            check_exact=True,
+        )
+        assert pd.api.types.is_integer_dtype(booster_result.dtype)
+
+    def test_count_with_nan_matches_pandas(self):
+        import pandas_booster
+
+        np.random.seed(42)
+        n = 200_000
+        values = np.random.random(n)
+        mask = np.random.random(n) < 0.1
+        df = pd.DataFrame(
+            {
+                "key": np.random.randint(0, 100, size=n),
+                "val": np.where(mask, np.nan, values),
+            }
+        )
+
+        booster_result = df.booster.groupby("key", "val", "count")
+        pandas_result = df.groupby("key")["val"].count()
+
         pd.testing.assert_series_equal(
             booster_result.sort_index(),
             pandas_result.sort_index(),
-            check_exact=False,
+            check_exact=True,
         )
+        assert pd.api.types.is_integer_dtype(booster_result.dtype)
 
     def test_invalid_agg_raises(self, large_df):
         import pandas_booster
@@ -459,3 +514,62 @@ class TestHighCardinality:
             check_exact=False,
             rtol=1e-10,
         )
+
+
+class TestGroupbyCount:
+    def test_count_f64_matches_pandas(self, large_df):
+        import pandas_booster
+
+        booster_result = large_df.booster.groupby("key", "val_float", "count")
+        pandas_result = large_df.groupby("key")["val_float"].count()
+
+        booster_sorted = booster_result.sort_index()
+        pandas_sorted = pandas_result.sort_index()
+
+        pd.testing.assert_series_equal(
+            booster_sorted,
+            pandas_sorted,
+            check_exact=True,
+        )
+
+        assert pd.api.types.is_integer_dtype(booster_result.dtype)
+
+    def test_count_i64_matches_pandas(self, large_df):
+        import pandas_booster
+
+        booster_result = large_df.booster.groupby("key", "val_int", "count")
+        pandas_result = large_df.groupby("key")["val_int"].count()
+
+        booster_sorted = booster_result.sort_index()
+        pandas_sorted = pandas_result.sort_index()
+
+        pd.testing.assert_series_equal(
+            booster_sorted,
+            pandas_sorted,
+            check_exact=True,
+        )
+        assert pd.api.types.is_integer_dtype(booster_result.dtype)
+
+    def test_count_with_nan_matches_pandas(self):
+        import pandas_booster
+
+        np.random.seed(42)
+        n = 200_000
+        values = np.random.random(n)
+        mask = np.random.random(n) < 0.1
+        df = pd.DataFrame(
+            {
+                "key": np.random.randint(0, 100, size=n),
+                "val": np.where(mask, np.nan, values),
+            }
+        )
+
+        booster_result = df.booster.groupby("key", "val", "count")
+        pandas_result = df.groupby("key")["val"].count()
+
+        pd.testing.assert_series_equal(
+            booster_result.sort_index(),
+            pandas_result.sort_index(),
+            check_exact=True,
+        )
+        assert pd.api.types.is_integer_dtype(booster_result.dtype)

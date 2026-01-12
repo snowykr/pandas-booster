@@ -8,7 +8,7 @@ import pandas as pd
 if TYPE_CHECKING:
     from pandas import DataFrame, Series
 
-AggFunc = Literal["sum", "mean", "min", "max"]
+AggFunc = Literal["sum", "mean", "min", "max", "count"]
 
 
 @pd.api.extensions.register_dataframe_accessor("booster")
@@ -31,7 +31,7 @@ class BoosterAccessor:
         >>> df.booster.groupby(["k1", "k2"], "val", "sum")
     """
 
-    _SUPPORTED_AGGS: set[str] = {"sum", "mean", "min", "max"}
+    _SUPPORTED_AGGS: set[str] = {"sum", "mean", "min", "max", "count"}
     _MAX_MULTI_KEYS: int = 10
 
     def __init__(self, pandas_obj: DataFrame) -> None:
@@ -163,6 +163,9 @@ class BoosterAccessor:
 
         result = pd.Series(result_dict, name=val_col.name)
         result.index.name = key_col.name
+        if agg == "count":
+            result = result.astype(np.int64)
+
         if sort:
             result = result.sort_index()
         return result
@@ -196,6 +199,9 @@ class BoosterAccessor:
         idx = pd.MultiIndex.from_arrays(index_arrays, names=by_cols)
 
         result = pd.Series(result_values, index=idx, name=val_col.name)
+        if agg == "count":
+            result = result.astype(np.int64)
+
         if sort:
             result = result.sort_index()
         return result

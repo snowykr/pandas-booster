@@ -23,8 +23,8 @@ use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::aggregation::{
-    Aggregator, MaxAggF64, MaxAggI64, MeanAggF64, MeanAggI64, MinAggF64, MinAggI64, SumAggF64,
-    SumAggI64,
+    Aggregator, CountAggF64, CountAggI64, MaxAggF64, MaxAggI64, MeanAggF64, MeanAggI64, MinAggF64,
+    MinAggI64, SumAggF64, SumAggI64,
 };
 
 const INLINE_KEYS: usize = 4;
@@ -282,6 +282,14 @@ pub fn radix_groupby_max_i64(key_slices: &[&[i64]], values: &[i64]) -> GroupByMu
     radix_groupby::<i64, MaxAggI64>(key_slices, values)
 }
 
+pub fn radix_groupby_count_f64(key_slices: &[&[i64]], values: &[f64]) -> GroupByMultiResult {
+    radix_groupby::<f64, CountAggF64>(key_slices, values)
+}
+
+pub fn radix_groupby_count_i64(key_slices: &[&[i64]], values: &[i64]) -> GroupByMultiResult {
+    radix_groupby::<i64, CountAggI64>(key_slices, values)
+}
+
 // Public API - sorted (for sort=True)
 
 pub fn radix_groupby_sum_f64_sorted(key_slices: &[&[i64]], values: &[f64]) -> GroupByMultiResult {
@@ -314,6 +322,14 @@ pub fn radix_groupby_min_i64_sorted(key_slices: &[&[i64]], values: &[i64]) -> Gr
 
 pub fn radix_groupby_max_i64_sorted(key_slices: &[&[i64]], values: &[i64]) -> GroupByMultiResult {
     radix_groupby_sorted::<i64, MaxAggI64>(key_slices, values)
+}
+
+pub fn radix_groupby_count_f64_sorted(key_slices: &[&[i64]], values: &[f64]) -> GroupByMultiResult {
+    radix_groupby_sorted::<f64, CountAggF64>(key_slices, values)
+}
+
+pub fn radix_groupby_count_i64_sorted(key_slices: &[&[i64]], values: &[i64]) -> GroupByMultiResult {
+    radix_groupby_sorted::<i64, CountAggI64>(key_slices, values)
 }
 
 #[cfg(test)]

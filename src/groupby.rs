@@ -13,8 +13,8 @@ use pyo3::types::PyDict;
 use rayon::prelude::*;
 
 use crate::aggregation::{
-    Aggregator, MaxAggF64, MaxAggI64, MeanAggF64, MeanAggI64, MinAggF64, MinAggI64, SumAggF64,
-    SumAggI64,
+    Aggregator, CountAggF64, CountAggI64, MaxAggF64, MaxAggI64, MeanAggF64, MeanAggI64, MinAggF64,
+    MinAggI64, SumAggF64, SumAggI64,
 };
 
 /// Result container for groupby operations, holding key-value pairs.
@@ -107,6 +107,14 @@ pub fn parallel_groupby_min_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupB
 
 pub fn parallel_groupby_max_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultF64> {
     parallel_groupby_f64::<i64, MaxAggI64>(keys, values)
+}
+
+pub fn parallel_groupby_count_f64(keys: &[i64], values: &[f64]) -> PyResult<GroupByResultF64> {
+    parallel_groupby_f64::<f64, CountAggF64>(keys, values)
+}
+
+pub fn parallel_groupby_count_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultF64> {
+    parallel_groupby_f64::<i64, CountAggI64>(keys, values)
 }
 
 #[cfg(test)]
@@ -256,5 +264,35 @@ mod tests {
 
         assert!((map[&1] - 5.0).abs() < 1e-10);
         assert!((map[&2] - 4.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_groupby_count_f64() {
+        let keys = vec![1, 2, 1, 2, 1];
+        let values = vec![1.0, 2.0, f64::NAN, 4.0, 5.0];
+        let result = parallel_groupby_count_f64(&keys, &values).unwrap();
+
+        let mut map: AHashMap<i64, f64> = AHashMap::new();
+        for (k, v) in result.keys.iter().zip(result.values.iter()) {
+            map.insert(*k, *v);
+        }
+
+        assert!((map[&1] - 2.0).abs() < 1e-10);
+        assert!((map[&2] - 2.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_groupby_count_i64() {
+        let keys = vec![1, 2, 1, 2, 1];
+        let values: Vec<i64> = vec![1, 2, 3, 4, 5];
+        let result = parallel_groupby_count_i64(&keys, &values).unwrap();
+
+        let mut map: AHashMap<i64, f64> = AHashMap::new();
+        for (k, v) in result.keys.iter().zip(result.values.iter()) {
+            map.insert(*k, *v);
+        }
+
+        assert!((map[&1] - 3.0).abs() < 1e-10);
+        assert!((map[&2] - 2.0).abs() < 1e-10);
     }
 }
