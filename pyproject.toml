@@ -1,0 +1,65 @@
+[build-system]
+requires = ["maturin>=1.4,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "pandas-booster"
+version = "0.1.0"
+description = "High-performance numerical acceleration library for Pandas using Rust"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+keywords = ["pandas", "numpy", "performance", "rust", "data-science", "acceleration"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "pandas>=1.5.0,<3.0.0",
+    "numpy>=1.21.0,<3.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-benchmark>=4.0",
+    "polars>=0.20",
+]
+bench = [
+    "polars>=0.20",
+    "matplotlib>=3.5",
+]
+
+[project.urls]
+Homepage = "https://github.com/your-org/pandas-booster"
+Repository = "https://github.com/your-org/pandas-booster"
+Issues = "https://github.com/your-org/pandas-booster/issues"
+
+[tool.maturin]
+python-source = "python"
+module-name = "pandas_booster._rust"
+features = ["pyo3/extension-module"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "D", "UP", "B", "C4", "SIM"]
+ignore = ["D100", "D104", "D105", "D107"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"

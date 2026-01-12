@@ -1,0 +1,32 @@
+[package]
+name = "pandas_booster"
+version = "0.1.0"
+edition = "2021"
+authors = ["pandas-booster contributors"]
+description = "High-performance numerical acceleration library for Pandas using Rust"
+license = "MIT"
+repository = "https://github.com/your-org/pandas-booster"
+keywords = ["pandas", "numpy", "performance", "rust", "data-science"]
+categories = ["science", "mathematics"]
+
+[lib]
+name = "pandas_booster"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module"] }
+numpy = "0.22"
+rayon = "1.10"
+dashmap = "6"
+ahash = "0.8"
+ordered-float = "4"
+num-traits = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+
+[profile.dev]
+opt-level = 1
