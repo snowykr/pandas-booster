@@ -56,6 +56,8 @@ class BoosterAccessor:
         by: str | Sequence[str],
         target: str,
         agg: AggFunc,
+        *,
+        sort: bool = True,
     ) -> Series:
         """Perform accelerated groupby aggregation.
 
@@ -64,6 +66,9 @@ class BoosterAccessor:
                 All key columns must be integer dtype for acceleration.
             target: Column name to aggregate (must be numeric).
             agg: Aggregation function - one of "sum", "mean", "min", "max".
+            sort: If True (default), sort the result by the group keys to match
+                Pandas default behavior. If False, the result order is arbitrary
+                but may be faster for large datasets.
 
         Returns:
             Series indexed by unique group keys with aggregated values.
@@ -84,49 +89,47 @@ class BoosterAccessor:
             )
 
         if len(by_cols) == 1:
-            return self._groupby_single(by_cols[0], target, agg)
-        return self._groupby_multi(by_cols, target, agg)
+            return self._groupby_single(by_cols[0], target, agg, sort=sort)
+        return self._groupby_multi(by_cols, target, agg, sort=sort)
 
-    def _groupby_single(self, by: str, target: str, agg: str) -> Series:
-        """Single-key groupby using optimized path."""
+    def _groupby_single(self, by: str, target: str, agg: str, *, sort: bool) -> Series:
         key_col = self._df[by]
         val_col = self._df[target]
 
         if len(self._df) < self._get_fallback_threshold():
-            return self._pandas_fallback([by], target, agg)
+            return self._pandas_fallback([by], target, agg, sort=sort)
 
         if not pd.api.types.is_integer_dtype(key_col):
-            return self._pandas_fallback([by], target, agg)
+            return self._pandas_fallback([by], target, agg, sort=sort)
 
         if not self._is_numeric_dtype(val_col):
-            return self._pandas_fallback([by], target, agg)
+            return self._pandas_fallback([by], target, agg, sort=sort)
 
         if self._has_nullable_na(key_col) or self._has_nullable_na(val_col):
-            return self._pandas_fallback([by], target, agg)
+            return self._pandas_fallback([by], target, agg, sort=sort)
 
-        return self._rust_groupby_single(key_col, val_col, agg)
+        return self._rust_groupby_single(key_col, val_col, agg, sort=sort)
 
-    def _groupby_multi(self, by_cols: list[str], target: str, agg: str) -> Series:
-        """Multi-key groupby using composite key hashing."""
+    def _groupby_multi(self, by_cols: list[str], target: str, agg: str, *, sort: bool) -> Series:
         val_col = self._df[target]
 
         if len(self._df) < self._get_fallback_threshold():
-            return self._pandas_fallback(by_cols, target, agg)
+            return self._pandas_fallback(by_cols, target, agg, sort=sort)
 
         for col_name in by_cols:
             col = self._df[col_name]
             if not pd.api.types.is_integer_dtype(col):
-                return self._pandas_fallback(by_cols, target, agg)
+                return self._pandas_fallback(by_cols, target, agg, sort=sort)
             if self._has_nullable_na(col):
-                return self._pandas_fallback(by_cols, target, agg)
+                return self._pandas_fallback(by_cols, target, agg, sort=sort)
 
         if not self._is_numeric_dtype(val_col):
-            return self._pandas_fallback(by_cols, target, agg)
+            return self._pandas_fallback(by_cols, target, agg, sort=sort)
 
         if self._has_nullable_na(val_col):
-            return self._pandas_fallback(by_cols, target, agg)
+            return self._pandas_fallback(by_cols, target, agg, sort=sort)
 
-        return self._rust_groupby_multi(by_cols, val_col, agg)
+        return self._rust_groupby_multi(by_cols, val_col, agg, sort=sort)
 
     def _is_numeric_dtype(self, series: Series) -> bool:
         return pd.api.types.is_integer_dtype(series) or pd.api.types.is_float_dtype(series)
@@ -136,11 +139,13 @@ class BoosterAccessor:
             return series.isna().any()
         return False
 
-    def _pandas_fallback(self, by_cols: list[str], target: str, agg: str) -> Series:
-        grouped = self._df.groupby(by_cols)[target]
+    def _pandas_fallback(self, by_cols: list[str], target: str, agg: str, *, sort: bool) -> Series:
+        grouped = self._df.groupby(by_cols, sort=sort)[target]
         return getattr(grouped, agg)()
 
-    def _rust_groupby_single(self, key_col: Series, val_col: Series, agg: str) -> Series:
+    def _rust_groupby_single(
+        self, key_col: Series, val_col: Series, agg: str, *, sort: bool
+    ) -> Series:
         rust = self._get_rust_module()
 
         keys = np.ascontiguousarray(key_col.to_numpy(dtype=np.int64))
@@ -158,9 +163,13 @@ class BoosterAccessor:
 
         result = pd.Series(result_dict, name=val_col.name)
         result.index.name = key_col.name
+        if sort:
+            result = result.sort_index()
         return result
 
-    def _rust_groupby_multi(self, by_cols: list[str], val_col: Series, agg: str) -> Series:
+    def _rust_groupby_multi(
+        self, by_cols: list[str], val_col: Series, agg: str, *, sort: bool
+    ) -> Series:
         rust = self._get_rust_module()
 
         key_arrays = [
@@ -186,7 +195,10 @@ class BoosterAccessor:
         index_arrays = [keys_2d[:, i] for i in range(keys_2d.shape[1])]
         idx = pd.MultiIndex.from_arrays(index_arrays, names=by_cols)
 
-        return pd.Series(result_values, index=idx, name=val_col.name)
+        result = pd.Series(result_values, index=idx, name=val_col.name)
+        if sort:
+            result = result.sort_index()
+        return result
 
     def thread_count(self) -> int:
         """Return the number of threads used by the Rust parallel runtime."""

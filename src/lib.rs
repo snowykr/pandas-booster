@@ -32,6 +32,7 @@ use pyo3::prelude::*;
 pub mod aggregation;
 pub mod groupby;
 pub mod groupby_multi;
+pub mod radix_groupby;
 pub mod zero_copy;
 
 use groupby::GroupByResultF64;

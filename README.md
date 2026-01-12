@@ -77,7 +77,7 @@ print(result.loc[(0, 1)])  # Sales for region=0, category=1
 
 ## API Reference
 
-### `df.booster.groupby(by, target, agg)`
+### `df.booster.groupby(by, target, agg, sort=True)`
 
 Performs a Rust-accelerated groupby aggregation.
 
@@ -86,6 +86,7 @@ Performs a Rust-accelerated groupby aggregation.
 | `by` | `str \| list[str]` | Column name(s) to group by. All columns must be integer dtype. |
 | `target` | `str` | Name of the column to aggregate. Must be numeric (int or float). |
 | `agg` | `str` | Aggregation function name. |
+| `sort` | `bool` | If `True` (default), sort result by group keys. If `False`, return unsorted for faster performance. |
 
 **Returns**: 
 - Single key (`by="col"`): A `pd.Series` indexed by the unique keys.
@@ -116,24 +117,52 @@ To ensure correctness and performance, the following constraints apply:
 
 ## Performance
 
-The library is designed for large datasets where multi-core parallelism can be fully utilized. Both single-key and multi-key groupby operations use Rayon's parallel map-reduce pattern.
+The library is designed for large datasets where multi-core parallelism can be fully utilized. Single-key groupby uses Rayon's parallel map-reduce, while multi-key operations use a radix-partitioning algorithm that eliminates merge overhead.
 
-**Benchmark Results** (5M rows, 11 threads):
+### Standard Cardinality (5M rows)
 
 | Operation | Pandas | Booster | Speedup |
 |-----------|--------|---------|---------|
-| Single-key groupby | 20.5ms | 2.4ms | **8.4x** |
-| Two-key groupby | 82.2ms | 17.1ms | **4.8x** |
-| Three-key groupby | 142.0ms | 172.1ms | 0.8x |
+| Single-key groupby | 25.0ms | 2.4ms | **10.5x** |
+| 2-key groupby | 68.4ms | 105.2ms | 0.7x |
+| 3-key groupby | 107.9ms | 120.9ms | 0.9x |
+| 4-key groupby | 136.7ms | 138.5ms | 1.0x |
+| 5-key groupby | 257.2ms | 223.1ms | **1.1x** |
 
-*Note: Multi-key performance depends on cardinality and key count. For 3+ keys with high cardinality, native Pandas may be faster due to hash collision overhead.*
+### High Cardinality (5M rows, ~5M unique groups)
 
-To run the included benchmarks:
-```bash
-python benches/benchmark.py
+| Operation | Groups | Pandas | Booster | Speedup |
+|-----------|--------|--------|---------|---------|
+| 2-key groupby | 4.5M | 866.5ms | 256.3ms | **3.4x** |
+| 3-key groupby | 4.9M | 892.5ms | 392.1ms | **2.3x** |
+
+**Performance characteristics:**
+- **Single-key**: Consistent **10x** speedup across all cardinalities
+- **Multi-key (standard cardinality)**: Near parity with Pandas
+- **Multi-key (high cardinality)**: **2-3x** speedup when group count approaches row count
+
+### Sorted vs Unsorted Results
+
+By default, results are sorted to match Pandas output order. Pass `sort=False` for additional speedup when order doesn't matter:
+
+```python
+# Sorted (default) - matches Pandas exactly
+result = df.booster.groupby(by=["a", "b"], target="val", agg="sum")
+
+# Unsorted - faster when order doesn't matter
+result = df.booster.groupby(by=["a", "b"], target="val", agg="sum", sort=False)
 ```
 
-Benchmarks compare `pandas-booster` against native Pandas and optionally Polars if installed.
+### Running Benchmarks
+
+```bash
+# Single-key benchmark
+python benches/benchmark.py
+
+# Multi-key benchmarks
+python benches/benchmark_multi_key.py --preset readme
+python benches/benchmark_multi_key.py --preset cardinality
+```
 
 ## Development
 
@@ -167,7 +196,8 @@ python benches/benchmark.py --quick
 
 - **PyO3**: Provides the bridge between Python and Rust.
 - **Rayon**: Implements a work-stealing parallel scheduler for multi-core processing.
-- **AHash/DashMap**: Used for high-speed, concurrent hashing of groupby keys.
+- **Radix Partitioning**: Multi-key groupby uses a 4-phase radix partitioning algorithm (histogram → prefix sum → scatter → aggregate) that eliminates merge overhead.
+- **AHash**: Used for high-speed hashing of groupby keys.
 - **SmallVec**: Optimizes multi-key storage by inlining up to 4 keys without heap allocation.
 - **Zero-Copy**: NumPy arrays are accessed directly as Rust slices without copying data, minimizing memory overhead and latency.
 
