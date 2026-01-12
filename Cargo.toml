@@ -21,6 +21,7 @@ dashmap = "6"
 ahash = "0.8"
 ordered-float = "4"
 num-traits = "0.2"
+smallvec = "1.13"
 
 [profile.release]
 opt-level = 3

@@ -87,11 +87,15 @@ impl Aggregator<f64, f64> for MeanAggF64 {
 #[derive(Clone)]
 pub struct MinAggF64 {
     pub min: f64,
+    pub seen_valid: bool,
 }
 
 impl Default for MinAggF64 {
     fn default() -> Self {
-        Self { min: f64::INFINITY }
+        Self {
+            min: f64::INFINITY,
+            seen_valid: false,
+        }
     }
 }
 
@@ -101,22 +105,28 @@ impl Aggregator<f64, f64> for MinAggF64 {
     }
 
     fn update(&mut self, value: f64) {
-        if !value.is_nan() && value < self.min {
-            self.min = value;
+        if !value.is_nan() {
+            self.seen_valid = true;
+            if value < self.min {
+                self.min = value;
+            }
         }
     }
 
     fn merge(&mut self, other: Self) {
-        if other.min < self.min {
-            self.min = other.min;
+        if other.seen_valid {
+            self.seen_valid = true;
+            if other.min < self.min {
+                self.min = other.min;
+            }
         }
     }
 
     fn finalize(&self) -> f64 {
-        if self.min == f64::INFINITY {
-            f64::NAN
-        } else {
+        if self.seen_valid {
             self.min
+        } else {
+            f64::NAN
         }
     }
 }
@@ -125,12 +135,14 @@ impl Aggregator<f64, f64> for MinAggF64 {
 #[derive(Clone)]
 pub struct MaxAggF64 {
     pub max: f64,
+    pub seen_valid: bool,
 }
 
 impl Default for MaxAggF64 {
     fn default() -> Self {
         Self {
             max: f64::NEG_INFINITY,
+            seen_valid: false,
         }
     }
 }
@@ -141,22 +153,28 @@ impl Aggregator<f64, f64> for MaxAggF64 {
     }
 
     fn update(&mut self, value: f64) {
-        if !value.is_nan() && value > self.max {
-            self.max = value;
+        if !value.is_nan() {
+            self.seen_valid = true;
+            if value > self.max {
+                self.max = value;
+            }
         }
     }
 
     fn merge(&mut self, other: Self) {
-        if other.max > self.max {
-            self.max = other.max;
+        if other.seen_valid {
+            self.seen_valid = true;
+            if other.max > self.max {
+                self.max = other.max;
+            }
         }
     }
 
     fn finalize(&self) -> f64 {
-        if self.max == f64::NEG_INFINITY {
-            f64::NAN
-        } else {
+        if self.seen_valid {
             self.max
+        } else {
+            f64::NAN
         }
     }
 }

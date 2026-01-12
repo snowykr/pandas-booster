@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-"""Pandas DataFrame accessor for Rust-accelerated groupby operations."""
-
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Sequence
 
 import numpy as np
 import pandas as pd
@@ -24,11 +22,17 @@ class BoosterAccessor:
     - Columns contain nullable NA values (pd.NA)
 
     Examples:
+        Single key:
         >>> df = pd.DataFrame({"key": [1, 2, 1], "val": [10.0, 20.0, 30.0]})
         >>> df.booster.groupby("key", "val", "sum")
+
+        Multiple keys:
+        >>> df = pd.DataFrame({"k1": [1, 1, 2], "k2": [10, 20, 10], "val": [1.0, 2.0, 3.0]})
+        >>> df.booster.groupby(["k1", "k2"], "val", "sum")
     """
 
     _SUPPORTED_AGGS: set[str] = {"sum", "mean", "min", "max"}
+    _MAX_MULTI_KEYS: int = 10
 
     def __init__(self, pandas_obj: DataFrame) -> None:
         self._df = pandas_obj
@@ -49,42 +53,80 @@ class BoosterAccessor:
 
     def groupby(
         self,
-        by: str,
+        by: str | Sequence[str],
         target: str,
         agg: AggFunc,
     ) -> Series:
         """Perform accelerated groupby aggregation.
 
         Args:
-            by: Column name to group by (must be integer dtype for acceleration).
+            by: Column name(s) to group by. Can be a single string or a list of strings.
+                All key columns must be integer dtype for acceleration.
             target: Column name to aggregate (must be numeric).
             agg: Aggregation function - one of "sum", "mean", "min", "max".
 
         Returns:
             Series indexed by unique group keys with aggregated values.
+            For multi-key groupby, returns Series with MultiIndex.
 
         Raises:
             ValueError: If agg is not a supported aggregation function.
+            ValueError: If more than 10 key columns are specified.
         """
         if agg not in self._SUPPORTED_AGGS:
             raise ValueError(f"Unsupported aggregation: {agg}. Use one of {self._SUPPORTED_AGGS}")
 
+        by_cols = [by] if isinstance(by, str) else list(by)
+
+        if len(by_cols) > self._MAX_MULTI_KEYS:
+            raise ValueError(
+                f"Too many key columns: {len(by_cols)}. Maximum is {self._MAX_MULTI_KEYS}"
+            )
+
+        if len(by_cols) == 1:
+            return self._groupby_single(by_cols[0], target, agg)
+        return self._groupby_multi(by_cols, target, agg)
+
+    def _groupby_single(self, by: str, target: str, agg: str) -> Series:
+        """Single-key groupby using optimized path."""
         key_col = self._df[by]
         val_col = self._df[target]
 
         if len(self._df) < self._get_fallback_threshold():
-            return self._pandas_fallback(by, target, agg)
+            return self._pandas_fallback([by], target, agg)
 
         if not pd.api.types.is_integer_dtype(key_col):
-            return self._pandas_fallback(by, target, agg)
+            return self._pandas_fallback([by], target, agg)
 
         if not self._is_numeric_dtype(val_col):
-            return self._pandas_fallback(by, target, agg)
+            return self._pandas_fallback([by], target, agg)
 
         if self._has_nullable_na(key_col) or self._has_nullable_na(val_col):
-            return self._pandas_fallback(by, target, agg)
+            return self._pandas_fallback([by], target, agg)
 
-        return self._rust_groupby(key_col, val_col, agg)
+        return self._rust_groupby_single(key_col, val_col, agg)
+
+    def _groupby_multi(self, by_cols: list[str], target: str, agg: str) -> Series:
+        """Multi-key groupby using composite key hashing."""
+        val_col = self._df[target]
+
+        if len(self._df) < self._get_fallback_threshold():
+            return self._pandas_fallback(by_cols, target, agg)
+
+        for col_name in by_cols:
+            col = self._df[col_name]
+            if not pd.api.types.is_integer_dtype(col):
+                return self._pandas_fallback(by_cols, target, agg)
+            if self._has_nullable_na(col):
+                return self._pandas_fallback(by_cols, target, agg)
+
+        if not self._is_numeric_dtype(val_col):
+            return self._pandas_fallback(by_cols, target, agg)
+
+        if self._has_nullable_na(val_col):
+            return self._pandas_fallback(by_cols, target, agg)
+
+        return self._rust_groupby_multi(by_cols, val_col, agg)
 
     def _is_numeric_dtype(self, series: Series) -> bool:
         return pd.api.types.is_integer_dtype(series) or pd.api.types.is_float_dtype(series)
@@ -94,11 +136,11 @@ class BoosterAccessor:
             return series.isna().any()
         return False
 
-    def _pandas_fallback(self, by: str, target: str, agg: str) -> Series:
-        grouped = self._df.groupby(by)[target]
+    def _pandas_fallback(self, by_cols: list[str], target: str, agg: str) -> Series:
+        grouped = self._df.groupby(by_cols)[target]
         return getattr(grouped, agg)()
 
-    def _rust_groupby(self, key_col: Series, val_col: Series, agg: str) -> Series:
+    def _rust_groupby_single(self, key_col: Series, val_col: Series, agg: str) -> Series:
         rust = self._get_rust_module()
 
         keys = np.ascontiguousarray(key_col.to_numpy(dtype=np.int64))
@@ -117,6 +159,34 @@ class BoosterAccessor:
         result = pd.Series(result_dict, name=val_col.name)
         result.index.name = key_col.name
         return result
+
+    def _rust_groupby_multi(self, by_cols: list[str], val_col: Series, agg: str) -> Series:
+        rust = self._get_rust_module()
+
+        key_arrays = [
+            np.ascontiguousarray(self._df[col].to_numpy(dtype=np.int64)) for col in by_cols
+        ]
+
+        is_val_int = pd.api.types.is_integer_dtype(val_col)
+
+        if is_val_int:
+            values = np.ascontiguousarray(val_col.to_numpy(dtype=np.int64))
+            func_name = f"groupby_multi_{agg}_i64"
+        else:
+            values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
+            func_name = f"groupby_multi_{agg}_f64"
+
+        rust_func = getattr(rust, func_name)
+        keys_2d, result_values = rust_func(key_arrays, values)
+
+        if keys_2d.shape[0] == 0:
+            idx = pd.MultiIndex.from_arrays([[] for _ in by_cols], names=by_cols)
+            return pd.Series([], index=idx, name=val_col.name, dtype=np.float64)
+
+        index_arrays = [keys_2d[:, i] for i in range(keys_2d.shape[1])]
+        idx = pd.MultiIndex.from_arrays(index_arrays, names=by_cols)
+
+        return pd.Series(result_values, index=idx, name=val_col.name)
 
     def thread_count(self) -> int:
         """Return the number of threads used by the Rust parallel runtime."""
