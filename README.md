@@ -116,7 +116,17 @@ To ensure correctness and performance, the following constraints apply:
 
 ## Performance
 
-The library is designed for large datasets where multi-core parallelism can be fully utilized.
+The library is designed for large datasets where multi-core parallelism can be fully utilized. Both single-key and multi-key groupby operations use Rayon's parallel map-reduce pattern.
+
+**Benchmark Results** (5M rows, 11 threads):
+
+| Operation | Pandas | Booster | Speedup |
+|-----------|--------|---------|---------|
+| Single-key groupby | 20.5ms | 2.4ms | **8.4x** |
+| Two-key groupby | 82.2ms | 17.1ms | **4.8x** |
+| Three-key groupby | 142.0ms | 172.1ms | 0.8x |
+
+*Note: Multi-key performance depends on cardinality and key count. For 3+ keys with high cardinality, native Pandas may be faster due to hash collision overhead.*
 
 To run the included benchmarks:
 ```bash

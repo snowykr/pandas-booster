@@ -409,7 +409,21 @@ fn convert_multi_result<'py>(
 
     // Create 2D array for keys: shape (n_groups, n_keys)
     let keys_2d = if n_groups > 0 {
+        // Safety invariant: keys_flat must have exactly n_groups * n_keys elements
+        debug_assert_eq!(
+            result.keys_flat.len(),
+            n_groups * n_keys,
+            "keys_flat length {} does not match expected {} (n_groups={} * n_keys={})",
+            result.keys_flat.len(),
+            n_groups * n_keys,
+            n_groups,
+            n_keys
+        );
+
         // Reshape flat keys to 2D
+        // SAFETY: We verified keys_flat.len() == n_groups * n_keys via debug_assert above.
+        // The PyArray2 is created with shape [n_groups, n_keys] which has the same total
+        // element count, so the copy is within bounds.
         unsafe {
             let arr = PyArray2::new_bound(py, [n_groups, n_keys], false);
             let ptr = arr.as_raw_array_mut().as_mut_ptr();

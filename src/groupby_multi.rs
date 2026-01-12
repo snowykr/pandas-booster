@@ -1,19 +1,23 @@
-//! Multi-column groupby implementation using row-hashing with collision resolution.
+//! Parallel multi-column groupby implementation using Rayon's map-reduce pattern.
 //!
 //! This module extends the single-key groupby functionality to support grouping by
-//! multiple integer columns (2-10 keys). It uses a u64 hash as the primary map key
-//! with stored key tuples for collision resolution.
+//! multiple integer columns (2-10 keys). It uses:
+//!
+//! - **CompositeKey as HashMap key**: Direct key comparison without collision resolution
+//! - **Rayon par_chunks**: Parallel chunk processing with per-thread hash maps
+//! - **Aggregator merge**: Thread-safe merge of partial results
 //!
 //! ## Design
 //!
-//! - **Hash as bucket key**: Each row's key columns are hashed to u64 for fast lookup
-//! - **Collision handling**: Actual key tuples are stored and compared for equality
-//! - **Memory efficient**: Key tuples only stored once per unique group (via SmallVec)
-//! - **Parallel ready**: Structure supports future Rayon-based parallelization
+//! - **SmallVec optimization**: Keys ≤4 columns are stored inline without heap allocation
+//! - **Zero collision overhead**: CompositeKey implements Hash+Eq for direct HashMap usage
+//! - **Parallel reduction**: Same pattern as single-key groupby for consistent performance
 
 use ahash::AHashMap;
 use pyo3::prelude::*;
+use rayon::prelude::*;
 use smallvec::SmallVec;
+use std::hash::{Hash, Hasher};
 
 use crate::aggregation::{
     Aggregator, MaxAggF64, MaxAggI64, MeanAggF64, MeanAggI64, MinAggF64, MinAggI64, SumAggF64,
@@ -25,15 +29,47 @@ use crate::aggregation::{
 const INLINE_KEYS: usize = 4;
 
 /// Compact storage for composite keys, avoiding heap allocation for ≤4 keys.
-pub type CompositeKey = SmallVec<[i64; INLINE_KEYS]>;
+/// Implements Hash and Eq for direct use as HashMap key.
+#[derive(Clone, Debug)]
+pub struct CompositeKey(SmallVec<[i64; INLINE_KEYS]>);
 
-/// State for a single group in multi-key aggregation.
-#[derive(Clone)]
-struct GroupState<A> {
-    /// The actual key values for this group (used for collision resolution)
-    keys: CompositeKey,
-    /// The aggregator instance holding partial/final results
-    agg: A,
+impl CompositeKey {
+    /// Create a new CompositeKey with the given capacity.
+    #[inline]
+    fn with_capacity(cap: usize) -> Self {
+        Self(SmallVec::with_capacity(cap))
+    }
+
+    /// Push a key value.
+    #[inline]
+    fn push(&mut self, val: i64) {
+        self.0.push(val);
+    }
+
+    /// Get iterator over values.
+    #[inline]
+    fn iter(&self) -> impl Iterator<Item = &i64> {
+        self.0.iter()
+    }
+}
+
+impl PartialEq for CompositeKey {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Eq for CompositeKey {}
+
+impl Hash for CompositeKey {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Hash each key value directly - AHash will handle mixing
+        for &v in &self.0 {
+            v.hash(state);
+        }
+    }
 }
 
 /// Result container for multi-key groupby operations.
@@ -48,44 +84,6 @@ pub struct GroupByMultiResult {
     pub values: Vec<f64>,
 }
 
-/// Fast hash mixing function (MurmurHash3 finalizer variant).
-#[inline]
-fn mix64(mut x: u64) -> u64 {
-    x ^= x >> 33;
-    x = x.wrapping_mul(0xff51afd7ed558ccd);
-    x ^= x >> 33;
-    x = x.wrapping_mul(0xc4ceb9fe1a85ec53);
-    x ^= x >> 33;
-    x
-}
-
-/// Compute a combined hash for a row across multiple key columns.
-///
-/// Uses a multiplicative hash combining strategy similar to Boost's hash_combine.
-#[inline]
-fn row_hash(key_slices: &[&[i64]], row: usize) -> u64 {
-    let mut h: u64 = 0x9e3779b97f4a7c15; // Golden ratio seed
-    for col in key_slices {
-        let v = col[row] as u64;
-        // Combine: h ^= mix(v + seed) then rotate and multiply
-        h ^= mix64(v.wrapping_add(0x9e3779b97f4a7c15));
-        h = h.rotate_left(27).wrapping_mul(0x3c79ac492ba7b653);
-    }
-    h
-}
-
-/// Check if stored keys match the keys at a given row.
-#[inline]
-fn keys_equal(stored: &CompositeKey, key_slices: &[&[i64]], row: usize) -> bool {
-    debug_assert_eq!(stored.len(), key_slices.len());
-    for (i, col) in key_slices.iter().enumerate() {
-        if stored[i] != col[row] {
-            return false;
-        }
-    }
-    true
-}
-
 /// Extract key values for a specific row into a CompositeKey.
 #[inline]
 fn extract_keys(key_slices: &[&[i64]], row: usize) -> CompositeKey {
@@ -96,54 +94,66 @@ fn extract_keys(key_slices: &[&[i64]], row: usize) -> CompositeKey {
     keys
 }
 
-/// Generic multi-key groupby implementation.
+/// Parallel multi-key groupby implementation using Rayon's map-reduce pattern.
 ///
-/// Uses hash buckets with collision resolution via stored key comparison.
-/// The aggregator type determines the operation (sum, mean, min, max).
-fn groupby_multi<T, A>(key_slices: &[&[i64]], values: &[T]) -> GroupByMultiResult
+/// This follows the same pattern as single-key groupby:
+/// 1. Chunk input arrays across CPU cores
+/// 2. Build per-thread hash maps with partial aggregations
+/// 3. Merge partial results via Aggregator::merge
+fn parallel_groupby_multi<T, A>(key_slices: &[&[i64]], values: &[T]) -> GroupByMultiResult
 where
-    T: Copy,
-    A: Aggregator<T, f64> + Clone + Default,
+    T: Copy + Send + Sync,
+    A: Aggregator<T, f64> + Clone + Default + Send,
 {
     let n_keys = key_slices.len();
     let n_rows = values.len();
 
-    // Hash bucket -> list of groups (for collision handling)
-    // Most buckets will have exactly 1 group; Vec handles rare collisions
-    let mut map: AHashMap<u64, Vec<GroupState<A>>> = AHashMap::new();
-
-    for row in 0..n_rows {
-        let v = values[row];
-        let h = row_hash(key_slices, row);
-
-        let bucket = map.entry(h).or_insert_with(Vec::new);
-
-        // Find existing group in bucket (collision resolution)
-        if let Some(state) = bucket
-            .iter_mut()
-            .find(|s| keys_equal(&s.keys, key_slices, row))
-        {
-            state.agg.update(v);
-        } else {
-            // New group in this bucket
-            let keys = extract_keys(key_slices, row);
-            let mut agg = A::init();
-            agg.update(v);
-            bucket.push(GroupState { keys, agg });
-        }
+    if n_rows == 0 {
+        return GroupByMultiResult {
+            keys_flat: Vec::new(),
+            n_keys,
+            values: Vec::new(),
+        };
     }
 
+    // Determine chunk size based on available threads
+    let chunk_size = (n_rows / rayon::current_num_threads()).max(10_000);
+
+    // Create row indices for chunking (we need to access multiple columns per row)
+    let row_indices: Vec<usize> = (0..n_rows).collect();
+
+    // Parallel map-reduce
+    let merged: AHashMap<CompositeKey, A> = row_indices
+        .par_chunks(chunk_size)
+        .fold(
+            AHashMap::default,
+            |mut acc: AHashMap<CompositeKey, A>, chunk| {
+                for &row in chunk {
+                    let key = extract_keys(key_slices, row);
+                    let val = values[row];
+                    acc.entry(key).or_insert_with(A::init).update(val);
+                }
+                acc
+            },
+        )
+        .reduce(AHashMap::default, |mut map1, map2| {
+            for (k, v) in map2 {
+                map1.entry(k)
+                    .and_modify(|existing| existing.merge(v.clone()))
+                    .or_insert(v);
+            }
+            map1
+        });
+
     // Flatten results
-    let n_groups: usize = map.values().map(|v| v.len()).sum();
+    let n_groups = merged.len();
     let mut keys_flat = Vec::with_capacity(n_groups * n_keys);
     let mut out_values = Vec::with_capacity(n_groups);
 
-    for (_h, states) in map {
-        for state in states {
-            // Append keys in row-major order
-            keys_flat.extend(state.keys.iter().copied());
-            out_values.push(state.agg.finalize());
-        }
+    for (key, agg) in merged {
+        // Append keys in row-major order
+        keys_flat.extend(key.iter().copied());
+        out_values.push(agg.finalize());
     }
 
     GroupByMultiResult {
@@ -153,30 +163,32 @@ where
     }
 }
 
-/// Wrapper for f64 aggregation that skips NaN values.
-fn groupby_multi_f64<A>(key_slices: &[&[i64]], values: &[f64]) -> GroupByMultiResult
+/// Wrapper for f64 aggregation.
+fn parallel_groupby_multi_f64<A>(key_slices: &[&[i64]], values: &[f64]) -> GroupByMultiResult
 where
-    A: Aggregator<f64, f64> + Clone + Default,
+    A: Aggregator<f64, f64> + Clone + Default + Send,
 {
-    groupby_multi::<f64, A>(key_slices, values)
+    parallel_groupby_multi::<f64, A>(key_slices, values)
 }
 
 /// Wrapper for i64 aggregation.
-fn groupby_multi_i64<A>(key_slices: &[&[i64]], values: &[i64]) -> GroupByMultiResult
+fn parallel_groupby_multi_i64<A>(key_slices: &[&[i64]], values: &[i64]) -> GroupByMultiResult
 where
-    A: Aggregator<i64, f64> + Clone + Default,
+    A: Aggregator<i64, f64> + Clone + Default + Send,
 {
-    groupby_multi::<i64, A>(key_slices, values)
+    parallel_groupby_multi::<i64, A>(key_slices, values)
 }
 
+// =============================================================================
 // Public API functions for f64 values
+// =============================================================================
 
 /// Multi-key groupby sum for f64 values.
 pub fn multi_groupby_sum_f64(
     key_slices: &[&[i64]],
     values: &[f64],
 ) -> PyResult<GroupByMultiResult> {
-    Ok(groupby_multi_f64::<SumAggF64>(key_slices, values))
+    Ok(parallel_groupby_multi_f64::<SumAggF64>(key_slices, values))
 }
 
 /// Multi-key groupby mean for f64 values.
@@ -184,7 +196,7 @@ pub fn multi_groupby_mean_f64(
     key_slices: &[&[i64]],
     values: &[f64],
 ) -> PyResult<GroupByMultiResult> {
-    Ok(groupby_multi_f64::<MeanAggF64>(key_slices, values))
+    Ok(parallel_groupby_multi_f64::<MeanAggF64>(key_slices, values))
 }
 
 /// Multi-key groupby min for f64 values.
@@ -192,7 +204,7 @@ pub fn multi_groupby_min_f64(
     key_slices: &[&[i64]],
     values: &[f64],
 ) -> PyResult<GroupByMultiResult> {
-    Ok(groupby_multi_f64::<MinAggF64>(key_slices, values))
+    Ok(parallel_groupby_multi_f64::<MinAggF64>(key_slices, values))
 }
 
 /// Multi-key groupby max for f64 values.
@@ -200,17 +212,19 @@ pub fn multi_groupby_max_f64(
     key_slices: &[&[i64]],
     values: &[f64],
 ) -> PyResult<GroupByMultiResult> {
-    Ok(groupby_multi_f64::<MaxAggF64>(key_slices, values))
+    Ok(parallel_groupby_multi_f64::<MaxAggF64>(key_slices, values))
 }
 
+// =============================================================================
 // Public API functions for i64 values
+// =============================================================================
 
 /// Multi-key groupby sum for i64 values.
 pub fn multi_groupby_sum_i64(
     key_slices: &[&[i64]],
     values: &[i64],
 ) -> PyResult<GroupByMultiResult> {
-    Ok(groupby_multi_i64::<SumAggI64>(key_slices, values))
+    Ok(parallel_groupby_multi_i64::<SumAggI64>(key_slices, values))
 }
 
 /// Multi-key groupby mean for i64 values.
@@ -218,7 +232,7 @@ pub fn multi_groupby_mean_i64(
     key_slices: &[&[i64]],
     values: &[i64],
 ) -> PyResult<GroupByMultiResult> {
-    Ok(groupby_multi_i64::<MeanAggI64>(key_slices, values))
+    Ok(parallel_groupby_multi_i64::<MeanAggI64>(key_slices, values))
 }
 
 /// Multi-key groupby min for i64 values.
@@ -226,7 +240,7 @@ pub fn multi_groupby_min_i64(
     key_slices: &[&[i64]],
     values: &[i64],
 ) -> PyResult<GroupByMultiResult> {
-    Ok(groupby_multi_i64::<MinAggI64>(key_slices, values))
+    Ok(parallel_groupby_multi_i64::<MinAggI64>(key_slices, values))
 }
 
 /// Multi-key groupby max for i64 values.
@@ -234,7 +248,7 @@ pub fn multi_groupby_max_i64(
     key_slices: &[&[i64]],
     values: &[i64],
 ) -> PyResult<GroupByMultiResult> {
-    Ok(groupby_multi_i64::<MaxAggI64>(key_slices, values))
+    Ok(parallel_groupby_multi_i64::<MaxAggI64>(key_slices, values))
 }
 
 #[cfg(test)]
@@ -242,29 +256,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_row_hash_deterministic() {
-        let col1 = vec![1i64, 2, 3];
-        let col2 = vec![10i64, 20, 30];
-        let key_slices: Vec<&[i64]> = vec![&col1, &col2];
+    fn test_composite_key_hash_eq() {
+        let mut key1 = CompositeKey::with_capacity(2);
+        key1.push(1);
+        key1.push(10);
 
-        let h0 = row_hash(&key_slices, 0);
-        let h0_again = row_hash(&key_slices, 0);
-        assert_eq!(h0, h0_again);
+        let mut key2 = CompositeKey::with_capacity(2);
+        key2.push(1);
+        key2.push(10);
 
-        let h1 = row_hash(&key_slices, 1);
-        assert_ne!(h0, h1); // Different rows should (usually) have different hashes
-    }
+        let mut key3 = CompositeKey::with_capacity(2);
+        key3.push(1);
+        key3.push(20);
 
-    #[test]
-    fn test_keys_equal() {
-        let col1 = vec![1i64, 2, 1];
-        let col2 = vec![10i64, 20, 10];
-        let key_slices: Vec<&[i64]> = vec![&col1, &col2];
+        assert_eq!(key1, key2);
+        assert_ne!(key1, key3);
 
-        let stored: CompositeKey = smallvec::smallvec![1, 10];
-        assert!(keys_equal(&stored, &key_slices, 0));
-        assert!(!keys_equal(&stored, &key_slices, 1));
-        assert!(keys_equal(&stored, &key_slices, 2)); // Same keys as row 0
+        // Test hash consistency
+        use std::collections::hash_map::DefaultHasher;
+        let mut hasher1 = DefaultHasher::new();
+        let mut hasher2 = DefaultHasher::new();
+        key1.hash(&mut hasher1);
+        key2.hash(&mut hasher2);
+        assert_eq!(hasher1.finish(), hasher2.finish());
     }
 
     #[test]
@@ -374,10 +388,63 @@ mod tests {
     #[test]
     fn test_composite_key_inline_allocation() {
         // Verify SmallVec doesn't heap-allocate for ≤4 keys
-        let key: CompositeKey = smallvec::smallvec![1, 2, 3, 4];
-        assert!(!key.spilled()); // Should be inline
+        let mut key = CompositeKey::with_capacity(4);
+        key.push(1);
+        key.push(2);
+        key.push(3);
+        key.push(4);
+        assert!(!key.0.spilled()); // Should be inline
 
-        let key_large: CompositeKey = smallvec::smallvec![1, 2, 3, 4, 5];
-        assert!(key_large.spilled()); // Should spill to heap
+        let mut key_large = CompositeKey::with_capacity(5);
+        for i in 0..5 {
+            key_large.push(i);
+        }
+        assert!(key_large.0.spilled()); // Should spill to heap
+    }
+
+    #[test]
+    fn test_multi_groupby_empty() {
+        let col1: Vec<i64> = vec![];
+        let col2: Vec<i64> = vec![];
+        let values: Vec<f64> = vec![];
+
+        let key_slices: Vec<&[i64]> = vec![&col1, &col2];
+        let result = multi_groupby_sum_f64(&key_slices, &values).unwrap();
+
+        assert_eq!(result.n_keys, 2);
+        assert_eq!(result.values.len(), 0);
+        assert_eq!(result.keys_flat.len(), 0);
+    }
+
+    #[test]
+    fn test_multi_groupby_min_max_f64() {
+        let col1 = vec![1i64, 1, 1, 2, 2];
+        let col2 = vec![10i64, 10, 10, 20, 20];
+        let values = vec![5.0, 2.0, 8.0, 1.0, 9.0];
+
+        let key_slices: Vec<&[i64]> = vec![&col1, &col2];
+
+        let result_min = multi_groupby_min_f64(&key_slices, &values).unwrap();
+        let result_max = multi_groupby_max_f64(&key_slices, &values).unwrap();
+
+        let mut min_groups: AHashMap<(i64, i64), f64> = AHashMap::new();
+        let mut max_groups: AHashMap<(i64, i64), f64> = AHashMap::new();
+
+        for i in 0..result_min.values.len() {
+            let k0 = result_min.keys_flat[i * 2];
+            let k1 = result_min.keys_flat[i * 2 + 1];
+            min_groups.insert((k0, k1), result_min.values[i]);
+        }
+
+        for i in 0..result_max.values.len() {
+            let k0 = result_max.keys_flat[i * 2];
+            let k1 = result_max.keys_flat[i * 2 + 1];
+            max_groups.insert((k0, k1), result_max.values[i]);
+        }
+
+        assert!((min_groups[&(1, 10)] - 2.0).abs() < 1e-10);
+        assert!((min_groups[&(2, 20)] - 1.0).abs() < 1e-10);
+        assert!((max_groups[&(1, 10)] - 8.0).abs() < 1e-10);
+        assert!((max_groups[&(2, 20)] - 9.0).abs() < 1e-10);
     }
 }
