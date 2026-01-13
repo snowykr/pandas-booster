@@ -128,8 +128,20 @@ where
         };
     }
 
-    // Phase 1: Parallel histogram
+
+    // Phase 1: Parallel histogram with hash caching
     let histogram: Vec<AtomicUsize> = (0..NUM_PARTITIONS).map(|_| AtomicUsize::new(0)).collect();
+    
+    // Allocate vector to store computed hashes
+    let mut hashes = vec![0u64; n_rows];
+    
+    // Pointer to hashes for safe parallel access (we write disjoint indices)
+    let hashes_ptr = hashes.as_mut_ptr() as usize;
+    // Send pointer wrapper
+    struct PtrWrapper(usize);
+    unsafe impl Send for PtrWrapper {}
+    unsafe impl Sync for PtrWrapper {}
+    let hashes_ptr_wrap = PtrWrapper(hashes_ptr);
 
     let chunk_size = (n_rows / rayon::current_num_threads()).max(8192);
     (0..n_rows)
@@ -137,6 +149,13 @@ where
         .with_min_len(chunk_size)
         .for_each(|row| {
             let h = compute_hash(key_slices, row);
+            
+            // Store hash for Phase 3
+            unsafe {
+                let ptr = hashes_ptr_wrap.0 as *mut u64;
+                *ptr.add(row) = h;
+            }
+            
             let p = hash_to_partition(h);
             histogram[p].fetch_add(1, Ordering::Relaxed);
         });
@@ -147,22 +166,31 @@ where
         offsets[i + 1] = offsets[i] + histogram[i].load(Ordering::Relaxed);
     }
 
-    // Phase 3: Scatter - reorder rows by partition
+    // Phase 3: Scatter - reorder rows by partition using cached hashes
     let write_heads: Vec<AtomicUsize> = offsets[..NUM_PARTITIONS]
         .iter()
         .map(|&o| AtomicUsize::new(o))
         .collect();
 
     let perm = vec![0usize; n_rows];
+    // Wrapper for perm pointer
+    let perm_ptr = perm.as_ptr() as usize;
+    let perm_ptr_wrap = PtrWrapper(perm_ptr);
+    
     (0..n_rows)
         .into_par_iter()
         .with_min_len(chunk_size)
         .for_each(|row| {
-            let h = compute_hash(key_slices, row);
+            // Use cached hash
+            let h = unsafe {
+                let ptr = hashes_ptr_wrap.0 as *const u64;
+                *ptr.add(row)
+            };
+            
             let p = hash_to_partition(h);
             let pos = write_heads[p].fetch_add(1, Ordering::Relaxed);
             unsafe {
-                let ptr = perm.as_ptr() as *mut usize;
+                let ptr = perm_ptr_wrap.0 as *mut usize;
                 *ptr.add(pos) = row;
             }
         });

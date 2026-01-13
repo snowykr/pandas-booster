@@ -121,25 +121,25 @@ The library is designed for large datasets where multi-core parallelism can be f
 
 ### Standard Cardinality (5M rows)
 
-| Operation | Pandas | Booster | Speedup |
-|-----------|--------|---------|---------|
-| Single-key groupby | 25.0ms | 2.4ms | **10.5x** |
-| 2-key groupby | 68.4ms | 105.2ms | 0.7x |
-| 3-key groupby | 107.9ms | 120.9ms | 0.9x |
-| 4-key groupby | 136.7ms | 138.5ms | 1.0x |
-| 5-key groupby | 257.2ms | 223.1ms | **1.1x** |
+| Operation | Pandas | Booster (sort=True) | Booster (sort=False) | Speedup (sort=True) | Speedup (sort=False) |
+|-----------|--------|---------------------|----------------------|---------------------|----------------------|
+| Single-key groupby | 25.0ms | 3.1ms | 2.4ms | **8.1x** | **10.4x** |
+| 2-key groupby | 67.0ms | 106.0ms | 102.2ms | 0.6x | 0.7x |
+| 3-key groupby | 104.2ms | 111.2ms | 133.1ms | 0.9x | 0.8x |
+| 4-key groupby | 143.3ms | 126.9ms | 122.7ms | 1.1x | **1.2x** |
+| 5-key groupby | 252.8ms | 222.5ms | 237.6ms | **1.1x** | **1.1x** |
 
 ### High Cardinality (5M rows, ~5M unique groups)
 
-| Operation | Groups | Pandas | Booster | Speedup |
-|-----------|--------|--------|---------|---------|
-| 2-key groupby | 4.5M | 866.5ms | 256.3ms | **3.4x** |
-| 3-key groupby | 4.9M | 892.5ms | 392.1ms | **2.3x** |
+| Operation | Groups | Pandas | Booster (sort=True) | Booster (sort=False) | Speedup (sort=True) | Speedup (sort=False) |
+|-----------|--------|--------|---------------------|----------------------|---------------------|----------------------|
+| 2-key groupby | 4.5M | 823.6ms | 265.8ms | 248.8ms | **3.1x** | **3.3x** |
+| 3-key groupby | 4.9M | 886.5ms | 384.4ms | 344.9ms | **2.3x** | **2.6x** |
 
 **Performance characteristics:**
-- **Single-key**: Consistent **10x** speedup across all cardinalities
-- **Multi-key (standard cardinality)**: Near parity with Pandas
-- **Multi-key (high cardinality)**: **2-3x** speedup when group count approaches row count
+- **Single-key**: Consistent **8-10x** speedup.
+- **Multi-key (standard cardinality)**: Comparable to Pandas; sort=False provides a small edge.
+- **Multi-key (high cardinality)**: **2-3x** speedup. `sort=False` is fastest as it skips the expensive Python-side sorting of large results.
 
 ### Sorted vs Unsorted Results
 

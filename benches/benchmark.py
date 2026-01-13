@@ -265,6 +265,102 @@ def benchmark_all_operations(
     return results
 
 
+def benchmark_sort_options(
+    n_rows: int = 5_000_000, n_groups: int = 1000, n_runs: int = 3
+) -> list[dict]:
+    """Benchmark sort=True vs sort=False.
+
+    Args:
+        n_rows: Number of rows in test dataset.
+        n_groups: Number of unique groups.
+        n_runs: Number of runs per configuration.
+
+    Returns:
+        List of result dictionaries.
+    """
+    import pandas_booster  # noqa: F401
+
+    print("=" * 80)
+    print("Benchmark: Sort vs Unsorted (Pandas Booster)")
+    print("=" * 80)
+
+    np.random.seed(42)
+    # Single key setup
+    df = pd.DataFrame(
+        {"key": np.random.randint(0, n_groups, size=n_rows), "val": np.random.random(size=n_rows)}
+    )
+
+    results = []
+
+    # 1. Single Key
+    print(f"Single Key (Rows: {n_rows:,}, Groups: {n_groups:,})")
+
+    # Baseline: Pandas (always sorted by default, though sort=False is possible)
+    pandas_times = []
+    for _ in range(n_runs):
+        start = time.perf_counter()
+        _ = df.groupby("key")["val"].sum()
+        pandas_times.append(time.perf_counter() - start)
+    pandas_time = min(pandas_times)
+    print(f"  Pandas (default): {pandas_time:.4f}s")
+
+    for sort_option in [True, False]:
+        times = []
+        for _ in range(n_runs):
+            start = time.perf_counter()
+            _ = df.booster.groupby("key", "val", "sum", sort=sort_option)
+            times.append(time.perf_counter() - start)
+        min_time = min(times)
+
+        print(f"  Booster sort={str(sort_option):<5}: {min_time:.4f}s")
+        results.append(
+            {
+                "type": "single_key",
+                "rows": n_rows,
+                "groups": n_groups,
+                "sort": sort_option,
+                "time_s": round(min_time, 6),
+                "pandas_time_s": round(pandas_time, 6),
+            }
+        )
+
+    # 2. Multi Key
+    print(f"\nMulti Key (2 keys) (Rows: {n_rows:,}, Groups: {n_groups:,})")
+    df["key2"] = np.random.randint(0, n_groups, size=n_rows)
+
+    # Baseline: Pandas
+    pandas_times = []
+    for _ in range(n_runs):
+        start = time.perf_counter()
+        _ = df.groupby(["key", "key2"])["val"].sum()
+        pandas_times.append(time.perf_counter() - start)
+    pandas_time = min(pandas_times)
+    print(f"  Pandas (default): {pandas_time:.4f}s")
+
+    for sort_option in [True, False]:
+        times = []
+        for _ in range(n_runs):
+            start = time.perf_counter()
+            _ = df.booster.groupby(["key", "key2"], "val", "sum", sort=sort_option)
+            times.append(time.perf_counter() - start)
+        min_time = min(times)
+
+        print(f"  Booster sort={str(sort_option):<5}: {min_time:.4f}s")
+        results.append(
+            {
+                "type": "multi_key",
+                "rows": n_rows,
+                "groups": n_groups,
+                "sort": sort_option,
+                "time_s": round(min_time, 6),
+                "pandas_time_s": round(pandas_time, 6),
+            }
+        )
+
+    print()
+    return results
+
+
 def save_results(
     results: dict,
     output_path: str | Path,
@@ -333,6 +429,16 @@ def save_results(
             saved_files.append(str(polars_csv_path))
             print(f"Saved Polars comparison CSV: {polars_csv_path}")
 
+        # Save sort options benchmark
+        if results.get("sort_options"):
+            sort_csv_path = output_base.parent / f"{output_base.stem}_sort.csv"
+            with open(sort_csv_path, "w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=results["sort_options"][0].keys())
+                writer.writeheader()
+                writer.writerows(results["sort_options"])
+            saved_files.append(str(sort_csv_path))
+            print(f"Saved sort options CSV: {sort_csv_path}")
+
     return saved_files
 
 
@@ -386,6 +492,11 @@ Examples:
         action="store_true",
         help="Skip all-operations benchmark",
     )
+    parser.add_argument(
+        "--skip-sort",
+        action="store_true",
+        help="Skip sort options benchmark",
+    )
 
     args = parser.parse_args()
 
@@ -410,6 +521,13 @@ Examples:
 
     if not args.skip_operations:
         results["operations"] = benchmark_all_operations(
+            n_rows=ops_rows,
+            n_groups=1000,
+            n_runs=args.runs,
+        )
+
+    if not args.skip_sort:
+        results["sort_options"] = benchmark_sort_options(
             n_rows=ops_rows,
             n_groups=1000,
             n_runs=args.runs,

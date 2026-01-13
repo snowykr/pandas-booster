@@ -182,11 +182,12 @@ def run_readme_benchmarks(n_runs: int = 5, include_unsorted: bool = False) -> li
     return results
 
 
-def run_cardinality_benchmarks(n_runs: int = 5) -> list[dict]:
+def run_cardinality_benchmarks(n_runs: int = 5, include_unsorted: bool = False) -> list[dict]:
     """Run benchmarks focused on cardinality extremes.
 
     Args:
         n_runs: Number of runs per benchmark.
+        include_unsorted: Whether to include sort=False benchmarks.
 
     Returns:
         List of benchmark result dictionaries.
@@ -194,29 +195,39 @@ def run_cardinality_benchmarks(n_runs: int = 5) -> list[dict]:
     results = []
 
     cardinality_presets = [
-        "low_cardinality_3key",
-        "readme_3key",  # medium cardinality
-        "high_cardinality_3key",
         "high_cardinality_2key",
+        "high_cardinality_3key",
     ]
 
     print("\n" + "=" * 90)
-    print("Cardinality Impact Benchmarks (3-key focus)")
+    print("Cardinality Impact Benchmarks (High Cardinality)")
     print("=" * 90)
 
     for preset in cardinality_presets:
         print(f"\n[{preset}]")
 
+        # sort=True
         result = benchmark_multi_key_groupby(preset, agg="sum", sort=True, n_runs=n_runs)
         results.append(result)
 
         print(
-            f"  Groups: {result['combo_cardinality']:>10,} | "
-            f"Ratio: {result['group_ratio']:.4f} | "
+            f"  sort=True:  Groups: {result['combo_cardinality']:>10,} | "
             f"Pandas {result['pandas_time_ms']:>8.2f}ms | "
             f"Booster {result['booster_time_ms']:>8.2f}ms | "
             f"Speedup {result['speedup']:>5.2f}x"
         )
+
+        if include_unsorted:
+            result_unsorted = benchmark_multi_key_groupby(
+                preset, agg="sum", sort=False, n_runs=n_runs
+            )
+            results.append(result_unsorted)
+            print(
+                f"  sort=False: Groups: {result_unsorted['combo_cardinality']:>10,} | "
+                f"Pandas {result_unsorted['pandas_time_ms']:>8.2f}ms | "
+                f"Booster {result_unsorted['booster_time_ms']:>8.2f}ms | "
+                f"Speedup {result_unsorted['speedup']:>5.2f}x"
+            )
 
     return results
 
@@ -284,30 +295,116 @@ def run_all_operations_benchmark(preset: str = "readme_3key", n_runs: int = 5) -
     return results
 
 
-def print_readme_table(results: list[dict]) -> None:
-    """Print results in README markdown table format.
+def print_comprehensive_readme_table(results: list[dict]) -> None:
+    """Print results in a comprehensive README table format with sort breakdowns.
 
     Args:
         results: List of benchmark result dictionaries.
     """
-    # Filter to sort=True only for README
-    sorted_results = [r for r in results if r.get("sort", True)]
-
     print("\n" + "=" * 90)
-    print("README Performance Table (copy-paste ready)")
+    print("Comprehensive README Performance Tables (copy-paste ready)")
     print("=" * 90)
-    print()
-    print("| Operation | Pandas | Booster | Speedup |")
-    print("|-----------|--------|---------|---------|")
 
-    for r in sorted_results:
-        if r["preset"].startswith("readme_"):
-            n_keys = r["n_keys"]
-            key_label = f"{n_keys}-key groupby" if n_keys > 1 else "Single-key groupby"
-            pandas_str = f"{r['pandas_time_ms']:.1f}ms"
-            booster_str = f"{r['booster_time_ms']:.1f}ms"
-            speedup_str = f"**{r['speedup']:.1f}x**" if r["speedup"] > 1 else f"{r['speedup']:.1f}x"
-            print(f"| {key_label} | {pandas_str} | {booster_str} | {speedup_str} |")
+    # Group by preset
+    from collections import defaultdict
+
+    grouped = defaultdict(dict)
+    for r in results:
+        grouped[r["preset"]][r["sort"]] = r
+
+    # Table 1: Standard Cardinality (5M rows)
+    standard_presets = ["readme_1key", "readme_2key", "readme_3key", "readme_4key", "readme_5key"]
+
+    print("\n### Standard Cardinality (5M rows)\n")
+    print(
+        "| Operation | Pandas | Booster (sort=True) | Booster (sort=False) | Speedup (False vs Pandas) | Speedup (False vs True) |"
+    )
+    print(
+        "|-----------|--------|---------------------|----------------------|---------------------------|-------------------------|"
+    )
+
+    for preset in standard_presets:
+        if preset not in grouped:
+            continue
+
+        r_true = grouped[preset].get(True)
+        r_false = grouped[preset].get(False)
+
+        if not r_true:
+            continue
+
+        n_keys = r_true["n_keys"]
+        key_label = f"{n_keys}-key groupby" if n_keys > 1 else "Single-key groupby"
+
+        pandas_ms = r_true["pandas_time_ms"]
+        booster_true_ms = r_true["booster_time_ms"]
+
+        booster_false_str = "-"
+        speedup_false_pandas_str = "-"
+        speedup_false_true_str = "-"
+
+        if r_false:
+            booster_false_ms = r_false["booster_time_ms"]
+            booster_false_str = f"{booster_false_ms:.1f}ms"
+
+            speedup_false_pandas = pandas_ms / booster_false_ms
+            speedup_false_pandas_str = f"**{speedup_false_pandas:.1f}x**"
+
+            speedup_false_true = booster_true_ms / booster_false_ms
+            speedup_false_true_str = f"{speedup_false_true:.1f}x"
+
+        print(
+            f"| {key_label} | {pandas_ms:.1f}ms | {booster_true_ms:.1f}ms | {booster_false_str} | "
+            f"{speedup_false_pandas_str} | {speedup_false_true_str} |"
+        )
+
+    # Table 2: High Cardinality
+    high_card_presets = ["high_cardinality_2key", "high_cardinality_3key"]
+
+    print("\n### High Cardinality (5M rows, ~5M unique groups)\n")
+    print(
+        "| Operation | Groups | Pandas | Booster (sort=True) | Booster (sort=False) | Speedup (False vs Pandas) | Speedup (False vs True) |"
+    )
+    print(
+        "|-----------|--------|--------|---------------------|----------------------|---------------------------|-------------------------|"
+    )
+
+    for preset in high_card_presets:
+        if preset not in grouped:
+            continue
+
+        r_true = grouped[preset].get(True)
+        r_false = grouped[preset].get(False)
+
+        if not r_true:
+            continue
+
+        n_keys = r_true["n_keys"]
+        key_label = f"{n_keys}-key groupby"
+        groups = r_true["combo_cardinality"]
+        groups_str = f"{groups / 1_000_000:.1f}M"
+
+        pandas_ms = r_true["pandas_time_ms"]
+        booster_true_ms = r_true["booster_time_ms"]
+
+        booster_false_str = "-"
+        speedup_false_pandas_str = "-"
+        speedup_false_true_str = "-"
+
+        if r_false:
+            booster_false_ms = r_false["booster_time_ms"]
+            booster_false_str = f"{booster_false_ms:.1f}ms"
+
+            speedup_false_pandas = pandas_ms / booster_false_ms
+            speedup_false_pandas_str = f"**{speedup_false_pandas:.1f}x**"
+
+            speedup_false_true = booster_true_ms / booster_false_ms
+            speedup_false_true_str = f"{speedup_false_true:.1f}x"
+
+        print(
+            f"| {key_label} | {groups_str} | {pandas_ms:.1f}ms | {booster_true_ms:.1f}ms | {booster_false_str} | "
+            f"{speedup_false_pandas_str} | {speedup_false_true_str} |"
+        )
 
 
 def save_results(results: list[dict], output_path: str) -> None:
@@ -393,7 +490,9 @@ Examples:
             run_readme_benchmarks(n_runs=args.runs, include_unsorted=args.include_unsorted)
         )
     elif args.preset == "cardinality":
-        all_results.extend(run_cardinality_benchmarks(n_runs=args.runs))
+        all_results.extend(
+            run_cardinality_benchmarks(n_runs=args.runs, include_unsorted=args.include_unsorted)
+        )
     elif args.preset == "operations":
         all_results.extend(run_all_operations_benchmark(n_runs=args.runs))
     else:
@@ -401,11 +500,13 @@ Examples:
         all_results.extend(
             run_readme_benchmarks(n_runs=args.runs, include_unsorted=args.include_unsorted)
         )
-        all_results.extend(run_cardinality_benchmarks(n_runs=args.runs))
+        all_results.extend(
+            run_cardinality_benchmarks(n_runs=args.runs, include_unsorted=args.include_unsorted)
+        )
         all_results.extend(run_all_operations_benchmark(n_runs=args.runs))
 
     if args.readme_table:
-        print_readme_table(all_results)
+        print_comprehensive_readme_table(all_results)
 
     if args.output:
         save_results(all_results, args.output)
