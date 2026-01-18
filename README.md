@@ -140,43 +140,43 @@ The library is designed for large datasets where multi-core parallelism can be f
 
 | Operation | Groups | Sort | Type | Pandas | Polars | Booster |
 |-----------|--------|------|------|--------|--------|---------|
-| Single-key | 1,000 | True | Cold | 39.0±12.4ms (1.0x) | 35.2±12.9ms (**1.1x**) | 9.2±1.4ms (**4.3x**) |
-|  |  |  | Warm | 32.5±8.5ms (1.0x) | 21.3±3.3ms (**1.5x**) | 2.9±0.3ms (**11.1x**) |
-|  |  | False | Cold | 27.3±1.1ms (1.0x) | 22.3±1.6ms (**1.2x**) | 5.5±1.0ms (**4.9x**) |
-|  |  |  | Warm | 23.6±0.7ms (1.0x) | 19.4±2.1ms (**1.2x**) | 2.5±0.2ms (**9.6x**) |
-| 2-key | 5,000 | True | Cold | 99.3±7.0ms (1.0x) | 54.2±13.5ms (**1.8x**) | 97.2±2.9ms (1.0x) |
-|  |  |  | Warm | 71.0±1.2ms (1.0x) | 44.1±6.0ms (**1.6x**) | 97.4±7.3ms (0.7x) |
-|  |  | False | Cold | 69.8±4.4ms (1.0x) | 60.5±18.4ms (**1.2x**) | 100.0±2.5ms (0.7x) |
-|  |  |  | Warm | 56.6±3.0ms (1.0x) | 46.6±4.1ms (**1.2x**) | 98.2±3.5ms (0.6x) |
-| 3-key | 25,000 | True | Cold | 130.4±10.1ms (1.0x) | 70.8±19.3ms (**1.8x**) | 108.3±4.1ms (**1.2x**) |
-|  |  |  | Warm | 112.0±2.6ms (1.0x) | 57.8±2.8ms (**1.9x**) | 103.8±5.1ms (1.1x) |
-|  |  | False | Cold | 113.6±8.7ms (1.0x) | 78.4±18.7ms (**1.4x**) | 124.2±27.4ms (0.9x) |
-|  |  |  | Warm | 99.8±9.2ms (1.0x) | 65.0±13.0ms (**1.5x**) | 113.4±15.6ms (0.9x) |
-| 4-key | 100,000 | True | Cold | 163.4±17.7ms (1.0x) | 118.5±11.4ms (**1.4x**) | 129.2±11.7ms (**1.3x**) |
-|  |  |  | Warm | 144.6±12.6ms (1.0x) | 107.4±10.6ms (**1.3x**) | 119.0±8.4ms (**1.2x**) |
-|  |  | False | Cold | 137.3±7.6ms (1.0x) | 90.4±6.9ms (**1.5x**) | 117.3±6.4ms (**1.2x**) |
-|  |  |  | Warm | 130.4±34.5ms (1.0x) | 80.6±1.6ms (**1.6x**) | 107.3±2.1ms (**1.2x**) |
-| 5-key | 993,138 | True | Cold | 298.9±16.7ms (1.0x) | 324.4±59.0ms (0.9x) | 290.9±49.2ms (1.0x) |
-|  |  |  | Warm | 277.3±10.5ms (1.0x) | 206.5±31.8ms (**1.3x**) | 292.8±32.9ms (0.9x) |
-|  |  | False | Cold | 191.4±21.4ms (1.0x) | 165.8±53.4ms (**1.2x**) | 222.7±2.2ms (0.9x) |
-|  |  |  | Warm | 168.4±16.3ms (1.0x) | 137.8±10.0ms (**1.2x**) | 209.9±2.7ms (0.8x) |
+| Single-key | 1,000 | True | Cold | 42.4±4.5ms (1.0x) | 37.5±25.3ms (**1.1x**) | 9.1±5.6ms (**4.7x**) |
+|  |  |  | Warm | 25.4±0.4ms (1.0x) | 31.0±22.5ms (0.8x) | 2.9±0.3ms (**8.7x**) |
+|  |  | False | Cold | 29.5±1.1ms (1.0x) | 40.2±18.3ms (0.7x) | 9.2±4.6ms (**3.2x**) |
+|  |  |  | Warm | 26.5±1.8ms (1.0x) | 25.4±6.5ms (1.0x) | 3.2±0.4ms (**8.3x**) |
+| 2-key | 5,000 | True | Cold | 86.7±15.8ms (1.0x) | 100.1±44.5ms (0.9x) | 102.6±3.2ms (0.8x) |
+|  |  |  | Warm | 70.3±3.7ms (1.0x) | 50.3±10.0ms (**1.4x**) | 100.7±4.7ms (0.7x) |
+|  |  | False | Cold | 75.4±8.9ms (1.0x) | 61.1±23.4ms (**1.2x**) | 129.6±16.5ms (0.6x) |
+|  |  |  | Warm | 57.4±2.0ms (1.0x) | 55.0±7.8ms (1.0x) | 111.1±8.9ms (0.5x) |
+| 3-key | 25,000 | True | Cold | 146.5±7.1ms (1.0x) | 130.9±59.9ms (**1.1x**) | 119.1±3.4ms (**1.2x**) |
+|  |  |  | Warm | 109.9±3.7ms (1.0x) | 61.3±3.9ms (**1.8x**) | 109.1±6.8ms (1.0x) |
+|  |  | False | Cold | 128.7±47.4ms (1.0x) | 125.3±33.2ms (1.0x) | 136.8±18.8ms (0.9x) |
+|  |  |  | Warm | 99.3±5.3ms (1.0x) | 87.9±24.9ms (**1.1x**) | 130.1±10.5ms (0.8x) |
+| 4-key | 100,000 | True | Cold | 163.8±9.3ms (1.0x) | 263.8±135.6ms (0.6x) | 146.3±57.3ms (**1.1x**) |
+|  |  |  | Warm | 145.5±12.2ms (1.0x) | 108.8±13.3ms (**1.3x**) | 140.0±21.5ms (1.0x) |
+|  |  | False | Cold | 195.7±57.6ms (1.0x) | 107.9±20.6ms (**1.8x**) | 132.4±6.2ms (**1.5x**) |
+|  |  |  | Warm | 126.7±17.6ms (1.0x) | 107.6±19.8ms (**1.2x**) | 135.8±16.8ms (0.9x) |
+| 5-key | 993,138 | True | Cold | 335.5±38.2ms (1.0x) | 222.2±26.1ms (**1.5x**) | 326.4±100.3ms (1.0x) |
+|  |  |  | Warm | 286.3±30.0ms (1.0x) | 233.6±25.4ms (**1.2x**) | 245.7±23.1ms (**1.2x**) |
+|  |  | False | Cold | 257.4±20.7ms (1.0x) | 192.3±49.2ms (**1.3x**) | 309.5±76.1ms (0.8x) |
+|  |  |  | Warm | 230.5±42.7ms (1.0x) | 177.5±14.4ms (**1.3x**) | 270.6±32.0ms (0.9x) |
 
 ### High Cardinality (5M rows, ~5M unique groups)
 
 | Operation | Groups | Sort | Type | Pandas | Polars | Booster |
 |-----------|--------|------|------|--------|--------|---------|
-| Single-key | 3,160,983 | True | Cold | 769.3±7.0ms (1.0x) | 136.2±2.6ms (**5.6x**) | 1441.2±212.6ms (0.5x) |
-|  |  |  | Warm | 778.4±38.2ms (1.0x) | 136.9±9.9ms (**5.7x**) | 1281.9±14.6ms (0.6x) |
-|  |  | False | Cold | 225.2±3.6ms (1.0x) | 80.7±2.1ms (**2.8x**) | 989.8±30.1ms (0.2x) |
-|  |  |  | Warm | 224.1±7.1ms (1.0x) | 87.2±13.8ms (**2.6x**) | 933.0±32.1ms (0.2x) |
-| 2-key | 4,532,339 | True | Cold | 954.1±26.2ms (1.0x) | 270.7±19.9ms (**3.5x**) | 279.3±5.5ms (**3.4x**) |
-|  |  |  | Warm | 897.0±4.7ms (1.0x) | 265.7±16.0ms (**3.4x**) | 244.1±6.0ms (**3.7x**) |
-|  |  | False | Cold | 391.9±20.3ms (1.0x) | 120.0±4.7ms (**3.3x**) | 172.7±14.5ms (**2.3x**) |
-|  |  |  | Warm | 357.2±13.5ms (1.0x) | 121.1±2.6ms (**2.9x**) | 187.7±41.6ms (**1.9x**) |
-| 3-key | 4,901,309 | True | Cold | 1013.3±23.4ms (1.0x) | 358.4±8.0ms (**2.8x**) | 398.5±12.8ms (**2.5x**) |
-|  |  |  | Warm | 998.9±32.4ms (1.0x) | 371.8±31.2ms (**2.7x**) | 370.9±31.1ms (**2.7x**) |
-|  |  | False | Cold | 487.2±98.5ms (1.0x) | 133.7±32.5ms (**3.6x**) | 216.6±18.7ms (**2.2x**) |
-|  |  |  | Warm | 391.5±18.0ms (1.0x) | 128.7±14.8ms (**3.0x**) | 184.7±8.5ms (**2.1x**) |
+| Single-key | 3,160,983 | True | Cold | 831.5±25.2ms (1.0x) | 131.2±5.0ms (**6.3x**) | 1312.5±43.4ms (0.6x) |
+|  |  |  | Warm | 810.9±33.5ms (1.0x) | 127.3±2.7ms (**6.4x**) | 1225.1±50.4ms (0.7x) |
+|  |  | False | Cold | 295.7±51.9ms (1.0x) | 87.5±3.5ms (**3.4x**) | 1231.5±83.3ms (0.2x) |
+|  |  |  | Warm | 321.8±49.8ms (1.0x) | 89.6±5.1ms (**3.6x**) | 1070.4±39.7ms (0.3x) |
+| 2-key | 4,532,339 | True | Cold | 926.3±14.0ms (1.0x) | 275.2±24.6ms (**3.4x**) | 326.8±63.1ms (**2.8x**) |
+|  |  |  | Warm | 913.3±30.5ms (1.0x) | 317.8±89.6ms (**2.9x**) | 260.4±11.7ms (**3.5x**) |
+|  |  | False | Cold | 443.7±53.8ms (1.0x) | 142.6±38.0ms (**3.1x**) | 210.2±33.3ms (**2.1x**) |
+|  |  |  | Warm | 397.6±11.3ms (1.0x) | 110.6±3.5ms (**3.6x**) | 197.8±59.9ms (**2.0x**) |
+| 3-key | 4,901,309 | True | Cold | 1049.6±49.2ms (1.0x) | 418.7±38.3ms (**2.5x**) | 480.8±126.4ms (**2.2x**) |
+|  |  |  | Warm | 990.8±55.3ms (1.0x) | 486.2±80.1ms (**2.0x**) | 349.4±36.7ms (**2.8x**) |
+|  |  | False | Cold | 401.7±8.1ms (1.0x) | 132.0±13.8ms (**3.0x**) | 223.7±10.3ms (**1.8x**) |
+|  |  |  | Warm | 398.9±7.9ms (1.0x) | 138.4±25.8ms (**2.9x**) | 187.7±2.5ms (**2.1x**) |
 
 **Performance characteristics:
 - **Single-key**: Consistent **9-10x** speedup over Pandas baseline. Booster significantly outperforms Polars (6-7x faster).
@@ -196,33 +196,33 @@ result = df.booster.groupby(by=["a", "b"], target="val", agg="sum")
 result = df.booster.groupby(by=["a", "b"], target="val", agg="sum", sort=False)
 ```
 
-### Running Benchmarks
+### Benchmark Reproduction
+
+To reproduce the benchmark results shown above:
 
 ```bash
-# Run all benchmarks (standard + high cardinality, sorted + unsorted)
-python benches/benchmark.py
+# Install benchmark dependencies and build in release mode
+pip install -e ".[bench,dev]"
+maturin develop --release
 
-# Run only standard cardinality benchmarks
-python benches/benchmark.py --cardinality standard
-
-# Run only high cardinality benchmarks
-python benches/benchmark.py --cardinality high
-
-# Run only sorted benchmarks
-python benches/benchmark.py --sort-mode sorted
-
-# Run only unsorted benchmarks
-python benches/benchmark.py --sort-mode unsorted
-
-# Combine options
-python benches/benchmark.py --cardinality high --sort-mode sorted
-
-# Save results to markdown file
+# Run all benchmarks
 python benches/benchmark.py --output results.md
-
-# Adjust sample count (applies to both cold and warm)
-python benches/benchmark.py --samples 10
 ```
+
+#### Environment & Configuration
+The following environment was used to generate the benchmark results above. 
+(Note: These are **not** the minimum requirements for using the library, but strictly the environment used for reproduction).
+
+- **Build Mode**: Release (`maturin develop --release`)
+- **Threading**: Default Rayon behavior (uses all available logical cores)
+- **OS**: macOS (Darwin)
+- **Python**: 3.11.14
+- **Pandas**: 2.2.3
+- **Polars**: 1.37.1
+
+**Note**: The benchmark scripts use rigorous process isolation (fresh process per sample) for both Cold and Warm measurements to ensure accurate results.
+
+For more detailed benchmark options and configurations, see the [Development > Benchmarking](#benchmarking) section.
 
 ## Development
 
@@ -245,14 +245,14 @@ pytest tests/
 
 ### Benchmarking
 
-#### Setup for Full Benchmarks (including Polars comparison)
+#### Setup
 To run benchmarks with library comparisons (Polars, etc.), install the optional benchmark dependencies:
 
 ```bash
 # Install benchmark and development dependencies
 pip install -e ".[bench,dev]"
 
-# Build the Rust extension
+# Build the Rust extension in release mode
 maturin develop --release
 ```
 
@@ -285,8 +285,6 @@ python benches/benchmark.py --output results.md
 # Adjust sample count (applies to both cold and warm)
 python benches/benchmark.py --samples 10
 ```
-
-**Note**: The benchmark scripts use rigorous process isolation (fresh process per sample) for both Cold and Warm measurements to ensure accurate results. Polars is required for benchmarks and will be used for comparison.
 
 ## Architecture Overview
 

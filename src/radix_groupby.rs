@@ -368,7 +368,7 @@ where
     )
 }
 
-fn radix_groupby_sorted<T, A>(
+fn radix_groupby_dispatch<T, A>(
     key_slices: &[&[i64]],
     values: &[T],
 ) -> Result<GroupByMultiResult, String>
@@ -376,17 +376,23 @@ where
     T: Copy + Send + Sync,
     A: Aggregator<T, f64> + Clone + Default + Send,
 {
-    let mut result = radix_groupby::<T, A>(key_slices, values)?;
+    match key_slices.len() {
+        2 => radix_groupby_fixed::<2, T, A>(key_slices, values),
+        3 => radix_groupby_fixed::<3, T, A>(key_slices, values),
+        4 => radix_groupby_fixed::<4, T, A>(key_slices, values),
+        _ => radix_groupby::<T, A>(key_slices, values),
+    }
+}
 
+fn sort_groupby_result(result: &mut GroupByMultiResult) {
     if result.values.is_empty() {
-        return Ok(result);
+        return;
     }
 
     let n_keys = result.n_keys;
     let n_groups = result.values.len();
 
     let mut perm: Vec<usize> = (0..n_groups).collect();
-
     let keys_flat = &result.keys_flat;
 
     perm.par_sort_unstable_by(|&i, &j| {
@@ -405,7 +411,18 @@ where
 
     result.keys_flat = sorted_keys;
     result.values = sorted_values;
+}
 
+fn radix_groupby_sorted<T, A>(
+    key_slices: &[&[i64]],
+    values: &[T],
+) -> Result<GroupByMultiResult, String>
+where
+    T: Copy + Send + Sync,
+    A: Aggregator<T, f64> + Clone + Default + Send,
+{
+    let mut result = radix_groupby_dispatch::<T, A>(key_slices, values)?;
+    sort_groupby_result(&mut result);
     Ok(result)
 }
 
@@ -417,12 +434,7 @@ macro_rules! impl_radix_dispatch {
             key_slices: &[&[i64]],
             values: &[$val_type],
         ) -> Result<GroupByMultiResult, String> {
-            match key_slices.len() {
-                2 => radix_groupby_fixed::<2, $val_type, $agg>(key_slices, values),
-                3 => radix_groupby_fixed::<3, $val_type, $agg>(key_slices, values),
-                4 => radix_groupby_fixed::<4, $val_type, $agg>(key_slices, values),
-                _ => radix_groupby::<$val_type, $agg>(key_slices, values),
-            }
+            radix_groupby_dispatch::<$val_type, $agg>(key_slices, values)
         }
     };
 }
@@ -537,6 +549,31 @@ mod tests {
 
         assert!((groups[&(1, 10)] - 9.0).abs() < 1e-10);
         assert!((groups[&(2, 20)] - 6.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_radix_groupby_sorted_3keys() {
+        let col1 = vec![1i64, 2, 1];
+        let col2 = vec![10i64, 20, 10];
+        let col3 = vec![100i64, 200, 100];
+        let values = vec![1.0, 2.0, 3.0];
+
+        let key_slices: Vec<&[i64]> = vec![&col1, &col2, &col3];
+        let result = radix_groupby_sum_f64_sorted(&key_slices, &values).unwrap();
+
+        assert_eq!(result.n_keys, 3);
+        assert_eq!(result.values.len(), 2);
+
+        // Verify sorted order: (1,10,100), (2,20,200)
+        assert_eq!(result.keys_flat[0], 1);
+        assert_eq!(result.keys_flat[1], 10);
+        assert_eq!(result.keys_flat[2], 100);
+        assert!((result.values[0] - 4.0).abs() < 1e-10);
+
+        assert_eq!(result.keys_flat[3], 2);
+        assert_eq!(result.keys_flat[4], 20);
+        assert_eq!(result.keys_flat[5], 200);
+        assert!((result.values[1] - 2.0).abs() < 1e-10);
     }
 
     #[test]
@@ -712,5 +749,92 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_radix_groupby_sorted_4keys() {
+        let col1 = vec![1i64, 2, 1];
+        let col2 = vec![10i64, 20, 10];
+        let col3 = vec![100i64, 200, 100];
+        let col4 = vec![1000i64, 2000, 1000];
+        let values = vec![1.0, 2.0, 3.0];
+
+        let key_slices: Vec<&[i64]> = vec![&col1, &col2, &col3, &col4];
+        let result = radix_groupby_sum_f64_sorted(&key_slices, &values).unwrap();
+
+        assert_eq!(result.n_keys, 4);
+        assert_eq!(result.values.len(), 2);
+
+        // (1,10,100,1000) -> 1.0 + 3.0 = 4.0
+        assert_eq!(result.keys_flat[0], 1);
+        assert_eq!(result.keys_flat[1], 10);
+        assert_eq!(result.keys_flat[2], 100);
+        assert_eq!(result.keys_flat[3], 1000);
+        assert!((result.values[0] - 4.0).abs() < 1e-10);
+
+        // (2,20,200,2000) -> 2.0
+        assert_eq!(result.keys_flat[4], 2);
+        assert_eq!(result.keys_flat[5], 20);
+        assert_eq!(result.keys_flat[6], 200);
+        assert_eq!(result.keys_flat[7], 2000);
+        assert!((result.values[1] - 2.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_radix_groupby_sorted_5keys() {
+        let col1 = vec![1i64, 1];
+        let col2 = vec![2i64, 2];
+        let col3 = vec![3i64, 3];
+        let col4 = vec![4i64, 4];
+        let col5 = vec![5i64, 5];
+        let values = vec![1.0, 2.0];
+
+        let key_slices: Vec<&[i64]> = vec![&col1, &col2, &col3, &col4, &col5];
+        // This should hit the generic path (dispatch handles 2,3,4 specially)
+        let result = radix_groupby_sum_f64_sorted(&key_slices, &values).unwrap();
+
+        assert_eq!(result.n_keys, 5);
+        assert_eq!(result.values.len(), 1);
+
+        assert_eq!(result.keys_flat, vec![1, 2, 3, 4, 5]);
+        assert!((result.values[0] - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_radix_groupby_sorted_empty() {
+        let col1: Vec<i64> = vec![];
+        let col2: Vec<i64> = vec![];
+        let values: Vec<f64> = vec![];
+
+        let key_slices: Vec<&[i64]> = vec![&col1, &col2];
+        let result = radix_groupby_sum_f64_sorted(&key_slices, &values).unwrap();
+
+        assert_eq!(result.n_keys, 2);
+        assert_eq!(result.values.len(), 0);
+        assert!(result.keys_flat.is_empty());
+    }
+
+    #[test]
+    fn test_radix_groupby_sorted_i64_count() {
+        let col1 = vec![1i64, 1, 2, 2, 1];
+        let col2 = vec![10i64, 10, 20, 20, 10];
+        let values = vec![100i64, 200, 300, 400, 500]; // Values don't matter for count
+
+        let key_slices: Vec<&[i64]> = vec![&col1, &col2];
+        let result = radix_groupby_count_i64_sorted(&key_slices, &values).unwrap();
+
+        // Groups: (1,10) -> 3 rows, (2,20) -> 2 rows
+        // Sorted: (1,10), (2,20)
+
+        assert_eq!(result.n_keys, 2);
+        assert_eq!(result.values.len(), 2);
+
+        assert_eq!(result.keys_flat[0], 1);
+        assert_eq!(result.keys_flat[1], 10);
+        assert!((result.values[0] - 3.0).abs() < 1e-10);
+
+        assert_eq!(result.keys_flat[2], 2);
+        assert_eq!(result.keys_flat[3], 20);
+        assert!((result.values[1] - 2.0).abs() < 1e-10);
     }
 }
