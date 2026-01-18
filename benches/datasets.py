@@ -7,7 +7,7 @@ Usage:
     from datasets import generate_multi_key_dataset, PRESETS
 
     # Use a preset
-    df = generate_multi_key_dataset(**PRESETS["readme_3key"])
+    df = generate_multi_key_dataset(**PRESETS["3key"])
 
     # Or customize
     df = generate_multi_key_dataset(
@@ -34,35 +34,35 @@ if TYPE_CHECKING:
 
 PRESETS: dict[str, dict] = {
     # Single-key baseline (for comparison)
-    "readme_1key": {
+    "1key": {
         "n_rows": 5_000_000,
         "key_configs": [("key", 1000)],
         "value_dtype": "float64",
         "seed": 42,
     },
     # Two-key groupby
-    "readme_2key": {
+    "2key": {
         "n_rows": 5_000_000,
         "key_configs": [("region", 50), ("category", 100)],
         "value_dtype": "float64",
         "seed": 42,
     },
-    # Three-key groupby (the problematic case)
-    "readme_3key": {
+    # Three-key groupby
+    "3key": {
         "n_rows": 5_000_000,
         "key_configs": [("region", 50), ("category", 100), ("year", 5)],
         "value_dtype": "float64",
         "seed": 42,
     },
     # Four-key groupby
-    "readme_4key": {
+    "4key": {
         "n_rows": 5_000_000,
         "key_configs": [("region", 50), ("category", 100), ("year", 5), ("quarter", 4)],
         "value_dtype": "float64",
         "seed": 42,
     },
     # Five-key groupby (beyond SmallVec inline limit)
-    "readme_5key": {
+    "5key": {
         "n_rows": 5_000_000,
         "key_configs": [
             ("region", 50),
@@ -75,6 +75,12 @@ PRESETS: dict[str, dict] = {
         "seed": 42,
     },
     # High cardinality test (worst case for merge-based approach)
+    "high_cardinality_1key": {
+        "n_rows": 5_000_000,
+        "key_configs": [("key", 5_000_000)],
+        "value_dtype": "float64",
+        "seed": 42,
+    },
     "high_cardinality_2key": {
         "n_rows": 5_000_000,
         "key_configs": [("k1", 5000), ("k2", 5000)],

@@ -48,7 +48,7 @@ Issues = "https://github.com/your-org/pandas-booster/issues"
 [tool.maturin]
 python-source = "python"
 module-name = "pandas_booster._rust"
-features = ["pyo3/extension-module"]
+features = ["extension-module"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
