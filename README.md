@@ -178,7 +178,7 @@ The library is designed for large datasets where multi-core parallelism can be f
 |  |  | False | Cold | 401.7±8.1ms (1.0x) | 132.0±13.8ms (**3.0x**) | 223.7±10.3ms (**1.8x**) |
 |  |  |  | Warm | 398.9±7.9ms (1.0x) | 138.4±25.8ms (**2.9x**) | 187.7±2.5ms (**2.1x**) |
 
-**Performance characteristics:
+**Performance characteristics**:
 - **Single-key**: Consistent **9-10x** speedup over Pandas baseline. Booster significantly outperforms Polars (6-7x faster).
 - **Multi-key (standard cardinality)**: Comparable to Pandas for 2-3 keys; **1.0-1.2x** speedup for 4-5 keys. Polars shows **1.2-1.9x** speedup across all key counts.
 - **Multi-key (high cardinality)**: Booster achieves **2.5-3.8x** speedup. Polars performs similarly with **2.9-3.5x** speedup. Both engines significantly outperform Pandas in high-cardinality scenarios.
