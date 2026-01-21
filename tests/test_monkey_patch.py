@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+import warnings
 
 
 @pytest.fixture
@@ -93,6 +94,47 @@ class TestProxyReturnsCorrectType:
         pandas_booster.activate()
         gb = large_df.groupby(["key", "key2"])
         assert isinstance(gb, BoosterDataFrameGroupBy)
+
+
+class TestGroupbyPositionalArgsCompatibility:
+    def test_positional_axis_0_returns_proxy(self, large_df):
+        import pandas_booster
+        from pandas_booster.proxy import BoosterDataFrameGroupBy
+
+        pandas_booster.activate()
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=FutureWarning)
+            gb = large_df.groupby("key", 0)
+        assert isinstance(gb, BoosterDataFrameGroupBy)
+
+    def test_positional_axis_1_returns_pandas_groupby(self, large_df):
+        import pandas_booster
+        from pandas.core.groupby import DataFrameGroupBy
+
+        pandas_booster.activate()
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=FutureWarning)
+            gb = large_df.groupby("key", 1)
+        assert isinstance(gb, DataFrameGroupBy)
+
+    def test_positional_axis_with_kwargs_matches_pandas(self, large_df):
+        import pandas_booster
+
+        pandas_booster.activate()
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=FutureWarning)
+            booster_result = large_df.groupby("key", 0, sort=False)["val_float"].sum()
+        pandas_booster.deactivate()
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=FutureWarning)
+            pandas_result = large_df.groupby("key", 0, sort=False)["val_float"].sum()
+
+        pd.testing.assert_series_equal(
+            booster_result.sort_index(),
+            pandas_result.sort_index(),
+            check_exact=False,
+            rtol=1e-10,
+        )
 
 
 class TestAcceleratedAggregations:
