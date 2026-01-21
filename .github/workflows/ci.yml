@@ -40,6 +40,26 @@ jobs:
       - name: Run Rust tests
         run: cargo test
 
+  python-typecheck:
+    name: Python Typecheck (basedpyright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+
+      - name: Install typecheck dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "basedpyright>=1.37.1" "pandas-stubs>=2.0.0" pandas numpy
+
+      - name: Run basedpyright
+        run: basedpyright --project pyrightconfig.json
+
   build-and-test-full:
     name: Build & Test (Full Matrix)
     if: >

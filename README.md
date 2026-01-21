@@ -23,7 +23,7 @@ pip install pandas_booster-0.1.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014
 ```
 
 ### Development Setup
-To build and install from source, it is highly recommended to use a virtual environment:
+To build and install from source, **all development commands in this repository assume you are using an activated virtual environment** (I recommend `.venv`).
 
 ```bash
 # 1. Create and activate virtual environment
@@ -117,10 +117,10 @@ The following aggregation functions are currently supported:
 To ensure correctness and performance, the following constraints apply:
 
 - **Minimum dataset size**: 100,000 rows. For smaller datasets, the overhead of dispatching to Rust outweighs the benefits, and the library automatically falls back to native Pandas.
-- **Key column(s)**: Must be integer dtype (e.g., `int64`, `int32`). For multi-column groupby, all key columns must be integers.
+- **Key column(s)**: Must be integer dtype (e.g., `int64`, `int32`). For multi-column groupby, all key columns must be integers. The accelerated path preserves Pandas' index dtype (e.g., `int32` on Windows).
 - **Maximum key columns**: Up to 10 columns for multi-column groupby.
 - **Value column**: Must be a numeric dtype (integers or floats).
-- **Nullable types**: Nullable extension arrays (e.g., `Int64`, `Float64` using `pd.NA`) are not supported and will trigger a fallback to Pandas.
+- **Extension dtypes**: Pandas extension dtypes (e.g., nullable `Int64` / `Float64` using `pd.NA`) are not supported and will trigger a fallback to Pandas.
 - **NaN handling**: `NaN` values in the target column are skipped in aggregations, matching standard Pandas behavior.
 - **Return types**: Integer aggregations (like `sum` on `int64`) return `float64` to match Pandas' behavior regarding potential overflows and consistency.
 
@@ -132,7 +132,7 @@ The library is designed for large datasets where multi-core parallelism can be f
 - **Process Isolation:** Benchmarks use rigorous process isolation to ensure accurate results.
   - **Cold:** Average of 5 fresh process executions (first run only).
   - **Warm:** Average of 5 fresh process executions (steady state after warmup).
-- **Polars sort handling:** Polars does not have a `sort` parameter in `group_by`. For fair comparison, we define `sort=True` as "groupby+agg followed by sorting the result by keys" (cost included in timing), and `sort=False` as "groupby+agg only" (no sorting cost). This ensures all three engines (Pandas, Polars, Booster) are measured under identical conditions.
+- **Polars sort handling:** Polars does not have a `sort` parameter in `group_by`. For fair comparison, I define `sort=True` as "groupby+agg followed by sorting the result by keys" (cost included in timing), and `sort=False` as "groupby+agg only" (no sorting cost). This ensures all three engines (Pandas, Polars, Booster) are measured under identical conditions.
 - **Speedup baseline:** All speedup values (`x`) use **Pandas** as the baseline (1.0x) within each sort mode.
 - **Optional Polars:** Polars is included in the benchmarks for comparison if installed. If not installed, the benchmark suite proceeds with Pandas vs Booster only.
 
@@ -140,43 +140,43 @@ The library is designed for large datasets where multi-core parallelism can be f
 
 | Operation | Groups | Sort | Type | Pandas | Polars | Booster |
 |-----------|--------|------|------|--------|--------|---------|
-| Single-key | 1,000 | True | Cold | 42.4±4.5ms (1.0x) | 37.5±25.3ms (**1.1x**) | 9.1±5.6ms (**4.7x**) |
-|  |  |  | Warm | 25.4±0.4ms (1.0x) | 31.0±22.5ms (0.8x) | 2.9±0.3ms (**8.7x**) |
-|  |  | False | Cold | 29.5±1.1ms (1.0x) | 40.2±18.3ms (0.7x) | 9.2±4.6ms (**3.2x**) |
-|  |  |  | Warm | 26.5±1.8ms (1.0x) | 25.4±6.5ms (1.0x) | 3.2±0.4ms (**8.3x**) |
-| 2-key | 5,000 | True | Cold | 86.7±15.8ms (1.0x) | 100.1±44.5ms (0.9x) | 102.6±3.2ms (0.8x) |
-|  |  |  | Warm | 70.3±3.7ms (1.0x) | 50.3±10.0ms (**1.4x**) | 100.7±4.7ms (0.7x) |
-|  |  | False | Cold | 75.4±8.9ms (1.0x) | 61.1±23.4ms (**1.2x**) | 129.6±16.5ms (0.6x) |
-|  |  |  | Warm | 57.4±2.0ms (1.0x) | 55.0±7.8ms (1.0x) | 111.1±8.9ms (0.5x) |
-| 3-key | 25,000 | True | Cold | 146.5±7.1ms (1.0x) | 130.9±59.9ms (**1.1x**) | 119.1±3.4ms (**1.2x**) |
-|  |  |  | Warm | 109.9±3.7ms (1.0x) | 61.3±3.9ms (**1.8x**) | 109.1±6.8ms (1.0x) |
-|  |  | False | Cold | 128.7±47.4ms (1.0x) | 125.3±33.2ms (1.0x) | 136.8±18.8ms (0.9x) |
-|  |  |  | Warm | 99.3±5.3ms (1.0x) | 87.9±24.9ms (**1.1x**) | 130.1±10.5ms (0.8x) |
-| 4-key | 100,000 | True | Cold | 163.8±9.3ms (1.0x) | 263.8±135.6ms (0.6x) | 146.3±57.3ms (**1.1x**) |
-|  |  |  | Warm | 145.5±12.2ms (1.0x) | 108.8±13.3ms (**1.3x**) | 140.0±21.5ms (1.0x) |
-|  |  | False | Cold | 195.7±57.6ms (1.0x) | 107.9±20.6ms (**1.8x**) | 132.4±6.2ms (**1.5x**) |
-|  |  |  | Warm | 126.7±17.6ms (1.0x) | 107.6±19.8ms (**1.2x**) | 135.8±16.8ms (0.9x) |
-| 5-key | 993,138 | True | Cold | 335.5±38.2ms (1.0x) | 222.2±26.1ms (**1.5x**) | 326.4±100.3ms (1.0x) |
-|  |  |  | Warm | 286.3±30.0ms (1.0x) | 233.6±25.4ms (**1.2x**) | 245.7±23.1ms (**1.2x**) |
-|  |  | False | Cold | 257.4±20.7ms (1.0x) | 192.3±49.2ms (**1.3x**) | 309.5±76.1ms (0.8x) |
-|  |  |  | Warm | 230.5±42.7ms (1.0x) | 177.5±14.4ms (**1.3x**) | 270.6±32.0ms (0.9x) |
+| Single-key | 1,000 | True | Cold | 37.0±3.9ms (1.0x) | 30.0±11.5ms (**1.2x**) | 7.1±1.5ms (**5.2x**) |
+|  |  |  | Warm | 26.1±0.6ms (1.0x) | 18.4±0.9ms (**1.4x**) | 2.9±0.9ms (**8.9x**) |
+|  |  | False | Cold | 25.8±1.0ms (1.0x) | 26.5±2.3ms (1.0x) | 5.8±0.8ms (**4.4x**) |
+|  |  |  | Warm | 25.5±5.5ms (1.0x) | 19.6±1.3ms (**1.3x**) | 2.5±0.1ms (**10.2x**) |
+| 2-key | 5,000 | True | Cold | 97.2±6.9ms (1.0x) | 76.4±26.5ms (**1.3x**) | 104.0±3.4ms (0.9x) |
+|  |  |  | Warm | 72.4±2.0ms (1.0x) | 47.5±2.6ms (**1.5x**) | 96.1±1.3ms (0.8x) |
+|  |  | False | Cold | 134.4±111.2ms (1.0x) | 56.9±11.5ms (**2.4x**) | 103.6±4.0ms (**1.3x**) |
+|  |  |  | Warm | 57.4±2.5ms (1.0x) | 51.6±4.1ms (**1.1x**) | 103.1±9.2ms (0.6x) |
+| 3-key | 25,000 | True | Cold | 142.7±4.6ms (1.0x) | 94.5±25.2ms (**1.5x**) | 111.4±1.8ms (**1.3x**) |
+|  |  |  | Warm | 112.1±1.4ms (1.0x) | 64.1±5.6ms (**1.7x**) | 106.3±3.6ms (1.1x) |
+|  |  | False | Cold | 115.8±2.3ms (1.0x) | 83.8±24.0ms (**1.4x**) | 124.8±18.9ms (0.9x) |
+|  |  |  | Warm | 96.4±2.0ms (1.0x) | 63.4±4.4ms (**1.5x**) | 108.8±1.8ms (0.9x) |
+| 4-key | 100,000 | True | Cold | 168.3±4.4ms (1.0x) | 132.7±14.9ms (**1.3x**) | 134.3±8.5ms (**1.3x**) |
+|  |  |  | Warm | 159.4±33.5ms (1.0x) | 101.7±5.3ms (**1.6x**) | 120.6±3.6ms (**1.3x**) |
+|  |  | False | Cold | 137.9±8.2ms (1.0x) | 135.2±38.0ms (1.0x) | 121.7±5.3ms (**1.1x**) |
+|  |  |  | Warm | 114.2±3.3ms (1.0x) | 107.1±5.7ms (1.1x) | 114.9±2.8ms (1.0x) |
+| 5-key | 993,138 | True | Cold | 344.4±27.8ms (1.0x) | 330.1±108.0ms (1.0x) | 248.7±20.3ms (**1.4x**) |
+|  |  |  | Warm | 287.2±16.4ms (1.0x) | 226.4±24.7ms (**1.3x**) | 287.5±96.7ms (1.0x) |
+|  |  | False | Cold | 212.2±16.3ms (1.0x) | 199.5±27.4ms (1.1x) | 223.5±22.5ms (0.9x) |
+|  |  |  | Warm | 224.5±37.7ms (1.0x) | 186.4±21.8ms (**1.2x**) | 194.7±4.5ms (**1.2x**) |
 
 ### High Cardinality (5M rows, ~5M unique groups)
 
 | Operation | Groups | Sort | Type | Pandas | Polars | Booster |
 |-----------|--------|------|------|--------|--------|---------|
-| Single-key | 3,160,983 | True | Cold | 831.5±25.2ms (1.0x) | 131.2±5.0ms (**6.3x**) | 1312.5±43.4ms (0.6x) |
-|  |  |  | Warm | 810.9±33.5ms (1.0x) | 127.3±2.7ms (**6.4x**) | 1225.1±50.4ms (0.7x) |
-|  |  | False | Cold | 295.7±51.9ms (1.0x) | 87.5±3.5ms (**3.4x**) | 1231.5±83.3ms (0.2x) |
-|  |  |  | Warm | 321.8±49.8ms (1.0x) | 89.6±5.1ms (**3.6x**) | 1070.4±39.7ms (0.3x) |
-| 2-key | 4,532,339 | True | Cold | 926.3±14.0ms (1.0x) | 275.2±24.6ms (**3.4x**) | 326.8±63.1ms (**2.8x**) |
-|  |  |  | Warm | 913.3±30.5ms (1.0x) | 317.8±89.6ms (**2.9x**) | 260.4±11.7ms (**3.5x**) |
-|  |  | False | Cold | 443.7±53.8ms (1.0x) | 142.6±38.0ms (**3.1x**) | 210.2±33.3ms (**2.1x**) |
-|  |  |  | Warm | 397.6±11.3ms (1.0x) | 110.6±3.5ms (**3.6x**) | 197.8±59.9ms (**2.0x**) |
-| 3-key | 4,901,309 | True | Cold | 1049.6±49.2ms (1.0x) | 418.7±38.3ms (**2.5x**) | 480.8±126.4ms (**2.2x**) |
-|  |  |  | Warm | 990.8±55.3ms (1.0x) | 486.2±80.1ms (**2.0x**) | 349.4±36.7ms (**2.8x**) |
-|  |  | False | Cold | 401.7±8.1ms (1.0x) | 132.0±13.8ms (**3.0x**) | 223.7±10.3ms (**1.8x**) |
-|  |  |  | Warm | 398.9±7.9ms (1.0x) | 138.4±25.8ms (**2.9x**) | 187.7±2.5ms (**2.1x**) |
+| Single-key | 3,160,983 | True | Cold | 862.6±54.0ms (1.0x) | 137.4±20.4ms (**6.3x**) | 1417.7±61.3ms (0.6x) |
+|  |  |  | Warm | 858.9±26.1ms (1.0x) | 129.6±5.2ms (**6.6x**) | 1246.6±27.3ms (0.7x) |
+|  |  | False | Cold | 265.7±9.8ms (1.0x) | 98.1±8.2ms (**2.7x**) | 1116.8±36.8ms (0.2x) |
+|  |  |  | Warm | 250.9±6.2ms (1.0x) | 106.0±23.7ms (**2.4x**) | 1036.9±71.1ms (0.2x) |
+| 2-key | 4,532,339 | True | Cold | 945.2±49.5ms (1.0x) | 351.1±54.1ms (**2.7x**) | 391.0±119.3ms (**2.4x**) |
+|  |  |  | Warm | 991.7±110.7ms (1.0x) | 366.4±47.2ms (**2.7x**) | 314.8±46.0ms (**3.2x**) |
+|  |  | False | Cold | 526.4±141.4ms (1.0x) | 136.3±8.6ms (**3.9x**) | 196.3±23.5ms (**2.7x**) |
+|  |  |  | Warm | 465.3±20.9ms (1.0x) | 191.9±152.9ms (**2.4x**) | 156.0±3.1ms (**3.0x**) |
+| 3-key | 4,901,309 | True | Cold | 1006.4±41.7ms (1.0x) | 387.0±21.6ms (**2.6x**) | 481.7±109.0ms (**2.1x**) |
+|  |  |  | Warm | 1015.5±66.9ms (1.0x) | 488.0±95.1ms (**2.1x**) | 395.8±34.7ms (**2.6x**) |
+|  |  | False | Cold | 447.3±69.5ms (1.0x) | 145.7±25.9ms (**3.1x**) | 242.3±34.3ms (**1.8x**) |
+|  |  |  | Warm | 400.3±23.4ms (1.0x) | 124.0±1.6ms (**3.2x**) | 211.7±16.9ms (**1.9x**) |
 
 **Performance characteristics**:
 - **Single-key**: Consistent **9-10x** speedup over Pandas baseline. Booster significantly outperforms Polars (6-7x faster).
@@ -229,17 +229,20 @@ For more detailed benchmark options and configurations, see the [Development > B
 ### Building
 Build the extension module in-place:
 ```bash
+source .venv/bin/activate
 maturin develop
 ```
 
 For release builds with optimizations:
 ```bash
+source .venv/bin/activate
 maturin develop --release
 ```
 
 ### Testing
 Run the test suite using `pytest`:
 ```bash
+source .venv/bin/activate
 pytest tests/
 ```
 
@@ -250,6 +253,7 @@ To run benchmarks with library comparisons (Polars, etc.), install the optional 
 
 ```bash
 # Install benchmark and development dependencies
+source .venv/bin/activate
 pip install -e ".[bench,dev]"
 
 # Build the Rust extension in release mode
@@ -264,6 +268,7 @@ This installs:
 #### Running Benchmarks
 ```bash
 # Run all benchmarks (standard + high cardinality, sorted + unsorted)
+source .venv/bin/activate
 python benches/benchmark.py
 
 # Run only standard cardinality benchmarks

@@ -1,9 +1,23 @@
 {
   "venvPath": ".",
   "venv": ".venv",
+  "typeCheckingMode": "standard",
+  "include": ["python/pandas_booster"],
+  "exclude": [
+    ".idea",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "benches",
+    "tests",
+    "target"
+  ],
+  "reportExplicitAny": "none",
+  "reportMissingTypeArgument": "none",
   "executionEnvironments": [
     {
-      "root": "."
+      "root": ".",
+      "extraPaths": ["python"]
     }
   ]
 }

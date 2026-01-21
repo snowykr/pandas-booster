@@ -5,8 +5,8 @@ from typing import Any
 
 import pandas as pd
 
-from pandas_booster.accessor import BoosterAccessor
-from pandas_booster.proxy import BoosterDataFrameGroupBy
+from .accessor import BoosterAccessor
+from .proxy import BoosterDataFrameGroupBy
 
 __all__ = ["BoosterAccessor", "activate", "deactivate", "is_active"]
 __version__ = "0.1.0"

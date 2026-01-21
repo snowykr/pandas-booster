@@ -34,6 +34,8 @@ dev = [
     "pytest>=7.0",
     "pytest-benchmark>=4.0",
     "polars>=0.20",
+    "basedpyright>=1.37.1",
+    "pandas-stubs>=2.0.0"
 ]
 bench = [
     "polars>=0.20",
@@ -49,6 +51,10 @@ Issues = "https://github.com/your-org/pandas-booster/issues"
 python-source = "python"
 module-name = "pandas_booster._rust"
 features = ["extension-module"]
+include = [
+    "python/pandas_booster/py.typed",
+    "python/pandas_booster/_rust.pyi",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
