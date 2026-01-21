@@ -1,6 +1,4 @@
 {
-  "venvPath": ".",
-  "venv": ".venv",
   "typeCheckingMode": "standard",
   "include": ["python/pandas_booster"],
   "exclude": [
