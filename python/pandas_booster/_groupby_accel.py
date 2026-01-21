@@ -46,8 +46,9 @@ def to_i64_contiguous(arr: np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(arr.astype(np.int64, copy=False))
 
 
-def build_series_from_dict_result(
-    result_dict: dict[int, float],
+def build_series_from_single_result(
+    keys_1d: np.ndarray,
+    result_values: np.ndarray,
     *,
     name: Hashable | None,
     index_name: Hashable | None,
@@ -55,14 +56,28 @@ def build_series_from_dict_result(
     agg: str,
     sort: bool,
 ) -> pd.Series:
-    result = pd.Series(result_dict, name=name)
+    if keys_1d.ndim != 1:
+        raise ValueError(f"keys_1d must be 1D, got ndim={keys_1d.ndim}")
+    if result_values.ndim != 1:
+        raise ValueError(f"result_values must be 1D, got ndim={result_values.ndim}")
+    if keys_1d.shape[0] != result_values.shape[0]:
+        raise ValueError(
+            f"keys_1d length {keys_1d.shape[0]} != result_values length {result_values.shape[0]}"
+        )
 
-    if len(result.index) == 0:
-        result.index = pd.Index([], dtype=index_dtype, name=index_name)
-    else:
-        result.index = result.index.astype(index_dtype, copy=False)
-        result.index.name = index_name
+    if keys_1d.shape[0] == 0:
+        idx = pd.Index([], dtype=index_dtype, name=index_name)
+        out_dtype = np.int64 if agg == "count" else np.float64
+        return pd.Series([], index=idx, name=name, dtype=out_dtype)
 
+    keys_arr = np.asarray(keys_1d).astype(index_dtype, copy=False)
+    idx = pd.Index(keys_arr, dtype=index_dtype, name=index_name, copy=False)
+
+    values_arr = np.asarray(result_values)
+    if agg != "count":
+        values_arr = values_arr.astype(np.float64, copy=False)
+
+    result = pd.Series(values_arr, index=idx, name=name)
     if agg == "count":
         result = result.astype(np.int64)
 

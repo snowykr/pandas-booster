@@ -151,7 +151,7 @@ def test_accessor_single_key_empty_result_preserves_index_dtype(monkeypatch):
     df = _make_df_int32_keys(n=100_000)
 
     def fake_groupby_sum_f64(keys, values):
-        return {}
+        return np.empty((0,), dtype=np.int64), np.empty((0,), dtype=np.float64)
 
     monkeypatch.setattr(rust, "groupby_sum_f64", fake_groupby_sum_f64)
 

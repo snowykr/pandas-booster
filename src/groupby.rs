@@ -9,7 +9,6 @@
 
 use ahash::AHashMap;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
 use rayon::prelude::*;
 
 use crate::aggregation::{
@@ -18,21 +17,10 @@ use crate::aggregation::{
 };
 
 /// Result container for groupby operations, holding key-value pairs.
-/// Converts to a Python dict when returned across the FFI boundary.
 #[derive(Debug)]
 pub struct GroupByResultF64 {
     pub keys: Vec<i64>,
     pub values: Vec<f64>,
-}
-
-impl IntoPy<PyObject> for GroupByResultF64 {
-    fn into_py(self, py: Python<'_>) -> PyObject {
-        let dict = PyDict::new_bound(py);
-        for (k, v) in self.keys.iter().zip(self.values.iter()) {
-            dict.set_item(k, v).unwrap();
-        }
-        dict.into()
-    }
 }
 
 fn parallel_groupby_f64<T, A>(keys: &[i64], values: &[T]) -> PyResult<GroupByResultF64>

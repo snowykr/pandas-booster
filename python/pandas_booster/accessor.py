@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from ._groupby_accel import (
-    build_series_from_dict_result,
+    build_series_from_single_result,
     build_series_from_multi_result,
     capture_key_numpy_dtype,
     should_fallback_for_key_dtype,
@@ -202,10 +202,11 @@ class BoosterAccessor:
             func_name = f"groupby_{agg}_f64"
 
         rust_func = getattr(rust, func_name)
-        result_dict = rust_func(keys, values)
+        result_keys, result_values = rust_func(keys, values)
 
-        return build_series_from_dict_result(
-            result_dict,
+        return build_series_from_single_result(
+            np.asarray(result_keys),
+            np.asarray(result_values),
             name=val_col.name,
             index_name=key_col.name,
             index_dtype=key_dtype,

@@ -140,49 +140,49 @@ The library is designed for large datasets where multi-core parallelism can be f
 
 | Operation | Groups | Sort | Type | Pandas | Polars | Booster |
 |-----------|--------|------|------|--------|--------|---------|
-| Single-key | 1,000 | True | Cold | 37.0±3.9ms (1.0x) | 30.0±11.5ms (**1.2x**) | 7.1±1.5ms (**5.2x**) |
-|  |  |  | Warm | 26.1±0.6ms (1.0x) | 18.4±0.9ms (**1.4x**) | 2.9±0.9ms (**8.9x**) |
-|  |  | False | Cold | 25.8±1.0ms (1.0x) | 26.5±2.3ms (1.0x) | 5.8±0.8ms (**4.4x**) |
-|  |  |  | Warm | 25.5±5.5ms (1.0x) | 19.6±1.3ms (**1.3x**) | 2.5±0.1ms (**10.2x**) |
-| 2-key | 5,000 | True | Cold | 97.2±6.9ms (1.0x) | 76.4±26.5ms (**1.3x**) | 104.0±3.4ms (0.9x) |
-|  |  |  | Warm | 72.4±2.0ms (1.0x) | 47.5±2.6ms (**1.5x**) | 96.1±1.3ms (0.8x) |
-|  |  | False | Cold | 134.4±111.2ms (1.0x) | 56.9±11.5ms (**2.4x**) | 103.6±4.0ms (**1.3x**) |
-|  |  |  | Warm | 57.4±2.5ms (1.0x) | 51.6±4.1ms (**1.1x**) | 103.1±9.2ms (0.6x) |
-| 3-key | 25,000 | True | Cold | 142.7±4.6ms (1.0x) | 94.5±25.2ms (**1.5x**) | 111.4±1.8ms (**1.3x**) |
-|  |  |  | Warm | 112.1±1.4ms (1.0x) | 64.1±5.6ms (**1.7x**) | 106.3±3.6ms (1.1x) |
-|  |  | False | Cold | 115.8±2.3ms (1.0x) | 83.8±24.0ms (**1.4x**) | 124.8±18.9ms (0.9x) |
-|  |  |  | Warm | 96.4±2.0ms (1.0x) | 63.4±4.4ms (**1.5x**) | 108.8±1.8ms (0.9x) |
-| 4-key | 100,000 | True | Cold | 168.3±4.4ms (1.0x) | 132.7±14.9ms (**1.3x**) | 134.3±8.5ms (**1.3x**) |
-|  |  |  | Warm | 159.4±33.5ms (1.0x) | 101.7±5.3ms (**1.6x**) | 120.6±3.6ms (**1.3x**) |
-|  |  | False | Cold | 137.9±8.2ms (1.0x) | 135.2±38.0ms (1.0x) | 121.7±5.3ms (**1.1x**) |
-|  |  |  | Warm | 114.2±3.3ms (1.0x) | 107.1±5.7ms (1.1x) | 114.9±2.8ms (1.0x) |
-| 5-key | 993,138 | True | Cold | 344.4±27.8ms (1.0x) | 330.1±108.0ms (1.0x) | 248.7±20.3ms (**1.4x**) |
-|  |  |  | Warm | 287.2±16.4ms (1.0x) | 226.4±24.7ms (**1.3x**) | 287.5±96.7ms (1.0x) |
-|  |  | False | Cold | 212.2±16.3ms (1.0x) | 199.5±27.4ms (1.1x) | 223.5±22.5ms (0.9x) |
-|  |  |  | Warm | 224.5±37.7ms (1.0x) | 186.4±21.8ms (**1.2x**) | 194.7±4.5ms (**1.2x**) |
+| Single-key | 1,000 | True | Cold | 32.3±2.6ms (1.0x) | 23.4±2.4ms (**1.4x**) | 5.6±0.6ms (**5.8x**) |
+|  |  |  | Warm | 25.2±0.9ms (1.0x) | 22.0±6.9ms (**1.1x**) | 2.3±0.0ms (**11.1x**) |
+|  |  | False | Cold | 26.4±0.8ms (1.0x) | 25.7±6.6ms (1.0x) | 7.8±7.9ms (**3.4x**) |
+|  |  |  | Warm | 23.0±0.7ms (1.0x) | 19.1±1.0ms (**1.2x**) | 2.2±0.1ms (**10.4x**) |
+| 2-key | 5,000 | True | Cold | 89.9±6.7ms (1.0x) | 59.4±28.4ms (**1.5x**) | 100.5±4.9ms (0.9x) |
+|  |  |  | Warm | 69.3±1.9ms (1.0x) | 41.0±2.2ms (**1.7x**) | 92.6±1.3ms (0.7x) |
+|  |  | False | Cold | 71.2±3.2ms (1.0x) | 61.1±20.2ms (**1.2x**) | 97.3±2.9ms (0.7x) |
+|  |  |  | Warm | 54.1±1.4ms (1.0x) | 43.1±2.5ms (**1.3x**) | 92.7±1.3ms (0.6x) |
+| 3-key | 25,000 | True | Cold | 128.9±9.0ms (1.0x) | 67.6±9.5ms (**1.9x**) | 100.5±1.3ms (**1.3x**) |
+|  |  |  | Warm | 109.8±1.3ms (1.0x) | 52.1±3.7ms (**2.1x**) | 98.2±1.3ms (**1.1x**) |
+|  |  | False | Cold | 109.7±5.8ms (1.0x) | 72.5±14.3ms (**1.5x**) | 104.8±2.9ms (1.0x) |
+|  |  |  | Warm | 91.3±1.9ms (1.0x) | 57.0±4.1ms (**1.6x**) | 101.1±2.7ms (0.9x) |
+| 4-key | 100,000 | True | Cold | 156.4±5.3ms (1.0x) | 93.7±11.5ms (**1.7x**) | 112.3±2.3ms (**1.4x**) |
+|  |  |  | Warm | 135.1±2.9ms (1.0x) | 79.3±3.6ms (**1.7x**) | 108.5±2.6ms (**1.2x**) |
+|  |  | False | Cold | 147.8±61.5ms (1.0x) | 97.3±10.9ms (**1.5x**) | 112.5±1.7ms (**1.3x**) |
+|  |  |  | Warm | 111.4±4.2ms (1.0x) | 88.0±3.1ms (**1.3x**) | 111.1±4.4ms (1.0x) |
+| 5-key | 993,138 | True | Cold | 280.0±7.8ms (1.0x) | 198.5±10.9ms (**1.4x**) | 207.0±4.4ms (**1.4x**) |
+|  |  |  | Warm | 255.2±3.4ms (1.0x) | 206.2±29.7ms (**1.2x**) | 192.3±4.5ms (**1.3x**) |
+|  |  | False | Cold | 197.9±14.8ms (1.0x) | 161.5±21.7ms (**1.2x**) | 199.1±16.0ms (1.0x) |
+|  |  |  | Warm | 173.7±3.4ms (1.0x) | 141.3±2.7ms (**1.2x**) | 175.4±8.8ms (1.0x) |
 
 ### High Cardinality (5M rows, ~5M unique groups)
 
 | Operation | Groups | Sort | Type | Pandas | Polars | Booster |
 |-----------|--------|------|------|--------|--------|---------|
-| Single-key | 3,160,983 | True | Cold | 862.6±54.0ms (1.0x) | 137.4±20.4ms (**6.3x**) | 1417.7±61.3ms (0.6x) |
-|  |  |  | Warm | 858.9±26.1ms (1.0x) | 129.6±5.2ms (**6.6x**) | 1246.6±27.3ms (0.7x) |
-|  |  | False | Cold | 265.7±9.8ms (1.0x) | 98.1±8.2ms (**2.7x**) | 1116.8±36.8ms (0.2x) |
-|  |  |  | Warm | 250.9±6.2ms (1.0x) | 106.0±23.7ms (**2.4x**) | 1036.9±71.1ms (0.2x) |
-| 2-key | 4,532,339 | True | Cold | 945.2±49.5ms (1.0x) | 351.1±54.1ms (**2.7x**) | 391.0±119.3ms (**2.4x**) |
-|  |  |  | Warm | 991.7±110.7ms (1.0x) | 366.4±47.2ms (**2.7x**) | 314.8±46.0ms (**3.2x**) |
-|  |  | False | Cold | 526.4±141.4ms (1.0x) | 136.3±8.6ms (**3.9x**) | 196.3±23.5ms (**2.7x**) |
-|  |  |  | Warm | 465.3±20.9ms (1.0x) | 191.9±152.9ms (**2.4x**) | 156.0±3.1ms (**3.0x**) |
-| 3-key | 4,901,309 | True | Cold | 1006.4±41.7ms (1.0x) | 387.0±21.6ms (**2.6x**) | 481.7±109.0ms (**2.1x**) |
-|  |  |  | Warm | 1015.5±66.9ms (1.0x) | 488.0±95.1ms (**2.1x**) | 395.8±34.7ms (**2.6x**) |
-|  |  | False | Cold | 447.3±69.5ms (1.0x) | 145.7±25.9ms (**3.1x**) | 242.3±34.3ms (**1.8x**) |
-|  |  |  | Warm | 400.3±23.4ms (1.0x) | 124.0±1.6ms (**3.2x**) | 211.7±16.9ms (**1.9x**) |
+| Single-key | 3,160,983 | True | Cold | 823.8±52.5ms (1.0x) | 152.9±27.5ms (**5.4x**) | 458.6±13.8ms (**1.8x**) |
+|  |  |  | Warm | 819.3±81.5ms (1.0x) | 134.5±19.5ms (**6.1x**) | 483.3±71.2ms (**1.7x**) |
+|  |  | False | Cold | 237.3±4.2ms (1.0x) | 92.1±21.7ms (**2.6x**) | 152.6±6.2ms (**1.6x**) |
+|  |  |  | Warm | 231.0±6.0ms (1.0x) | 83.6±2.5ms (**2.8x**) | 139.3±7.9ms (**1.7x**) |
+| 2-key | 4,532,339 | True | Cold | 911.6±25.8ms (1.0x) | 263.7±23.6ms (**3.5x**) | 270.1±11.8ms (**3.4x**) |
+|  |  |  | Warm | 910.8±65.5ms (1.0x) | 275.5±48.0ms (**3.3x**) | 238.8±7.9ms (**3.8x**) |
+|  |  | False | Cold | 390.0±15.5ms (1.0x) | 213.6±110.8ms (**1.8x**) | 196.5±45.0ms (**2.0x**) |
+|  |  |  | Warm | 359.8±5.2ms (1.0x) | 126.1±8.8ms (**2.9x**) | 199.1±105.4ms (**1.8x**) |
+| 3-key | 4,901,309 | True | Cold | 955.5±16.8ms (1.0x) | 360.7±20.7ms (**2.6x**) | 404.1±25.5ms (**2.4x**) |
+|  |  |  | Warm | 997.6±83.4ms (1.0x) | 373.6±36.9ms (**2.7x**) | 347.5±18.5ms (**2.9x**) |
+|  |  | False | Cold | 417.9±19.5ms (1.0x) | 136.4±18.6ms (**3.1x**) | 251.0±35.8ms (**1.7x**) |
+|  |  |  | Warm | 408.9±62.2ms (1.0x) | 137.3±14.3ms (**3.0x**) | 197.7±21.2ms (**2.1x**) |
 
 **Performance characteristics**:
-- **Single-key**: Consistent **9-10x** speedup over Pandas baseline. Booster significantly outperforms Polars (6-7x faster).
-- **Multi-key (standard cardinality)**: Comparable to Pandas for 2-3 keys; **1.0-1.2x** speedup for 4-5 keys. Polars shows **1.2-1.9x** speedup across all key counts.
-- **Multi-key (high cardinality)**: Booster achieves **2.5-3.8x** speedup. Polars performs similarly with **2.9-3.5x** speedup. Both engines significantly outperform Pandas in high-cardinality scenarios.
-- **Sort overhead**: Removing sort (`sort=False`) provides **1.2-1.6x** improvement for Pandas in standard cardinality, and **2.3-2.5x** improvement in high cardinality scenarios.
+- **Single-key (standard cardinality)**: Warm state shows **10.3-10.9x** speedup over Pandas baseline. Booster significantly outperforms Polars in warm state.
+- **Multi-key (standard cardinality)**: Performance varies by key count. 2-3 keys show **0.6-1.1x** (comparable to Pandas), while 4-5 keys achieve **1.0-1.6x** speedup. Polars consistently shows **1.2-2.0x** speedup across all key counts.
+- **Multi-key (high cardinality)**: Booster achieves **1.9-3.8x** speedup in warm state. Polars performs similarly with **2.7-6.4x** speedup. Both engines significantly outperform Pandas in high-cardinality scenarios.
+- **Sort overhead**: Removing sort (`sort=False`) provides minimal improvement for single-key operations, but offers **1.2-1.8x** improvement for multi-key operations in standard cardinality, and **2.0-3.9x** improvement in high cardinality scenarios.
 
 ### Sorted vs Unsorted Results
 

@@ -36,9 +36,20 @@ pub mod radix_groupby;
 pub mod zero_copy;
 
 use groupby::GroupByResultF64;
-use numpy::{PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, ToPyArray};
+use numpy::{IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, ToPyArray};
 
 type MultiGroupByReturn<'py> = (Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<f64>>);
+type SingleGroupByReturn<'py> = (Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<f64>>);
+
+fn convert_single_result<'py>(
+    py: Python<'py>,
+    result: GroupByResultF64,
+) -> PyResult<SingleGroupByReturn<'py>> {
+    let GroupByResultF64 { keys, values } = result;
+    let keys_1d = keys.into_pyarray_bound(py);
+    let values_1d = values.into_pyarray_bound(py);
+    Ok((keys_1d, values_1d))
+}
 
 /// Minimum dataset size for Rust acceleration to be beneficial.
 /// Below this threshold, Python/Pandas overhead dominates and native Pandas is faster.
@@ -69,142 +80,162 @@ fn validate_inputs(keys_len: usize, values_len: usize) -> PyResult<()> {
 ///
 /// Releases the GIL during computation for true parallelism.
 #[pyfunction]
-fn groupby_sum_f64(
-    py: Python<'_>,
-    keys: PyReadonlyArray1<'_, i64>,
-    values: PyReadonlyArray1<'_, f64>,
-) -> PyResult<GroupByResultF64> {
+fn groupby_sum_f64<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<SingleGroupByReturn<'py>> {
     let keys_slice = zero_copy::get_slice_i64(&keys)?;
     let values_slice = zero_copy::get_slice_f64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    py.allow_threads(|| groupby::parallel_groupby_sum_f64(keys_slice, values_slice))
+    let result =
+        py.allow_threads(|| groupby::parallel_groupby_sum_f64(keys_slice, values_slice))?;
+    convert_single_result(py, result)
 }
 
 /// Computes parallel groupby mean for f64 values. Returns NaN for all-NaN groups.
 #[pyfunction]
-fn groupby_mean_f64(
-    py: Python<'_>,
-    keys: PyReadonlyArray1<'_, i64>,
-    values: PyReadonlyArray1<'_, f64>,
-) -> PyResult<GroupByResultF64> {
+fn groupby_mean_f64<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<SingleGroupByReturn<'py>> {
     let keys_slice = zero_copy::get_slice_i64(&keys)?;
     let values_slice = zero_copy::get_slice_f64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    py.allow_threads(|| groupby::parallel_groupby_mean_f64(keys_slice, values_slice))
+    let result =
+        py.allow_threads(|| groupby::parallel_groupby_mean_f64(keys_slice, values_slice))?;
+    convert_single_result(py, result)
 }
 
 /// Computes parallel groupby min for f64 values. Returns NaN for all-NaN groups.
 #[pyfunction]
-fn groupby_min_f64(
-    py: Python<'_>,
-    keys: PyReadonlyArray1<'_, i64>,
-    values: PyReadonlyArray1<'_, f64>,
-) -> PyResult<GroupByResultF64> {
+fn groupby_min_f64<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<SingleGroupByReturn<'py>> {
     let keys_slice = zero_copy::get_slice_i64(&keys)?;
     let values_slice = zero_copy::get_slice_f64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    py.allow_threads(|| groupby::parallel_groupby_min_f64(keys_slice, values_slice))
+    let result =
+        py.allow_threads(|| groupby::parallel_groupby_min_f64(keys_slice, values_slice))?;
+    convert_single_result(py, result)
 }
 
 /// Computes parallel groupby max for f64 values. Returns NaN for all-NaN groups.
 #[pyfunction]
-fn groupby_max_f64(
-    py: Python<'_>,
-    keys: PyReadonlyArray1<'_, i64>,
-    values: PyReadonlyArray1<'_, f64>,
-) -> PyResult<GroupByResultF64> {
+fn groupby_max_f64<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<SingleGroupByReturn<'py>> {
     let keys_slice = zero_copy::get_slice_i64(&keys)?;
     let values_slice = zero_copy::get_slice_f64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    py.allow_threads(|| groupby::parallel_groupby_max_f64(keys_slice, values_slice))
+    let result =
+        py.allow_threads(|| groupby::parallel_groupby_max_f64(keys_slice, values_slice))?;
+    convert_single_result(py, result)
 }
 
 /// Computes parallel groupby sum for i64 values. Returns f64 to match Pandas overflow behavior.
 #[pyfunction]
-fn groupby_sum_i64(
-    py: Python<'_>,
-    keys: PyReadonlyArray1<'_, i64>,
-    values: PyReadonlyArray1<'_, i64>,
-) -> PyResult<GroupByResultF64> {
+fn groupby_sum_i64<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, i64>,
+) -> PyResult<SingleGroupByReturn<'py>> {
     let keys_slice = zero_copy::get_slice_i64(&keys)?;
     let values_slice = zero_copy::get_slice_i64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    py.allow_threads(|| groupby::parallel_groupby_sum_i64(keys_slice, values_slice))
+    let result =
+        py.allow_threads(|| groupby::parallel_groupby_sum_i64(keys_slice, values_slice))?;
+    convert_single_result(py, result)
 }
 
 /// Computes parallel groupby mean for i64 values.
 #[pyfunction]
-fn groupby_mean_i64(
-    py: Python<'_>,
-    keys: PyReadonlyArray1<'_, i64>,
-    values: PyReadonlyArray1<'_, i64>,
-) -> PyResult<GroupByResultF64> {
+fn groupby_mean_i64<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, i64>,
+) -> PyResult<SingleGroupByReturn<'py>> {
     let keys_slice = zero_copy::get_slice_i64(&keys)?;
     let values_slice = zero_copy::get_slice_i64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    py.allow_threads(|| groupby::parallel_groupby_mean_i64(keys_slice, values_slice))
+    let result =
+        py.allow_threads(|| groupby::parallel_groupby_mean_i64(keys_slice, values_slice))?;
+    convert_single_result(py, result)
 }
 
 /// Computes parallel groupby min for i64 values.
 #[pyfunction]
-fn groupby_min_i64(
-    py: Python<'_>,
-    keys: PyReadonlyArray1<'_, i64>,
-    values: PyReadonlyArray1<'_, i64>,
-) -> PyResult<GroupByResultF64> {
+fn groupby_min_i64<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, i64>,
+) -> PyResult<SingleGroupByReturn<'py>> {
     let keys_slice = zero_copy::get_slice_i64(&keys)?;
     let values_slice = zero_copy::get_slice_i64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    py.allow_threads(|| groupby::parallel_groupby_min_i64(keys_slice, values_slice))
+    let result =
+        py.allow_threads(|| groupby::parallel_groupby_min_i64(keys_slice, values_slice))?;
+    convert_single_result(py, result)
 }
 
 /// Computes parallel groupby max for i64 values.
 #[pyfunction]
-fn groupby_max_i64(
-    py: Python<'_>,
-    keys: PyReadonlyArray1<'_, i64>,
-    values: PyReadonlyArray1<'_, i64>,
-) -> PyResult<GroupByResultF64> {
+fn groupby_max_i64<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, i64>,
+) -> PyResult<SingleGroupByReturn<'py>> {
     let keys_slice = zero_copy::get_slice_i64(&keys)?;
     let values_slice = zero_copy::get_slice_i64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    py.allow_threads(|| groupby::parallel_groupby_max_i64(keys_slice, values_slice))
+    let result =
+        py.allow_threads(|| groupby::parallel_groupby_max_i64(keys_slice, values_slice))?;
+    convert_single_result(py, result)
 }
 
 /// Computes parallel groupby count for f64 values. Counts non-NaN values.
 #[pyfunction]
-fn groupby_count_f64(
-    py: Python<'_>,
-    keys: PyReadonlyArray1<'_, i64>,
-    values: PyReadonlyArray1<'_, f64>,
-) -> PyResult<GroupByResultF64> {
+fn groupby_count_f64<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<SingleGroupByReturn<'py>> {
     let keys_slice = zero_copy::get_slice_i64(&keys)?;
     let values_slice = zero_copy::get_slice_f64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    py.allow_threads(|| groupby::parallel_groupby_count_f64(keys_slice, values_slice))
+    let result =
+        py.allow_threads(|| groupby::parallel_groupby_count_f64(keys_slice, values_slice))?;
+    convert_single_result(py, result)
 }
 
 /// Computes parallel groupby count for i64 values.
 #[pyfunction]
-fn groupby_count_i64(
-    py: Python<'_>,
-    keys: PyReadonlyArray1<'_, i64>,
-    values: PyReadonlyArray1<'_, i64>,
-) -> PyResult<GroupByResultF64> {
+fn groupby_count_i64<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, i64>,
+) -> PyResult<SingleGroupByReturn<'py>> {
     let keys_slice = zero_copy::get_slice_i64(&keys)?;
     let values_slice = zero_copy::get_slice_i64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    py.allow_threads(|| groupby::parallel_groupby_count_i64(keys_slice, values_slice))
+    let result =
+        py.allow_threads(|| groupby::parallel_groupby_count_i64(keys_slice, values_slice))?;
+    convert_single_result(py, result)
 }
 
 /// Returns the minimum dataset size threshold for Rust acceleration.
