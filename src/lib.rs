@@ -38,6 +38,8 @@ pub mod zero_copy;
 use groupby::GroupByResultF64;
 use numpy::{PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, ToPyArray};
 
+type MultiGroupByReturn<'py> = (Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<f64>>);
+
 /// Minimum dataset size for Rust acceleration to be beneficial.
 /// Below this threshold, Python/Pandas overhead dominates and native Pandas is faster.
 const FALLBACK_THRESHOLD: usize = 100_000;
@@ -258,7 +260,7 @@ fn groupby_multi_sum_f64<'py>(
     py: Python<'py>,
     key_cols: Vec<PyReadonlyArray1<'py, i64>>,
     values: PyReadonlyArray1<'py, f64>,
-) -> PyResult<(Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<f64>>)> {
+) -> PyResult<MultiGroupByReturn<'py>> {
     let values_slice = zero_copy::get_slice_f64(&values)?;
     let key_slices: Vec<&[i64]> = key_cols
         .iter()
@@ -280,7 +282,7 @@ fn groupby_multi_mean_f64<'py>(
     py: Python<'py>,
     key_cols: Vec<PyReadonlyArray1<'py, i64>>,
     values: PyReadonlyArray1<'py, f64>,
-) -> PyResult<(Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<f64>>)> {
+) -> PyResult<MultiGroupByReturn<'py>> {
     let values_slice = zero_copy::get_slice_f64(&values)?;
     let key_slices: Vec<&[i64]> = key_cols
         .iter()
@@ -302,7 +304,7 @@ fn groupby_multi_min_f64<'py>(
     py: Python<'py>,
     key_cols: Vec<PyReadonlyArray1<'py, i64>>,
     values: PyReadonlyArray1<'py, f64>,
-) -> PyResult<(Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<f64>>)> {
+) -> PyResult<MultiGroupByReturn<'py>> {
     let values_slice = zero_copy::get_slice_f64(&values)?;
     let key_slices: Vec<&[i64]> = key_cols
         .iter()
@@ -324,7 +326,7 @@ fn groupby_multi_max_f64<'py>(
     py: Python<'py>,
     key_cols: Vec<PyReadonlyArray1<'py, i64>>,
     values: PyReadonlyArray1<'py, f64>,
-) -> PyResult<(Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<f64>>)> {
+) -> PyResult<MultiGroupByReturn<'py>> {
     let values_slice = zero_copy::get_slice_f64(&values)?;
     let key_slices: Vec<&[i64]> = key_cols
         .iter()
@@ -346,7 +348,7 @@ fn groupby_multi_sum_i64<'py>(
     py: Python<'py>,
     key_cols: Vec<PyReadonlyArray1<'py, i64>>,
     values: PyReadonlyArray1<'py, i64>,
-) -> PyResult<(Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<f64>>)> {
+) -> PyResult<MultiGroupByReturn<'py>> {
     let values_slice = zero_copy::get_slice_i64(&values)?;
     let key_slices: Vec<&[i64]> = key_cols
         .iter()
@@ -368,7 +370,7 @@ fn groupby_multi_mean_i64<'py>(
     py: Python<'py>,
     key_cols: Vec<PyReadonlyArray1<'py, i64>>,
     values: PyReadonlyArray1<'py, i64>,
-) -> PyResult<(Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<f64>>)> {
+) -> PyResult<MultiGroupByReturn<'py>> {
     let values_slice = zero_copy::get_slice_i64(&values)?;
     let key_slices: Vec<&[i64]> = key_cols
         .iter()
@@ -390,7 +392,7 @@ fn groupby_multi_min_i64<'py>(
     py: Python<'py>,
     key_cols: Vec<PyReadonlyArray1<'py, i64>>,
     values: PyReadonlyArray1<'py, i64>,
-) -> PyResult<(Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<f64>>)> {
+) -> PyResult<MultiGroupByReturn<'py>> {
     let values_slice = zero_copy::get_slice_i64(&values)?;
     let key_slices: Vec<&[i64]> = key_cols
         .iter()
@@ -412,7 +414,7 @@ fn groupby_multi_max_i64<'py>(
     py: Python<'py>,
     key_cols: Vec<PyReadonlyArray1<'py, i64>>,
     values: PyReadonlyArray1<'py, i64>,
-) -> PyResult<(Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<f64>>)> {
+) -> PyResult<MultiGroupByReturn<'py>> {
     let values_slice = zero_copy::get_slice_i64(&values)?;
     let key_slices: Vec<&[i64]> = key_cols
         .iter()
@@ -434,7 +436,7 @@ fn groupby_multi_count_f64<'py>(
     py: Python<'py>,
     key_cols: Vec<PyReadonlyArray1<'py, i64>>,
     values: PyReadonlyArray1<'py, f64>,
-) -> PyResult<(Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<f64>>)> {
+) -> PyResult<MultiGroupByReturn<'py>> {
     let values_slice = zero_copy::get_slice_f64(&values)?;
     let key_slices: Vec<&[i64]> = key_cols
         .iter()
@@ -456,7 +458,7 @@ fn groupby_multi_count_i64<'py>(
     py: Python<'py>,
     key_cols: Vec<PyReadonlyArray1<'py, i64>>,
     values: PyReadonlyArray1<'py, i64>,
-) -> PyResult<(Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<f64>>)> {
+) -> PyResult<MultiGroupByReturn<'py>> {
     let values_slice = zero_copy::get_slice_i64(&values)?;
     let key_slices: Vec<&[i64]> = key_cols
         .iter()
@@ -476,25 +478,29 @@ fn groupby_multi_count_i64<'py>(
 fn convert_multi_result<'py>(
     py: Python<'py>,
     result: groupby_multi::GroupByMultiResult,
-) -> PyResult<(Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<f64>>)> {
+) -> PyResult<MultiGroupByReturn<'py>> {
     let n_groups = result.values.len();
     let n_keys = result.n_keys;
 
     // Create 2D array for keys: shape (n_groups, n_keys)
     let keys_2d = if n_groups > 0 {
-        // Safety invariant: keys_flat must have exactly n_groups * n_keys elements
-        debug_assert_eq!(
-            result.keys_flat.len(),
-            n_groups * n_keys,
-            "keys_flat length {} does not match expected {} (n_groups={} * n_keys={})",
-            result.keys_flat.len(),
-            n_groups * n_keys,
-            n_groups,
-            n_keys
-        );
+        // Safety invariant: keys_flat must have exactly n_groups * n_keys elements.
+        // This must be enforced in release as well, since we use unsafe raw copies below.
+        let expected_len = n_groups.checked_mul(n_keys).ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("n_groups * n_keys overflow")
+        })?;
+        if result.keys_flat.len() != expected_len {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "keys_flat length {} does not match expected {} (n_groups={} * n_keys={})",
+                result.keys_flat.len(),
+                expected_len,
+                n_groups,
+                n_keys
+            )));
+        }
 
         // Reshape flat keys to 2D
-        // SAFETY: We verified keys_flat.len() == n_groups * n_keys via debug_assert above.
+        // SAFETY: We verified keys_flat.len() == n_groups * n_keys above.
         // The PyArray2 is created with shape [n_groups, n_keys] which has the same total
         // element count, so the copy is within bounds.
         unsafe {
@@ -505,8 +511,8 @@ fn convert_multi_result<'py>(
         }
     } else {
         // Empty result
-        PyArray2::from_vec2_bound(py, &vec![vec![]; 0])
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?
+        // SAFETY: the array is zero-length (no elements to initialize).
+        unsafe { PyArray2::new_bound(py, [0, n_keys], false) }
     };
 
     let values_1d = result.values.to_pyarray_bound(py);

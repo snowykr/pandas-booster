@@ -120,8 +120,8 @@ fn extract_key(key_slices: &[&[i64]], row: usize) -> CompositeKey {
 fn compute_hash_fixed<const N: usize>(key_slices: &[&[i64]], row: usize) -> u64 {
     use ahash::AHasher;
     let mut hasher = AHasher::default();
-    for i in 0..N {
-        key_slices[i][row].hash(&mut hasher);
+    for col in &key_slices[..N] {
+        col[row].hash(&mut hasher);
     }
     hasher.finish()
 }
@@ -129,8 +129,8 @@ fn compute_hash_fixed<const N: usize>(key_slices: &[&[i64]], row: usize) -> u64 
 #[inline]
 fn extract_key_fixed<const N: usize>(key_slices: &[&[i64]], row: usize) -> FixedKey<N> {
     let mut arr = [0i64; N];
-    for i in 0..N {
-        arr[i] = key_slices[i][row];
+    for (dst, col) in arr.iter_mut().zip(&key_slices[..N]) {
+        *dst = col[row];
     }
     FixedKey(arr)
 }
