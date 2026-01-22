@@ -34,9 +34,13 @@ dev = [
     "pytest>=7.0",
     "pytest-benchmark>=4.0",
     "polars>=0.20",
+    "basedpyright>=1.37.1",
+    "pandas-stubs>=2.0.0",
+    "ruff>=0.9.0",
 ]
 bench = [
     "polars>=0.20",
+    "pyarrow>=12.0",
     "matplotlib>=3.5",
 ]
 
@@ -48,7 +52,11 @@ Issues = "https://github.com/your-org/pandas-booster/issues"
 [tool.maturin]
 python-source = "python"
 module-name = "pandas_booster._rust"
-features = ["pyo3/extension-module"]
+features = ["extension-module"]
+include = [
+    "python/pandas_booster/py.typed",
+    "python/pandas_booster/_rust.pyi",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -63,3 +71,6 @@ ignore = ["D100", "D104", "D105", "D107"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = ["D"]

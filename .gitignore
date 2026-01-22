@@ -9,6 +9,7 @@ __pycache__/
 *.so
 *.egg-info/
 dist/
+dist-verify/
 build/
 .eggs/
 *.egg

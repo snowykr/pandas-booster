@@ -87,11 +87,15 @@ impl Aggregator<f64, f64> for MeanAggF64 {
 #[derive(Clone)]
 pub struct MinAggF64 {
     pub min: f64,
+    pub seen_valid: bool,
 }
 
 impl Default for MinAggF64 {
     fn default() -> Self {
-        Self { min: f64::INFINITY }
+        Self {
+            min: f64::INFINITY,
+            seen_valid: false,
+        }
     }
 }
 
@@ -101,22 +105,28 @@ impl Aggregator<f64, f64> for MinAggF64 {
     }
 
     fn update(&mut self, value: f64) {
-        if !value.is_nan() && value < self.min {
-            self.min = value;
+        if !value.is_nan() {
+            self.seen_valid = true;
+            if value < self.min {
+                self.min = value;
+            }
         }
     }
 
     fn merge(&mut self, other: Self) {
-        if other.min < self.min {
-            self.min = other.min;
+        if other.seen_valid {
+            self.seen_valid = true;
+            if other.min < self.min {
+                self.min = other.min;
+            }
         }
     }
 
     fn finalize(&self) -> f64 {
-        if self.min == f64::INFINITY {
-            f64::NAN
-        } else {
+        if self.seen_valid {
             self.min
+        } else {
+            f64::NAN
         }
     }
 }
@@ -125,12 +135,14 @@ impl Aggregator<f64, f64> for MinAggF64 {
 #[derive(Clone)]
 pub struct MaxAggF64 {
     pub max: f64,
+    pub seen_valid: bool,
 }
 
 impl Default for MaxAggF64 {
     fn default() -> Self {
         Self {
             max: f64::NEG_INFINITY,
+            seen_valid: false,
         }
     }
 }
@@ -141,22 +153,28 @@ impl Aggregator<f64, f64> for MaxAggF64 {
     }
 
     fn update(&mut self, value: f64) {
-        if !value.is_nan() && value > self.max {
-            self.max = value;
+        if !value.is_nan() {
+            self.seen_valid = true;
+            if value > self.max {
+                self.max = value;
+            }
         }
     }
 
     fn merge(&mut self, other: Self) {
-        if other.max > self.max {
-            self.max = other.max;
+        if other.seen_valid {
+            self.seen_valid = true;
+            if other.max > self.max {
+                self.max = other.max;
+            }
         }
     }
 
     fn finalize(&self) -> f64 {
-        if self.max == f64::NEG_INFINITY {
-            f64::NAN
-        } else {
+        if self.seen_valid {
             self.max
+        } else {
+            f64::NAN
         }
     }
 }
@@ -278,6 +296,56 @@ impl Aggregator<i64, f64> for MaxAggI64 {
 
     fn finalize(&self) -> f64 {
         self.max.map(|v| v as f64).unwrap_or(f64::NAN)
+    }
+}
+
+/// Count aggregator for f64. Counts non-NaN values (matching Pandas behavior).
+#[derive(Clone, Default)]
+pub struct CountAggF64 {
+    pub count: u64,
+}
+
+impl Aggregator<f64, f64> for CountAggF64 {
+    fn init() -> Self {
+        Self { count: 0 }
+    }
+
+    fn update(&mut self, value: f64) {
+        if !value.is_nan() {
+            self.count += 1;
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.count += other.count;
+    }
+
+    fn finalize(&self) -> f64 {
+        self.count as f64
+    }
+}
+
+/// Count aggregator for i64. Counts all values (integers have no NaN).
+#[derive(Clone, Default)]
+pub struct CountAggI64 {
+    pub count: u64,
+}
+
+impl Aggregator<i64, f64> for CountAggI64 {
+    fn init() -> Self {
+        Self { count: 0 }
+    }
+
+    fn update(&mut self, _value: i64) {
+        self.count += 1;
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.count += other.count;
+    }
+
+    fn finalize(&self) -> f64 {
+        self.count as f64
     }
 }
 
@@ -433,5 +501,44 @@ mod tests {
 
         agg1.merge(agg2);
         assert!((agg1.finalize() - 10.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_count_f64_skips_nan() {
+        let mut agg = CountAggF64::init();
+        agg.update(1.0);
+        agg.update(f64::NAN);
+        agg.update(2.0);
+        assert!((agg.finalize() - 2.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_count_f64_all_nan_returns_zero() {
+        let mut agg = CountAggF64::init();
+        agg.update(f64::NAN);
+        agg.update(f64::NAN);
+        assert!((agg.finalize() - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_count_i64() {
+        let mut agg = CountAggI64::init();
+        agg.update(1);
+        agg.update(2);
+        agg.update(3);
+        assert!((agg.finalize() - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_count_merge() {
+        let mut agg1 = CountAggF64::init();
+        agg1.update(1.0);
+        agg1.update(2.0);
+
+        let mut agg2 = CountAggF64::init();
+        agg2.update(3.0);
+
+        agg1.merge(agg2);
+        assert!((agg1.finalize() - 3.0).abs() < 1e-10);
     }
 }
