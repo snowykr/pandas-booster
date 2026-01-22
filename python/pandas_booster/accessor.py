@@ -1,17 +1,17 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from types import ModuleType
 from typing import TYPE_CHECKING, Literal, cast
-
-from collections.abc import Sequence
 
 import numpy as np
 import pandas as pd
 
 from ._groupby_accel import (
-    build_series_from_single_result,
     build_series_from_multi_result,
+    build_series_from_single_result,
     capture_key_numpy_dtype,
+    firstseen_suffix,
     should_fallback_for_key_dtype,
     to_i64_contiguous,
 )
@@ -79,8 +79,8 @@ class BoosterAccessor:
             target: Column name to aggregate (must be numeric).
             agg: Aggregation function - one of "sum", "mean", "min", "max", "count".
             sort: If True (default), sort the result by the group keys to match
-                Pandas default behavior. If False, the result order is arbitrary
-                but may be faster for large datasets.
+                Pandas default behavior. If False, preserve Pandas' "first-seen"
+                group order (order of appearance in the input).
 
         Returns:
             Series indexed by unique group keys with aggregated values.
@@ -134,7 +134,9 @@ class BoosterAccessor:
 
         return self._rust_groupby_single(key_col, val_col, agg, sort=sort)
 
-    def _groupby_multi(self, by_cols: list[str], target: str, agg: AggFunc, *, sort: bool) -> Series:
+    def _groupby_multi(
+        self, by_cols: list[str], target: str, agg: AggFunc, *, sort: bool
+    ) -> Series:
         val_col = self._df[target]
 
         if not isinstance(val_col, pd.Series):
@@ -180,7 +182,9 @@ class BoosterAccessor:
             return bool(series.isna().any())
         return False
 
-    def _pandas_fallback(self, by_cols: list[str], target: str, agg: AggFunc, *, sort: bool) -> Series:
+    def _pandas_fallback(
+        self, by_cols: list[str], target: str, agg: AggFunc, *, sort: bool
+    ) -> Series:
         grouped = self._df.groupby(by_cols, sort=sort)[target]
         return getattr(grouped, agg)()
 
@@ -194,12 +198,14 @@ class BoosterAccessor:
         keys = to_i64_contiguous(key_col.to_numpy(copy=False))
         is_val_int = pd.api.types.is_integer_dtype(val_col)
 
+        suffix = firstseen_suffix(sort=sort, n_rows=len(self._df))
+
         if is_val_int:
             values = np.ascontiguousarray(val_col.to_numpy(dtype=np.int64))
-            func_name = f"groupby_{agg}_i64"
+            func_name = f"groupby_{agg}_i64{suffix}"
         else:
             values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
-            func_name = f"groupby_{agg}_f64"
+            func_name = f"groupby_{agg}_f64{suffix}"
 
         rust_func = getattr(rust, func_name)
         result_keys, result_values = rust_func(keys, values)
@@ -231,12 +237,14 @@ class BoosterAccessor:
 
         is_val_int = pd.api.types.is_integer_dtype(val_col)
 
+        suffix = firstseen_suffix(sort=sort, n_rows=len(self._df))
+
         if is_val_int:
             values = np.ascontiguousarray(val_col.to_numpy(dtype=np.int64))
-            func_name = f"groupby_multi_{agg}_i64"
+            func_name = f"groupby_multi_{agg}_i64{suffix}"
         else:
             values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
-            func_name = f"groupby_multi_{agg}_f64"
+            func_name = f"groupby_multi_{agg}_f64{suffix}"
 
         rust_func = getattr(rust, func_name)
         keys_2d, result_values = rust_func(key_arrays, values)

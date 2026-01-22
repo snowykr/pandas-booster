@@ -1,11 +1,18 @@
 from __future__ import annotations
 
-from typing import Hashable, Literal
+from collections.abc import Hashable
+from typing import Literal
 
 import numpy as np
 import pandas as pd
 
 AggFunc = Literal["sum", "mean", "min", "max", "count"]
+
+
+def firstseen_suffix(*, sort: bool, n_rows: int) -> str:
+    if sort:
+        return ""
+    return "_firstseen_u32" if n_rows < (1 << 32) else "_firstseen_u64"
 
 
 def should_fallback_for_key_dtype(key_col: pd.Series) -> bool:
@@ -26,10 +33,7 @@ def should_fallback_for_key_dtype(key_col: pd.Series) -> bool:
 
     # uint64 can contain values > int64 max; casting to int64 would wrap.
     # We don't attempt to prove safety here; just fall back.
-    if dtype.itemsize == 8:
-        return True
-
-    return False
+    return dtype.itemsize == 8
 
 
 def capture_key_numpy_dtype(key_col: pd.Series) -> np.dtype:
@@ -99,17 +103,13 @@ def build_series_from_multi_result(
     n_keys = len(by_cols)
 
     if len(key_dtypes) != n_keys:
-        raise ValueError(
-            f"key_dtypes length mismatch: expected {n_keys}, got {len(key_dtypes)}"
-        )
+        raise ValueError(f"key_dtypes length mismatch: expected {n_keys}, got {len(key_dtypes)}")
 
     if keys_2d.ndim != 2:
         raise ValueError(f"keys_2d must be 2D, got ndim={keys_2d.ndim}")
 
     if keys_2d.shape[1] != n_keys:
-        raise ValueError(
-            f"keys_2d column mismatch: expected {n_keys}, got {keys_2d.shape[1]}"
-        )
+        raise ValueError(f"keys_2d column mismatch: expected {n_keys}, got {keys_2d.shape[1]}")
 
     if keys_2d.shape[0] == 0:
         empty_arrays = [np.array([], dtype=key_dtypes[i]) for i in range(n_keys)]
@@ -120,8 +120,7 @@ def build_series_from_multi_result(
 
     # Cast each level array BEFORE MultiIndex construction to ensure level dtype preservation.
     index_arrays = [
-        np.ascontiguousarray(keys_2d[:, i]).astype(key_dtypes[i], copy=False)
-        for i in range(n_keys)
+        np.ascontiguousarray(keys_2d[:, i]).astype(key_dtypes[i], copy=False) for i in range(n_keys)
     ]
     idx = pd.MultiIndex.from_arrays(index_arrays, names=by_cols)
 

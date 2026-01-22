@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import inspect
-from numbers import Integral
 from functools import wraps
+from numbers import Integral
 from typing import Any
 
 import pandas as pd
@@ -126,26 +126,29 @@ def _make_proxy_groupby(original_fn):
 
 
 def activate() -> None:
+    """Enable global DataFrame.groupby monkey-patching."""
     global _original_groupby, _is_active
 
     if _is_active:
         return
 
     _original_groupby = pd.DataFrame.groupby
-    setattr(pd.DataFrame, "groupby", _make_proxy_groupby(_original_groupby))
+    pd.DataFrame.groupby = _make_proxy_groupby(_original_groupby)
     _is_active = True
 
 
 def deactivate() -> None:
+    """Disable global DataFrame.groupby monkey-patching."""
     global _original_groupby, _is_active
 
     if not _is_active or _original_groupby is None:
         return
 
-    setattr(pd.DataFrame, "groupby", _original_groupby)
+    pd.DataFrame.groupby = _original_groupby
     _original_groupby = None
     _is_active = False
 
 
 def is_active() -> bool:
+    """Return True if groupby monkey-patching is active."""
     return _is_active

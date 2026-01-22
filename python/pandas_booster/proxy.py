@@ -7,9 +7,10 @@ import numpy as np
 import pandas as pd
 
 from ._groupby_accel import (
-    build_series_from_single_result,
     build_series_from_multi_result,
+    build_series_from_single_result,
     capture_key_numpy_dtype,
+    firstseen_suffix,
     should_fallback_for_key_dtype,
     to_i64_contiguous,
 )
@@ -19,15 +20,15 @@ if TYPE_CHECKING:
 
 
 class _SeriesGroupByProto(Protocol):
-    def sum(self, *args: Any, **kwargs: Any) -> "Series": ...
+    def sum(self, *args: Any, **kwargs: Any) -> Series: ...
 
-    def mean(self, *args: Any, **kwargs: Any) -> "Series": ...
+    def mean(self, *args: Any, **kwargs: Any) -> Series: ...
 
-    def min(self, *args: Any, **kwargs: Any) -> "Series": ...
+    def min(self, *args: Any, **kwargs: Any) -> Series: ...
 
-    def max(self, *args: Any, **kwargs: Any) -> "Series": ...
+    def max(self, *args: Any, **kwargs: Any) -> Series: ...
 
-    def count(self, *args: Any, **kwargs: Any) -> "Series": ...
+    def count(self, *args: Any, **kwargs: Any) -> Series: ...
 
     def __getattr__(self, name: str) -> Any: ...
 
@@ -35,11 +36,12 @@ class _SeriesGroupByProto(Protocol):
 class _DataFrameGroupByProto(Protocol):
     def __getitem__(self, key: str | list[str]) -> Any: ...
 
-    def __iter__(self) -> Iterator[tuple[object, "DataFrame"]]: ...
+    def __iter__(self) -> Iterator[tuple[object, DataFrame]]: ...
 
     def __len__(self) -> int: ...
 
     def __getattr__(self, name: str) -> Any: ...
+
 
 _ACCELERATED_AGGS = frozenset({"sum", "mean", "min", "max", "count"})
 _FALLBACK_THRESHOLD: int | None = None
@@ -54,10 +56,13 @@ def _get_fallback_threshold() -> int:
         _FALLBACK_THRESHOLD = int(_rust.get_fallback_threshold())
     return _FALLBACK_THRESHOLD
 
+
 AggFunc = Literal["sum", "mean", "min", "max", "count"]
 
 
 class BoosterSeriesGroupBy:
+    """Proxy for pandas SeriesGroupBy that optionally accelerates aggregations."""
+
     __slots__ = ("_obj", "_df", "_by_cols", "_target", "_sort")
 
     def __init__(
@@ -94,10 +99,8 @@ class BoosterSeriesGroupBy:
         val_col = cast(pd.Series, val_col)
         if not (pd.api.types.is_integer_dtype(val_col) or pd.api.types.is_float_dtype(val_col)):
             return False
-        if pd.api.types.is_extension_array_dtype(val_col):
-            return False
 
-        return True
+        return not pd.api.types.is_extension_array_dtype(val_col)
 
     def _rust_aggregate(self, agg: AggFunc) -> Series:
         import importlib
@@ -107,6 +110,7 @@ class BoosterSeriesGroupBy:
         by_cols = self._by_cols
         target = self._target
         sort = self._sort
+        suffix = firstseen_suffix(sort=sort, n_rows=len(self._df))
 
         val_col = self._df[target]
         if not isinstance(val_col, pd.Series):
@@ -122,10 +126,10 @@ class BoosterSeriesGroupBy:
             keys = to_i64_contiguous(key_col.to_numpy(copy=False))
             if is_val_int:
                 values = np.ascontiguousarray(val_col.to_numpy(dtype=np.int64))
-                func_name = f"groupby_{agg}_i64"
+                func_name = f"groupby_{agg}_i64{suffix}"
             else:
                 values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
-                func_name = f"groupby_{agg}_f64"
+                func_name = f"groupby_{agg}_f64{suffix}"
 
             rust_func = getattr(_rust, func_name)
             result_keys, result_values = rust_func(keys, values)
@@ -152,10 +156,10 @@ class BoosterSeriesGroupBy:
 
             if is_val_int:
                 values = np.ascontiguousarray(val_col.to_numpy(dtype=np.int64))
-                func_name = f"groupby_multi_{agg}_i64"
+                func_name = f"groupby_multi_{agg}_i64{suffix}"
             else:
                 values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
-                func_name = f"groupby_multi_{agg}_f64"
+                func_name = f"groupby_multi_{agg}_f64{suffix}"
 
             rust_func = getattr(_rust, func_name)
             keys_2d, result_values = rust_func(key_arrays, values)
@@ -176,26 +180,31 @@ class BoosterSeriesGroupBy:
         return cast("Series", getattr(self._obj, agg)())
 
     def sum(self, *args: Any, **kwargs: Any) -> Series:
+        """Compute sum, using Rust acceleration when possible."""
         if args or kwargs:
             return cast("Series", self._obj.sum(*args, **kwargs))
         return self._try_accelerate("sum")
 
     def mean(self, *args: Any, **kwargs: Any) -> Series:
+        """Compute mean, using Rust acceleration when possible."""
         if args or kwargs:
             return cast("Series", self._obj.mean(*args, **kwargs))
         return self._try_accelerate("mean")
 
     def min(self, *args: Any, **kwargs: Any) -> Series:
+        """Compute min, using Rust acceleration when possible."""
         if args or kwargs:
             return cast("Series", self._obj.min(*args, **kwargs))
         return self._try_accelerate("min")
 
     def max(self, *args: Any, **kwargs: Any) -> Series:
+        """Compute max, using Rust acceleration when possible."""
         if args or kwargs:
             return cast("Series", self._obj.max(*args, **kwargs))
         return self._try_accelerate("max")
 
     def count(self) -> Series:
+        """Compute count, using Rust acceleration when possible."""
         return self._try_accelerate("count")
 
     def __getattr__(self, name: str) -> Any:
@@ -209,6 +218,8 @@ class BoosterSeriesGroupBy:
 
 
 class BoosterDataFrameGroupBy:
+    """Proxy for pandas DataFrameGroupBy that wraps Series selections."""
+
     __slots__ = ("_obj", "_df", "_by_cols", "_sort")
 
     def __init__(

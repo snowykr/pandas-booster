@@ -9,7 +9,7 @@ Cold/Warm Definitions:
 - Warm: Steady-state performance after cold + 1 warmup run (discarded), 5 samples
 
 Usage:
-    # Run all benchmarks (standard + high cardinality, sorted + unsorted)
+    # Run all benchmarks (standard + high cardinality, sorted + sort=False)
     python benches/benchmark.py
 
     # Run only standard cardinality benchmarks
@@ -21,7 +21,7 @@ Usage:
     # Run only sorted benchmarks
     python benches/benchmark.py --sort-mode sorted
 
-    # Run only unsorted benchmarks
+    # Run only sort=False benchmarks
     python benches/benchmark.py --sort-mode unsorted
 
     # Combine options
@@ -40,11 +40,9 @@ import argparse
 import json
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable, cast
 
-import numpy as np
 import pandas as pd
 
 try:
@@ -52,7 +50,12 @@ try:
 
     HAS_POLARS = True
 except ImportError:
+    pl = None  # type: ignore[assignment]
     HAS_POLARS = False
+
+
+# Keep benchmark progress output aligned with README table column order.
+BACKEND_DISPLAY_ORDER: tuple[str, ...] = ("pandas", "polars", "booster")
 
 sys.path.insert(0, str(Path(__file__).parent))
 from bench_utils import BenchmarkStats, run_cold_warm_benchmark
@@ -65,7 +68,7 @@ if TYPE_CHECKING:
 def benchmark_worker(
     preset_name: str,
     backend: Literal["pandas", "booster", "polars"],
-    agg: str = "sum",
+    agg: Literal["sum", "mean", "min", "max", "count"] = "sum",
     sort: bool = True,
     verify_correctness: bool = False,
     mode: Literal["cold", "warm"] = "cold",
@@ -74,38 +77,69 @@ def benchmark_worker(
 
     Measurement protocol:
     - mode="cold": Measure 1st run. Return cold_time_s.
-    - mode="warm": Run 1st (cold, discard) -> Run 2nd (warmup, discard) -> Measure 3rd. Return warm_time_s.
+    - mode="warm": Run 1st (cold, discard) -> Run 2nd (warmup, discard) -> Measure 3rd.
+      Return warm_time_s.
 
     Args:
         preset_name: Dataset preset name.
         backend: Which backend to benchmark.
         agg: Aggregation function.
         sort: Whether to sort results.
-        verify_correctness: Whether to verify correctness (only for booster).
+        verify_correctness: Whether to verify correctness against a Pandas baseline.
+            When enabled, Booster and (if installed) Polars results are validated.
         mode: "cold" or "warm".
 
     Returns:
         Dictionary with cold_time_s OR warm_time_s.
     """
-    if backend == "booster":
-        import pandas_booster
+    run_once: Callable[[], Any]
 
     config = PRESETS[preset_name]
     df = generate_multi_key_dataset(**config)
     key_cols = [col for col, _ in config["key_configs"]]
     value_col = "value"
 
+    if verify_correctness:
+        for col in key_cols:
+            if not pd.api.types.is_integer_dtype(df[col]):
+                raise ValueError(f"Benchmark key column {col!r} must be integer dtype")
+            # Defensive: Pandas and Polars differ on null-group defaults.
+            if df[col].isna().any():
+                raise ValueError(
+                    f"Benchmark key column {col!r} contains nulls; semantics differ across engines"
+                )
+
+        # Defensive: keep benchmark datasets free of NaNs in the value column.
+        # While Pandas/Polars often align on NaN handling, edge cases can diverge
+        # (especially once NaN interacts with casting/Arrow conversion). This is
+        # outside the timed region, so we prefer failing fast.
+        if df[value_col].isna().any():
+            raise ValueError(
+                f"Benchmark value column {value_col!r} contains NaNs; "
+                "semantics can diverge across engines"
+            )
+
+        # Note: count semantics are especially sensitive to NaN vs null, but the
+        # invariant above (no NaNs in value) already enforces alignment.
+
     if backend == "pandas":
 
-        def run_once():
+        def run_once_pandas() -> Any:
             return getattr(df.groupby(key_cols, sort=sort)[value_col], agg)()
-    elif backend == "booster":
 
-        def run_once():
-            return df.booster.groupby(key_cols, value_col, agg, sort=sort)
+        run_once = run_once_pandas
+    elif backend == "booster":
+        from pandas_booster.accessor import BoosterAccessor
+
+        def run_once_booster() -> Any:
+            return cast(BoosterAccessor, df.booster).groupby(key_cols, value_col, agg, sort=sort)
+
+        run_once = run_once_booster
     elif backend == "polars":
         if not HAS_POLARS:
             raise ImportError("Polars is not installed")
+
+        assert pl is not None
 
         df_polars = pl.DataFrame(
             {**{col: df[col].values for col in key_cols}, value_col: df[value_col].values}
@@ -115,15 +149,107 @@ def benchmark_worker(
             "mean": pl.col(value_col).mean().alias(value_col),
             "min": pl.col(value_col).min().alias(value_col),
             "max": pl.col(value_col).max().alias(value_col),
+            "count": pl.col(value_col).count().alias(value_col),
         }
 
-        def run_once():
-            result = df_polars.group_by(key_cols, maintain_order=False).agg(agg_map[agg])
+        def run_once_polars() -> Any:
+            # When sort=False, align semantics with Pandas/Booster by preserving
+            # appearance order (first-seen group order).
+            result = df_polars.group_by(key_cols, maintain_order=not sort).agg(agg_map[agg])
             if sort:
                 result = result.sort(key_cols)
             return result
+
+        run_once = run_once_polars
     else:
         raise ValueError(f"Unknown backend: {backend}")
+
+    def pandas_baseline() -> pd.Series:
+        # Note: we keep Pandas defaults (e.g., dropna=True) to match Pandas semantics.
+        # Our benchmark datasets use integer keys without nulls.
+        return cast(pd.Series, getattr(df.groupby(key_cols, sort=sort)[value_col], agg)())
+
+    def polars_to_pandas_series(result_df: Any) -> pd.Series:
+        if not HAS_POLARS:
+            raise ImportError("Polars is not installed")
+        assert pl is not None
+
+        if not isinstance(result_df, pl.DataFrame):
+            raise TypeError(f"Expected polars DataFrame, got {type(result_df)}")
+
+        # Preserve Polars output row order. Do NOT sort here; sort semantics are
+        # handled by the Polars query itself (and we validate sort=False order).
+        try:
+            pdf = result_df.to_pandas()
+        except Exception:
+            # Fallback path if Arrow conversion is unavailable.
+            # This is slower and more memory-heavy, but runs outside timed sections.
+            pdf = pd.DataFrame({col: result_df[col].to_numpy() for col in result_df.columns})
+        if len(key_cols) == 1:
+            s = pdf.set_index(key_cols[0])[value_col]
+            s.index.name = key_cols[0]
+        else:
+            s = pdf.set_index(key_cols)[value_col]
+            s.index.names = key_cols
+        s.name = value_col
+        return cast(pd.Series, s)
+
+    def normalize_result_to_series(result_obj: Any) -> pd.Series:
+        if backend in ("pandas", "booster"):
+            if not isinstance(result_obj, pd.Series):
+                raise TypeError(f"Expected pandas Series, got {type(result_obj)}")
+            s = cast(pd.Series, result_obj)
+            # Ensure naming parity for comparisons.
+            if s.name != value_col:
+                s = s.copy()
+                s.name = value_col
+            if len(key_cols) == 1:
+                if s.index.name != key_cols[0]:
+                    s.index.name = key_cols[0]
+            else:
+                if list(s.index.names) != key_cols:
+                    s.index.names = key_cols
+            return s
+        if backend == "polars":
+            return polars_to_pandas_series(result_obj)
+        raise ValueError(f"Unknown backend: {backend}")
+
+    def assert_matches_baseline(actual: pd.Series, expected: pd.Series) -> None:
+        # Ordering semantics:
+        # - sort=True: expect key-sorted results from all backends
+        # - sort=False: validate Pandas appearance order (first-seen group order)
+        #
+        # Note: float min/max can differ only by signed-zero (-0.0 vs +0.0) across
+        # engines even when numerically equivalent, so we use tolerance-based
+        # comparisons for float-valued aggregations.
+
+        if agg == "count":
+            pd.testing.assert_series_equal(
+                actual,
+                expected,
+                check_exact=True,
+                check_dtype=False,
+            )
+            return
+
+        is_float = pd.api.types.is_float_dtype(expected)
+        if is_float:
+            pd.testing.assert_series_equal(
+                actual,
+                expected,
+                check_exact=False,
+                rtol=1e-9,
+                atol=1e-12,
+                check_dtype=False,
+            )
+            return
+
+        pd.testing.assert_series_equal(
+            actual,
+            expected,
+            check_exact=True,
+            check_dtype=False,
+        )
 
     if mode == "cold":
         start = time.perf_counter()
@@ -131,20 +257,16 @@ def benchmark_worker(
         cold_time = time.perf_counter() - start
 
         correctness = "not_checked"
-        if verify_correctness and backend == "booster":
+        if verify_correctness and backend in {"booster", "polars"}:
             try:
-                pandas_result = getattr(df.groupby(key_cols, sort=sort)[value_col], agg)()
-                booster_result = cold_result
-
-                pd.testing.assert_series_equal(
-                    booster_result.sort_index(),
-                    pandas_result.sort_index(),
-                    check_exact=False,
-                    rtol=1e-10,
-                )
+                expected = pandas_baseline()
+                actual = normalize_result_to_series(cold_result)
+                assert_matches_baseline(actual, expected)
                 correctness = "pass"
             except AssertionError as e:
                 correctness = f"fail: {str(e)[:100]}"
+            except Exception as e:
+                correctness = f"fail: {type(e).__name__}: {str(e)[:80]}"
 
         return {
             "cold_time_s": cold_time,
@@ -156,12 +278,24 @@ def benchmark_worker(
         _ = run_once()
 
         start = time.perf_counter()
-        _ = run_once()
+        warm_result = run_once()
         warm_time = time.perf_counter() - start
+
+        correctness = "not_checked"
+        if verify_correctness and backend in {"booster", "polars"}:
+            try:
+                expected = pandas_baseline()
+                actual = normalize_result_to_series(warm_result)
+                assert_matches_baseline(actual, expected)
+                correctness = "pass"
+            except AssertionError as e:
+                correctness = f"fail: {str(e)[:100]}"
+            except Exception as e:
+                correctness = f"fail: {type(e).__name__}: {str(e)[:80]}"
 
         return {
             "warm_time_s": warm_time,
-            "correctness": "not_checked",
+            "correctness": correctness,
         }
 
     return {}
@@ -178,7 +312,7 @@ def benchmark_single(
 
     Args:
         preset_name: Name of the dataset preset from PRESETS.
-        agg: Aggregation function ("sum", "mean", "min", "max").
+        agg: Aggregation function ("sum", "mean", "min", "max", "count").
         sort: Whether to sort the result.
         n_samples: Number of samples (= number of fresh processes).
         verify_correctness: Whether to verify results match.
@@ -193,9 +327,7 @@ def benchmark_single(
     del df_temp
 
     script_path = Path(__file__).resolve()
-    backends = ["pandas", "booster"]
-    if HAS_POLARS:
-        backends.append("polars")
+    backends = [b for b in BACKEND_DISPLAY_ORDER if b != "polars" or HAS_POLARS]
 
     results = {}
     for backend in backends:
@@ -205,7 +337,7 @@ def benchmark_single(
             "backend": backend,
             "agg": agg,
             "sort": sort,
-            "verify_correctness": verify_correctness and backend == "booster",
+            "verify_correctness": verify_correctness and backend != "pandas",
         }
 
         bench_result = run_cold_warm_benchmark(
@@ -218,13 +350,9 @@ def benchmark_single(
         results[backend] = {
             "cold_stats": bench_result["cold_stats"],
             "warm_stats": bench_result["warm_stats"],
-            "correctness": "not_checked",
+            "cold_correctness": bench_result.get("cold_correctness", "not_checked"),
+            "warm_correctness": bench_result.get("warm_correctness", "not_checked"),
         }
-
-    if verify_correctness and "booster" in results:
-        cold_samples_count = len(results["booster"]["cold_stats"].samples)
-        warm_samples_count = len(results["booster"]["warm_stats"].samples)
-        results["booster"]["correctness"] = f"pass ({cold_samples_count + warm_samples_count} runs)"
 
     return {
         "preset": preset_name,
@@ -243,7 +371,8 @@ def render_standard_table(results: list[dict]) -> str:
     """Render standard cardinality table (Single-key through 5-key) with cold/warm stats.
 
     Args:
-        results: List of benchmark results for standard presets (can include both sorted and unsorted).
+        results: List of benchmark results for standard presets (can include both sorted and
+            unsorted).
 
     Returns:
         Markdown table string.
@@ -294,7 +423,7 @@ def render_standard_table(results: list[dict]) -> str:
             pandas_cold_mean = pandas_cold.mean
             pandas_warm_mean = pandas_warm.mean
 
-            def fmt_cell_cold(name):
+            def fmt_cell_cold(name, *, backends=backends, pandas_cold_mean=pandas_cold_mean):
                 if name not in backends:
                     return "-"
                 cold_stats: BenchmarkStats = backends[name]["cold_stats"]
@@ -313,7 +442,7 @@ def render_standard_table(results: list[dict]) -> str:
                 )
                 return f"{cold_str} ({cold_speedup_str})"
 
-            def fmt_cell_warm(name):
+            def fmt_cell_warm(name, *, backends=backends, pandas_warm_mean=pandas_warm_mean):
                 if name not in backends:
                     return "-"
                 warm_stats: BenchmarkStats = backends[name]["warm_stats"]
@@ -346,7 +475,8 @@ def render_standard_table(results: list[dict]) -> str:
             display_sort = sort_str if sort_str != prev_sort_str else ""
 
             lines.append(
-                f"| {display_label} | {display_groups} | {display_sort} | Cold | {pandas_cold_str} | {polars_cold_str} | {booster_cold_str} |"
+                f"| {display_label} | {display_groups} | {display_sort} | Cold | "
+                f"{pandas_cold_str} | {polars_cold_str} | {booster_cold_str} |"
             )
 
             # Second row (Warm) - always hide label, groups, sort
@@ -365,7 +495,8 @@ def render_high_table(results: list[dict]) -> str:
     """Render high cardinality table with cold/warm stats.
 
     Args:
-        results: List of benchmark results for high cardinality presets (can include both sorted and unsorted).
+        results: List of benchmark results for high cardinality presets (can include both sorted
+            and unsorted).
 
     Returns:
         Markdown table string.
@@ -414,7 +545,7 @@ def render_high_table(results: list[dict]) -> str:
             pandas_cold_mean = pandas_cold.mean
             pandas_warm_mean = pandas_warm.mean
 
-            def fmt_cell_cold(name):
+            def fmt_cell_cold(name, *, backends=backends, pandas_cold_mean=pandas_cold_mean):
                 if name not in backends:
                     return "-"
                 cold_stats: BenchmarkStats = backends[name]["cold_stats"]
@@ -433,7 +564,7 @@ def render_high_table(results: list[dict]) -> str:
                 )
                 return f"{cold_str} ({cold_speedup_str})"
 
-            def fmt_cell_warm(name):
+            def fmt_cell_warm(name, *, backends=backends, pandas_warm_mean=pandas_warm_mean):
                 if name not in backends:
                     return "-"
                 warm_stats: BenchmarkStats = backends[name]["warm_stats"]
@@ -466,7 +597,8 @@ def render_high_table(results: list[dict]) -> str:
             display_sort = sort_str if sort_str != prev_sort_str else ""
 
             lines.append(
-                f"| {display_label} | {display_groups} | {display_sort} | Cold | {pandas_cold_str} | {polars_cold_str} | {booster_cold_str} |"
+                f"| {display_label} | {display_groups} | {display_sort} | Cold | "
+                f"{pandas_cold_str} | {polars_cold_str} | {booster_cold_str} |"
             )
 
             # Second row (Warm) - always hide label, groups, sort
@@ -502,11 +634,11 @@ def format_performance_section(
     # Filter results by sort_mode
     filtered_results = []
     for r in results:
-        if sort_mode == "all":
-            filtered_results.append(r)
-        elif sort_mode == "sorted" and r["sort"]:
-            filtered_results.append(r)
-        elif sort_mode == "unsorted" and not r["sort"]:
+        if (
+            sort_mode == "all"
+            or (sort_mode == "sorted" and r["sort"])
+            or (sort_mode == "unsorted" and not r["sort"])
+        ):
             filtered_results.append(r)
 
     # Separate by cardinality
@@ -622,12 +754,20 @@ def run_benchmarks(
             backends = result["backends"]
             print(f"  Groups: {result['combo_cardinality']:,}")
 
-            for backend_name in ["pandas", "booster", "polars"]:
+            for backend_name in BACKEND_DISPLAY_ORDER:
                 if backend_name not in backends:
                     continue
                 backend_data = backends[backend_name]
                 warm_stats: BenchmarkStats = backend_data["warm_stats"]
-                print(f"  {backend_name:8s} | Warm: {warm_stats.format_ms(2)}")
+
+                correctness_str = ""
+                if backend_name != "pandas":
+                    cold_corr = backend_data.get("cold_correctness", "not_checked")
+                    warm_corr = backend_data.get("warm_correctness", "not_checked")
+                    if cold_corr != "not_checked" or warm_corr != "not_checked":
+                        correctness_str = f" | Correctness: cold={cold_corr}, warm={warm_corr}"
+
+                print(f"  {backend_name:8s} | Warm: {warm_stats.format_ms(2)}{correctness_str}")
 
     print("\n" + "=" * 90)
     print("Performance Tables")
@@ -663,8 +803,55 @@ def save_results_md(
 
     performance_section = format_performance_section(results, sort_mode, cardinality)
 
+    def correctness_section() -> str:
+        lines: list[str] = []
+        lines.append("### Correctness")
+        lines.append("")
+
+        def summarize_backend(name: str) -> str:
+            failures: list[str] = []
+            checked = 0
+            passed = 0
+
+            for r in results:
+                backend_data = r.get("backends", {}).get(name)
+                if not backend_data:
+                    continue
+
+                for mode_label in ("cold", "warm"):
+                    status = backend_data.get(f"{mode_label}_correctness", "not_checked")
+                    if status == "not_checked":
+                        continue
+                    checked += 1
+                    if status.startswith("fail:"):
+                        failures.append(f"{r['preset']} (sort={r['sort']}, {mode_label}): {status}")
+                    else:
+                        passed += 1
+
+            if checked == 0:
+                return "not_checked"
+            if failures:
+                first = failures[0]
+                more = f" (+{len(failures) - 1} more)" if len(failures) > 1 else ""
+                return f"fail ({passed}/{checked} passed): {first}{more}"
+            return f"pass ({passed}/{checked})"
+
+        for backend in BACKEND_DISPLAY_ORDER:
+            if backend == "pandas":
+                continue
+            if backend == "polars" and not any("polars" in r.get("backends", {}) for r in results):
+                continue
+            label = backend.capitalize()
+            lines.append(f"- {label}: {summarize_backend(backend)}")
+
+        lines.append("")
+        return "\n".join(lines)
+
     with open(path, "w") as f:
         f.write(performance_section)
+        f.write("\n")
+        f.write("\n")
+        f.write(correctness_section())
         f.write("\n")
 
     print(f"\nResults saved to: {path}")

@@ -27,10 +27,30 @@ use crate::aggregation::{
     Aggregator, CountAggF64, CountAggI64, MaxAggF64, MaxAggI64, MeanAggF64, MeanAggI64, MinAggF64,
     MinAggI64, SumAggF64, SumAggI64,
 };
+use crate::radix_sort::{radix_sort_perm_by_u32, radix_sort_perm_by_u64};
 
-const INLINE_KEYS: usize = 12;
+// CompositeKey is a fallback path. For the supported Python API (<= 10 key columns),
+// we specialize on FixedKey<N> for N=1..=10.
+const INLINE_KEYS: usize = 10;
 const NUM_PARTITIONS_BITS: usize = 10;
 const NUM_PARTITIONS: usize = 1 << NUM_PARTITIONS_BITS;
+
+type PartitionResults<K, I> = Vec<(Vec<(K, f64)>, Vec<I>)>;
+
+#[derive(Clone, Copy)]
+struct PermPtr(*mut usize);
+
+unsafe impl Send for PermPtr {}
+unsafe impl Sync for PermPtr {}
+
+impl PermPtr {
+    #[inline]
+    unsafe fn write(self, pos: usize, row: usize) {
+        // SAFETY: callers must ensure `pos < perm.len()` and that each `pos` is written
+        // exactly once (no concurrent writes to the same location).
+        *self.0.add(pos) = row;
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct CompositeKey(SmallVec<[i64; INLINE_KEYS]>);
@@ -90,6 +110,62 @@ pub struct GroupByMultiResult {
     pub keys_flat: Vec<i64>,
     pub n_keys: usize,
     pub values: Vec<f64>,
+}
+
+// -----------------------------------------------------------------------------
+// First-seen ordering utilities
+// -----------------------------------------------------------------------------
+
+fn reorder_result_by_first_seen_u32(result: &mut GroupByMultiResult, first_seen: &[u32]) {
+    if result.values.is_empty() {
+        return;
+    }
+    debug_assert_eq!(result.values.len(), first_seen.len());
+
+    let n_keys = result.n_keys;
+    let n_groups = result.values.len();
+    debug_assert_eq!(result.keys_flat.len(), n_groups * n_keys);
+
+    let perm = radix_sort_perm_by_u32(first_seen);
+
+    let keys_flat = &result.keys_flat;
+    let values = &result.values;
+    let mut sorted_keys = Vec::with_capacity(keys_flat.len());
+    let mut sorted_values = Vec::with_capacity(values.len());
+
+    for &g in &perm {
+        sorted_keys.extend_from_slice(&keys_flat[g * n_keys..(g + 1) * n_keys]);
+        sorted_values.push(values[g]);
+    }
+
+    result.keys_flat = sorted_keys;
+    result.values = sorted_values;
+}
+
+fn reorder_result_by_first_seen_u64(result: &mut GroupByMultiResult, first_seen: &[u64]) {
+    if result.values.is_empty() {
+        return;
+    }
+    debug_assert_eq!(result.values.len(), first_seen.len());
+
+    let n_keys = result.n_keys;
+    let n_groups = result.values.len();
+    debug_assert_eq!(result.keys_flat.len(), n_groups * n_keys);
+
+    let perm = radix_sort_perm_by_u64(first_seen);
+
+    let keys_flat = &result.keys_flat;
+    let values = &result.values;
+    let mut sorted_keys = Vec::with_capacity(keys_flat.len());
+    let mut sorted_values = Vec::with_capacity(values.len());
+
+    for &g in &perm {
+        sorted_keys.extend_from_slice(&keys_flat[g * n_keys..(g + 1) * n_keys]);
+        sorted_values.push(values[g]);
+    }
+
+    result.keys_flat = sorted_keys;
+    result.values = sorted_values;
 }
 
 #[inline]
@@ -278,13 +354,10 @@ where
         .map(|&o| AtomicUsize::new(o))
         .collect();
 
-    let perm = vec![0usize; n_rows];
-    let perm_ptr = perm.as_ptr() as usize;
-
-    struct PtrWrapper(usize);
-    unsafe impl Send for PtrWrapper {}
-    unsafe impl Sync for PtrWrapper {}
-    let perm_ptr_wrap = PtrWrapper(perm_ptr);
+    let mut perm = vec![0usize; n_rows];
+    #[cfg(debug_assertions)]
+    perm.fill(usize::MAX);
+    let perm_ptr = PermPtr(perm.as_mut_ptr());
 
     (0..n_rows).into_par_iter().for_each(|row| {
         // Use cached hash
@@ -292,11 +365,18 @@ where
 
         let p = hash_to_partition(h);
         let pos = write_heads[p].fetch_add(1, Ordering::Relaxed);
-        unsafe {
-            let ptr = perm_ptr_wrap.0 as *mut usize;
-            *ptr.add(pos) = row;
-        }
+        // SAFETY:
+        // - `pos` is a unique write index produced by `fetch_add` on a per-partition
+        //   atomic that is initialized to the partition's offset range.
+        // - The prefix-sum offsets ensure `pos < n_rows`.
+        unsafe { perm_ptr.write(pos, row) };
     });
+
+    #[cfg(debug_assertions)]
+    {
+        debug_assert!(perm.iter().all(|&r| r != usize::MAX));
+        debug_assert!(perm.iter().all(|&r| r < n_rows));
+    }
 
     // Phase 4: Per-partition aggregation (no merge!)
     let partition_results: Vec<Vec<(Ops::Key, f64)>> = (0..NUM_PARTITIONS)
@@ -342,6 +422,308 @@ where
 }
 
 // -----------------------------------------------------------------------------
+// First-seen radix engines (idx32 / idx64)
+// -----------------------------------------------------------------------------
+
+fn radix_groupby_engine_firstseen_u32<Ops, T, A>(
+    ops: Ops,
+    key_slices: &[&[i64]],
+    values: &[T],
+) -> Result<GroupByMultiResult, String>
+where
+    Ops: RadixKeyOps,
+    T: Copy + Send + Sync,
+    A: Aggregator<T, f64> + Clone + Default + Send,
+{
+    let n_rows = values.len();
+
+    for (i, col) in key_slices.iter().enumerate() {
+        if col.len() != n_rows {
+            return Err(format!(
+                "Key column {} has length {}, expected {}",
+                i,
+                col.len(),
+                n_rows
+            ));
+        }
+    }
+
+    if n_rows == 0 {
+        return Ok(GroupByMultiResult {
+            keys_flat: Vec::new(),
+            n_keys: ops.n_keys(),
+            values: Vec::new(),
+        });
+    }
+
+    if n_rows > (u32::MAX as usize) {
+        return Err("idx32 kernel requires n_rows <= u32::MAX".to_string());
+    }
+
+    // Phase 1: Parallel histogram with hash caching
+    let histogram: Vec<AtomicUsize> = (0..NUM_PARTITIONS).map(|_| AtomicUsize::new(0)).collect();
+    let mut hashes = vec![0u64; n_rows];
+
+    hashes.par_iter_mut().enumerate().for_each(|(row, h_out)| {
+        let h = ops.compute_hash(key_slices, row);
+        *h_out = h;
+
+        let p = hash_to_partition(h);
+        histogram[p].fetch_add(1, Ordering::Relaxed);
+    });
+
+    // Phase 2: Prefix sum
+    let mut offsets = vec![0usize; NUM_PARTITIONS + 1];
+    for i in 0..NUM_PARTITIONS {
+        offsets[i + 1] = offsets[i] + histogram[i].load(Ordering::Relaxed);
+    }
+
+    // Phase 3: Scatter rows by partition
+    let write_heads: Vec<AtomicUsize> = offsets[..NUM_PARTITIONS]
+        .iter()
+        .map(|&o| AtomicUsize::new(o))
+        .collect();
+
+    let mut perm = vec![0usize; n_rows];
+    #[cfg(debug_assertions)]
+    perm.fill(usize::MAX);
+    let perm_ptr = PermPtr(perm.as_mut_ptr());
+
+    (0..n_rows).into_par_iter().for_each(|row| {
+        let h = hashes[row];
+        let p = hash_to_partition(h);
+        let pos = write_heads[p].fetch_add(1, Ordering::Relaxed);
+        // SAFETY:
+        // - `pos` is a unique write index produced by `fetch_add` on a per-partition
+        //   atomic that is initialized to the partition's offset range.
+        // - The prefix-sum offsets ensure `pos < n_rows`.
+        unsafe { perm_ptr.write(pos, row) };
+    });
+
+    #[cfg(debug_assertions)]
+    {
+        debug_assert!(perm.iter().all(|&r| r != usize::MAX));
+        debug_assert!(perm.iter().all(|&r| r < n_rows));
+    }
+
+    // Phase 4: Per-partition aggregation (gid map + SoA state)
+    let partition_results: PartitionResults<Ops::Key, u32> = (0..NUM_PARTITIONS)
+        .into_par_iter()
+        .map(|p| {
+            let start = offsets[p];
+            let end = offsets[p + 1];
+            if start == end {
+                return (Vec::new(), Vec::new());
+            }
+
+            let mut gid_map: AHashMap<Ops::Key, u32> = AHashMap::new();
+            let mut aggs: Vec<A> = Vec::new();
+            let mut first_seen: Vec<u32> = Vec::new();
+
+            for &row in &perm[start..end] {
+                let key = ops.extract_key(key_slices, row);
+                let row_u32 = row as u32;
+                let val = values[row];
+
+                if let Some(&gid) = gid_map.get(&key) {
+                    let g = gid as usize;
+                    if row_u32 < first_seen[g] {
+                        first_seen[g] = row_u32;
+                    }
+                    aggs[g].update(val);
+                } else {
+                    let gid = aggs.len() as u32;
+                    gid_map.insert(key, gid);
+                    let mut agg = A::init();
+                    agg.update(val);
+                    aggs.push(agg);
+                    first_seen.push(row_u32);
+                }
+            }
+
+            let mut out_pairs: Vec<(Ops::Key, f64)> = Vec::with_capacity(aggs.len());
+            let mut out_first_seen: Vec<u32> = Vec::with_capacity(aggs.len());
+            for (k, gid) in gid_map {
+                let g = gid as usize;
+                out_pairs.push((k, aggs[g].finalize()));
+                out_first_seen.push(first_seen[g]);
+            }
+
+            (out_pairs, out_first_seen)
+        })
+        .collect();
+
+    let total_groups: usize = partition_results.iter().map(|(pairs, _)| pairs.len()).sum();
+    let mut keys_flat = Vec::with_capacity(total_groups * ops.n_keys());
+    let mut out_values = Vec::with_capacity(total_groups);
+    let mut out_first_seen = Vec::with_capacity(total_groups);
+
+    for (pairs, firsts) in partition_results {
+        debug_assert_eq!(pairs.len(), firsts.len());
+        for ((key, val), first) in pairs.into_iter().zip(firsts.into_iter()) {
+            Ops::push_flat(&mut keys_flat, &key);
+            out_values.push(val);
+            out_first_seen.push(first);
+        }
+    }
+
+    let mut result = GroupByMultiResult {
+        keys_flat,
+        n_keys: ops.n_keys(),
+        values: out_values,
+    };
+    reorder_result_by_first_seen_u32(&mut result, &out_first_seen);
+    Ok(result)
+}
+
+fn radix_groupby_engine_firstseen_u64<Ops, T, A>(
+    ops: Ops,
+    key_slices: &[&[i64]],
+    values: &[T],
+) -> Result<GroupByMultiResult, String>
+where
+    Ops: RadixKeyOps,
+    T: Copy + Send + Sync,
+    A: Aggregator<T, f64> + Clone + Default + Send,
+{
+    let n_rows = values.len();
+
+    for (i, col) in key_slices.iter().enumerate() {
+        if col.len() != n_rows {
+            return Err(format!(
+                "Key column {} has length {}, expected {}",
+                i,
+                col.len(),
+                n_rows
+            ));
+        }
+    }
+
+    if n_rows == 0 {
+        return Ok(GroupByMultiResult {
+            keys_flat: Vec::new(),
+            n_keys: ops.n_keys(),
+            values: Vec::new(),
+        });
+    }
+
+    // Phase 1: Parallel histogram with hash caching
+    let histogram: Vec<AtomicUsize> = (0..NUM_PARTITIONS).map(|_| AtomicUsize::new(0)).collect();
+    let mut hashes = vec![0u64; n_rows];
+
+    hashes.par_iter_mut().enumerate().for_each(|(row, h_out)| {
+        let h = ops.compute_hash(key_slices, row);
+        *h_out = h;
+
+        let p = hash_to_partition(h);
+        histogram[p].fetch_add(1, Ordering::Relaxed);
+    });
+
+    // Phase 2: Prefix sum
+    let mut offsets = vec![0usize; NUM_PARTITIONS + 1];
+    for i in 0..NUM_PARTITIONS {
+        offsets[i + 1] = offsets[i] + histogram[i].load(Ordering::Relaxed);
+    }
+
+    // Phase 3: Scatter rows by partition
+    let write_heads: Vec<AtomicUsize> = offsets[..NUM_PARTITIONS]
+        .iter()
+        .map(|&o| AtomicUsize::new(o))
+        .collect();
+
+    let mut perm = vec![0usize; n_rows];
+    #[cfg(debug_assertions)]
+    perm.fill(usize::MAX);
+    let perm_ptr = PermPtr(perm.as_mut_ptr());
+
+    (0..n_rows).into_par_iter().for_each(|row| {
+        let h = hashes[row];
+        let p = hash_to_partition(h);
+        let pos = write_heads[p].fetch_add(1, Ordering::Relaxed);
+        // SAFETY:
+        // - `pos` is a unique write index produced by `fetch_add` on a per-partition
+        //   atomic that is initialized to the partition's offset range.
+        // - The prefix-sum offsets ensure `pos < n_rows`.
+        unsafe { perm_ptr.write(pos, row) };
+    });
+
+    #[cfg(debug_assertions)]
+    {
+        debug_assert!(perm.iter().all(|&r| r != usize::MAX));
+        debug_assert!(perm.iter().all(|&r| r < n_rows));
+    }
+
+    // Phase 4: Per-partition aggregation (gid map + SoA state)
+    let partition_results: PartitionResults<Ops::Key, u64> = (0..NUM_PARTITIONS)
+        .into_par_iter()
+        .map(|p| {
+            let start = offsets[p];
+            let end = offsets[p + 1];
+            if start == end {
+                return (Vec::new(), Vec::new());
+            }
+
+            let mut gid_map: AHashMap<Ops::Key, u32> = AHashMap::new();
+            let mut aggs: Vec<A> = Vec::new();
+            let mut first_seen: Vec<u64> = Vec::new();
+
+            for &row in &perm[start..end] {
+                let key = ops.extract_key(key_slices, row);
+                let row_u64 = row as u64;
+                let val = values[row];
+
+                if let Some(&gid) = gid_map.get(&key) {
+                    let g = gid as usize;
+                    if row_u64 < first_seen[g] {
+                        first_seen[g] = row_u64;
+                    }
+                    aggs[g].update(val);
+                } else {
+                    let gid = aggs.len() as u32;
+                    gid_map.insert(key, gid);
+                    let mut agg = A::init();
+                    agg.update(val);
+                    aggs.push(agg);
+                    first_seen.push(row_u64);
+                }
+            }
+
+            let mut out_pairs: Vec<(Ops::Key, f64)> = Vec::with_capacity(aggs.len());
+            let mut out_first_seen: Vec<u64> = Vec::with_capacity(aggs.len());
+            for (k, gid) in gid_map {
+                let g = gid as usize;
+                out_pairs.push((k, aggs[g].finalize()));
+                out_first_seen.push(first_seen[g]);
+            }
+
+            (out_pairs, out_first_seen)
+        })
+        .collect();
+
+    let total_groups: usize = partition_results.iter().map(|(pairs, _)| pairs.len()).sum();
+    let mut keys_flat = Vec::with_capacity(total_groups * ops.n_keys());
+    let mut out_values = Vec::with_capacity(total_groups);
+    let mut out_first_seen = Vec::with_capacity(total_groups);
+
+    for (pairs, firsts) in partition_results {
+        debug_assert_eq!(pairs.len(), firsts.len());
+        for ((key, val), first) in pairs.into_iter().zip(firsts.into_iter()) {
+            Ops::push_flat(&mut keys_flat, &key);
+            out_values.push(val);
+            out_first_seen.push(first);
+        }
+    }
+
+    let mut result = GroupByMultiResult {
+        keys_flat,
+        n_keys: ops.n_keys(),
+        values: out_values,
+    };
+    reorder_result_by_first_seen_u64(&mut result, &out_first_seen);
+    Ok(result)
+}
+
+// -----------------------------------------------------------------------------
 // Public Wrappers (Internal Dispatch)
 // -----------------------------------------------------------------------------
 
@@ -377,11 +759,174 @@ where
     A: Aggregator<T, f64> + Clone + Default + Send,
 {
     match key_slices.len() {
+        1 => radix_groupby_fixed::<1, T, A>(key_slices, values),
         2 => radix_groupby_fixed::<2, T, A>(key_slices, values),
         3 => radix_groupby_fixed::<3, T, A>(key_slices, values),
         4 => radix_groupby_fixed::<4, T, A>(key_slices, values),
+        5 => radix_groupby_fixed::<5, T, A>(key_slices, values),
+        6 => radix_groupby_fixed::<6, T, A>(key_slices, values),
+        7 => radix_groupby_fixed::<7, T, A>(key_slices, values),
+        8 => radix_groupby_fixed::<8, T, A>(key_slices, values),
+        9 => radix_groupby_fixed::<9, T, A>(key_slices, values),
+        10 => radix_groupby_fixed::<10, T, A>(key_slices, values),
         _ => radix_groupby::<T, A>(key_slices, values),
     }
+}
+
+fn radix_groupby_dispatch_firstseen_u32<T, A>(
+    key_slices: &[&[i64]],
+    values: &[T],
+) -> Result<GroupByMultiResult, String>
+where
+    T: Copy + Send + Sync,
+    A: Aggregator<T, f64> + Clone + Default + Send,
+{
+    match key_slices.len() {
+        1 => radix_groupby_engine_firstseen_u32::<FixedKeyOps<1>, T, A>(
+            FixedKeyOps::<1>::new(1),
+            key_slices,
+            values,
+        ),
+        2 => radix_groupby_engine_firstseen_u32::<FixedKeyOps<2>, T, A>(
+            FixedKeyOps::<2>::new(2),
+            key_slices,
+            values,
+        ),
+        3 => radix_groupby_engine_firstseen_u32::<FixedKeyOps<3>, T, A>(
+            FixedKeyOps::<3>::new(3),
+            key_slices,
+            values,
+        ),
+        4 => radix_groupby_engine_firstseen_u32::<FixedKeyOps<4>, T, A>(
+            FixedKeyOps::<4>::new(4),
+            key_slices,
+            values,
+        ),
+        5 => radix_groupby_engine_firstseen_u32::<FixedKeyOps<5>, T, A>(
+            FixedKeyOps::<5>::new(5),
+            key_slices,
+            values,
+        ),
+        6 => radix_groupby_engine_firstseen_u32::<FixedKeyOps<6>, T, A>(
+            FixedKeyOps::<6>::new(6),
+            key_slices,
+            values,
+        ),
+        7 => radix_groupby_engine_firstseen_u32::<FixedKeyOps<7>, T, A>(
+            FixedKeyOps::<7>::new(7),
+            key_slices,
+            values,
+        ),
+        8 => radix_groupby_engine_firstseen_u32::<FixedKeyOps<8>, T, A>(
+            FixedKeyOps::<8>::new(8),
+            key_slices,
+            values,
+        ),
+        9 => radix_groupby_engine_firstseen_u32::<FixedKeyOps<9>, T, A>(
+            FixedKeyOps::<9>::new(9),
+            key_slices,
+            values,
+        ),
+        10 => radix_groupby_engine_firstseen_u32::<FixedKeyOps<10>, T, A>(
+            FixedKeyOps::<10>::new(10),
+            key_slices,
+            values,
+        ),
+        _ => radix_groupby_engine_firstseen_u32::<CompositeKeyOps, T, A>(
+            CompositeKeyOps::new(key_slices.len()),
+            key_slices,
+            values,
+        ),
+    }
+}
+
+fn radix_groupby_dispatch_firstseen_u64<T, A>(
+    key_slices: &[&[i64]],
+    values: &[T],
+) -> Result<GroupByMultiResult, String>
+where
+    T: Copy + Send + Sync,
+    A: Aggregator<T, f64> + Clone + Default + Send,
+{
+    match key_slices.len() {
+        1 => radix_groupby_engine_firstseen_u64::<FixedKeyOps<1>, T, A>(
+            FixedKeyOps::<1>::new(1),
+            key_slices,
+            values,
+        ),
+        2 => radix_groupby_engine_firstseen_u64::<FixedKeyOps<2>, T, A>(
+            FixedKeyOps::<2>::new(2),
+            key_slices,
+            values,
+        ),
+        3 => radix_groupby_engine_firstseen_u64::<FixedKeyOps<3>, T, A>(
+            FixedKeyOps::<3>::new(3),
+            key_slices,
+            values,
+        ),
+        4 => radix_groupby_engine_firstseen_u64::<FixedKeyOps<4>, T, A>(
+            FixedKeyOps::<4>::new(4),
+            key_slices,
+            values,
+        ),
+        5 => radix_groupby_engine_firstseen_u64::<FixedKeyOps<5>, T, A>(
+            FixedKeyOps::<5>::new(5),
+            key_slices,
+            values,
+        ),
+        6 => radix_groupby_engine_firstseen_u64::<FixedKeyOps<6>, T, A>(
+            FixedKeyOps::<6>::new(6),
+            key_slices,
+            values,
+        ),
+        7 => radix_groupby_engine_firstseen_u64::<FixedKeyOps<7>, T, A>(
+            FixedKeyOps::<7>::new(7),
+            key_slices,
+            values,
+        ),
+        8 => radix_groupby_engine_firstseen_u64::<FixedKeyOps<8>, T, A>(
+            FixedKeyOps::<8>::new(8),
+            key_slices,
+            values,
+        ),
+        9 => radix_groupby_engine_firstseen_u64::<FixedKeyOps<9>, T, A>(
+            FixedKeyOps::<9>::new(9),
+            key_slices,
+            values,
+        ),
+        10 => radix_groupby_engine_firstseen_u64::<FixedKeyOps<10>, T, A>(
+            FixedKeyOps::<10>::new(10),
+            key_slices,
+            values,
+        ),
+        _ => radix_groupby_engine_firstseen_u64::<CompositeKeyOps, T, A>(
+            CompositeKeyOps::new(key_slices.len()),
+            key_slices,
+            values,
+        ),
+    }
+}
+
+fn radix_groupby_firstseen_u32<T, A>(
+    key_slices: &[&[i64]],
+    values: &[T],
+) -> Result<GroupByMultiResult, String>
+where
+    T: Copy + Send + Sync,
+    A: Aggregator<T, f64> + Clone + Default + Send,
+{
+    radix_groupby_dispatch_firstseen_u32::<T, A>(key_slices, values)
+}
+
+fn radix_groupby_firstseen_u64<T, A>(
+    key_slices: &[&[i64]],
+    values: &[T],
+) -> Result<GroupByMultiResult, String>
+where
+    T: Copy + Send + Sync,
+    A: Aggregator<T, f64> + Clone + Default + Send,
+{
+    radix_groupby_dispatch_firstseen_u64::<T, A>(key_slices, values)
 }
 
 fn sort_groupby_result(result: &mut GroupByMultiResult) {
@@ -451,6 +996,54 @@ impl_radix_dispatch!(radix_groupby_max_i64, i64, MaxAggI64);
 
 impl_radix_dispatch!(radix_groupby_count_f64, f64, CountAggF64);
 impl_radix_dispatch!(radix_groupby_count_i64, i64, CountAggI64);
+
+// Public API - first-seen ordered (for sort=False semantics)
+
+macro_rules! impl_radix_firstseen_u32 {
+    ($name:ident, $val_type:ty, $agg:ty) => {
+        pub fn $name(
+            key_slices: &[&[i64]],
+            values: &[$val_type],
+        ) -> Result<GroupByMultiResult, String> {
+            radix_groupby_firstseen_u32::<$val_type, $agg>(key_slices, values)
+        }
+    };
+}
+
+macro_rules! impl_radix_firstseen_u64 {
+    ($name:ident, $val_type:ty, $agg:ty) => {
+        pub fn $name(
+            key_slices: &[&[i64]],
+            values: &[$val_type],
+        ) -> Result<GroupByMultiResult, String> {
+            radix_groupby_firstseen_u64::<$val_type, $agg>(key_slices, values)
+        }
+    };
+}
+
+impl_radix_firstseen_u32!(radix_groupby_sum_f64_firstseen_u32, f64, SumAggF64);
+impl_radix_firstseen_u32!(radix_groupby_mean_f64_firstseen_u32, f64, MeanAggF64);
+impl_radix_firstseen_u32!(radix_groupby_min_f64_firstseen_u32, f64, MinAggF64);
+impl_radix_firstseen_u32!(radix_groupby_max_f64_firstseen_u32, f64, MaxAggF64);
+impl_radix_firstseen_u32!(radix_groupby_count_f64_firstseen_u32, f64, CountAggF64);
+
+impl_radix_firstseen_u32!(radix_groupby_sum_i64_firstseen_u32, i64, SumAggI64);
+impl_radix_firstseen_u32!(radix_groupby_mean_i64_firstseen_u32, i64, MeanAggI64);
+impl_radix_firstseen_u32!(radix_groupby_min_i64_firstseen_u32, i64, MinAggI64);
+impl_radix_firstseen_u32!(radix_groupby_max_i64_firstseen_u32, i64, MaxAggI64);
+impl_radix_firstseen_u32!(radix_groupby_count_i64_firstseen_u32, i64, CountAggI64);
+
+impl_radix_firstseen_u64!(radix_groupby_sum_f64_firstseen_u64, f64, SumAggF64);
+impl_radix_firstseen_u64!(radix_groupby_mean_f64_firstseen_u64, f64, MeanAggF64);
+impl_radix_firstseen_u64!(radix_groupby_min_f64_firstseen_u64, f64, MinAggF64);
+impl_radix_firstseen_u64!(radix_groupby_max_f64_firstseen_u64, f64, MaxAggF64);
+impl_radix_firstseen_u64!(radix_groupby_count_f64_firstseen_u64, f64, CountAggF64);
+
+impl_radix_firstseen_u64!(radix_groupby_sum_i64_firstseen_u64, i64, SumAggI64);
+impl_radix_firstseen_u64!(radix_groupby_mean_i64_firstseen_u64, i64, MeanAggI64);
+impl_radix_firstseen_u64!(radix_groupby_min_i64_firstseen_u64, i64, MinAggI64);
+impl_radix_firstseen_u64!(radix_groupby_max_i64_firstseen_u64, i64, MaxAggI64);
+impl_radix_firstseen_u64!(radix_groupby_count_i64_firstseen_u64, i64, CountAggI64);
 
 // Public API - sorted (for sort=True)
 
@@ -683,10 +1276,10 @@ mod tests {
 
     #[test]
     fn test_equivalence_fixed_vs_generic() {
-        // Test N=2, 3, 4
+        // Test N=2..=10
         let n_rows = 1000;
 
-        for n_keys in 2..=4 {
+        for n_keys in 2..=10 {
             let keys: Vec<Vec<i64>> = (0..n_keys)
                 .map(|k| {
                     (0..n_rows)
@@ -706,6 +1299,12 @@ mod tests {
                 2 => radix_groupby_fixed::<2, f64, SumAggF64>(&key_slices, &values),
                 3 => radix_groupby_fixed::<3, f64, SumAggF64>(&key_slices, &values),
                 4 => radix_groupby_fixed::<4, f64, SumAggF64>(&key_slices, &values),
+                5 => radix_groupby_fixed::<5, f64, SumAggF64>(&key_slices, &values),
+                6 => radix_groupby_fixed::<6, f64, SumAggF64>(&key_slices, &values),
+                7 => radix_groupby_fixed::<7, f64, SumAggF64>(&key_slices, &values),
+                8 => radix_groupby_fixed::<8, f64, SumAggF64>(&key_slices, &values),
+                9 => radix_groupby_fixed::<9, f64, SumAggF64>(&key_slices, &values),
+                10 => radix_groupby_fixed::<10, f64, SumAggF64>(&key_slices, &values),
                 _ => panic!("Unsupported N"),
             }
             .unwrap();
@@ -790,7 +1389,6 @@ mod tests {
         let values = vec![1.0, 2.0];
 
         let key_slices: Vec<&[i64]> = vec![&col1, &col2, &col3, &col4, &col5];
-        // This should hit the generic path (dispatch handles 2,3,4 specially)
         let result = radix_groupby_sum_f64_sorted(&key_slices, &values).unwrap();
 
         assert_eq!(result.n_keys, 5);
