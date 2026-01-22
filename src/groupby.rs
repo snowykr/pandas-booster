@@ -70,6 +70,32 @@ fn reorder_single_result_by_first_seen_u64(result: &mut GroupByResultF64, first_
     result.values = sorted_values;
 }
 
+fn reorder_single_result_by_key(result: &mut GroupByResultF64) {
+    if result.values.is_empty() {
+        return;
+    }
+    debug_assert_eq!(result.keys.len(), result.values.len());
+
+    let keys = &result.keys;
+    let values = &result.values;
+
+    let mut perm: Vec<usize> = (0..keys.len()).collect();
+    // Groups are expected to be unique. The index tie-breaker ensures a total
+    // order (comparator never returns Equal), avoiding arbitrary reordering from
+    // the unstable parallel sort if duplicates ever appear.
+    perm.par_sort_unstable_by(|&i, &j| keys[i].cmp(&keys[j]).then(i.cmp(&j)));
+
+    let mut sorted_keys = Vec::with_capacity(keys.len());
+    let mut sorted_values = Vec::with_capacity(values.len());
+    for &idx in &perm {
+        sorted_keys.push(keys[idx]);
+        sorted_values.push(values[idx]);
+    }
+
+    result.keys = sorted_keys;
+    result.values = sorted_values;
+}
+
 fn parallel_groupby_f64<T, A>(keys: &[i64], values: &[T]) -> PyResult<GroupByResultF64>
 where
     T: Copy + Send + Sync,
@@ -277,6 +303,12 @@ pub fn parallel_groupby_sum_f64(keys: &[i64], values: &[f64]) -> PyResult<GroupB
     parallel_groupby_f64::<f64, SumAggF64>(keys, values)
 }
 
+pub fn parallel_groupby_sum_f64_sorted(keys: &[i64], values: &[f64]) -> PyResult<GroupByResultF64> {
+    let mut result = parallel_groupby_sum_f64(keys, values)?;
+    reorder_single_result_by_key(&mut result);
+    Ok(result)
+}
+
 pub fn parallel_groupby_sum_f64_firstseen_u32(
     keys: &[i64],
     values: &[f64],
@@ -293,6 +325,15 @@ pub fn parallel_groupby_sum_f64_firstseen_u64(
 
 pub fn parallel_groupby_mean_f64(keys: &[i64], values: &[f64]) -> PyResult<GroupByResultF64> {
     parallel_groupby_f64::<f64, MeanAggF64>(keys, values)
+}
+
+pub fn parallel_groupby_mean_f64_sorted(
+    keys: &[i64],
+    values: &[f64],
+) -> PyResult<GroupByResultF64> {
+    let mut result = parallel_groupby_mean_f64(keys, values)?;
+    reorder_single_result_by_key(&mut result);
+    Ok(result)
 }
 
 pub fn parallel_groupby_mean_f64_firstseen_u32(
@@ -313,6 +354,12 @@ pub fn parallel_groupby_min_f64(keys: &[i64], values: &[f64]) -> PyResult<GroupB
     parallel_groupby_f64::<f64, MinAggF64>(keys, values)
 }
 
+pub fn parallel_groupby_min_f64_sorted(keys: &[i64], values: &[f64]) -> PyResult<GroupByResultF64> {
+    let mut result = parallel_groupby_min_f64(keys, values)?;
+    reorder_single_result_by_key(&mut result);
+    Ok(result)
+}
+
 pub fn parallel_groupby_min_f64_firstseen_u32(
     keys: &[i64],
     values: &[f64],
@@ -329,6 +376,12 @@ pub fn parallel_groupby_min_f64_firstseen_u64(
 
 pub fn parallel_groupby_max_f64(keys: &[i64], values: &[f64]) -> PyResult<GroupByResultF64> {
     parallel_groupby_f64::<f64, MaxAggF64>(keys, values)
+}
+
+pub fn parallel_groupby_max_f64_sorted(keys: &[i64], values: &[f64]) -> PyResult<GroupByResultF64> {
+    let mut result = parallel_groupby_max_f64(keys, values)?;
+    reorder_single_result_by_key(&mut result);
+    Ok(result)
 }
 
 pub fn parallel_groupby_max_f64_firstseen_u32(
@@ -349,6 +402,12 @@ pub fn parallel_groupby_sum_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupB
     parallel_groupby_f64::<i64, SumAggI64>(keys, values)
 }
 
+pub fn parallel_groupby_sum_i64_sorted(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultF64> {
+    let mut result = parallel_groupby_sum_i64(keys, values)?;
+    reorder_single_result_by_key(&mut result);
+    Ok(result)
+}
+
 pub fn parallel_groupby_sum_i64_firstseen_u32(
     keys: &[i64],
     values: &[i64],
@@ -365,6 +424,15 @@ pub fn parallel_groupby_sum_i64_firstseen_u64(
 
 pub fn parallel_groupby_mean_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultF64> {
     parallel_groupby_f64::<i64, MeanAggI64>(keys, values)
+}
+
+pub fn parallel_groupby_mean_i64_sorted(
+    keys: &[i64],
+    values: &[i64],
+) -> PyResult<GroupByResultF64> {
+    let mut result = parallel_groupby_mean_i64(keys, values)?;
+    reorder_single_result_by_key(&mut result);
+    Ok(result)
 }
 
 pub fn parallel_groupby_mean_i64_firstseen_u32(
@@ -385,6 +453,12 @@ pub fn parallel_groupby_min_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupB
     parallel_groupby_f64::<i64, MinAggI64>(keys, values)
 }
 
+pub fn parallel_groupby_min_i64_sorted(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultF64> {
+    let mut result = parallel_groupby_min_i64(keys, values)?;
+    reorder_single_result_by_key(&mut result);
+    Ok(result)
+}
+
 pub fn parallel_groupby_min_i64_firstseen_u32(
     keys: &[i64],
     values: &[i64],
@@ -401,6 +475,12 @@ pub fn parallel_groupby_min_i64_firstseen_u64(
 
 pub fn parallel_groupby_max_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultF64> {
     parallel_groupby_f64::<i64, MaxAggI64>(keys, values)
+}
+
+pub fn parallel_groupby_max_i64_sorted(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultF64> {
+    let mut result = parallel_groupby_max_i64(keys, values)?;
+    reorder_single_result_by_key(&mut result);
+    Ok(result)
 }
 
 pub fn parallel_groupby_max_i64_firstseen_u32(
@@ -421,6 +501,15 @@ pub fn parallel_groupby_count_f64(keys: &[i64], values: &[f64]) -> PyResult<Grou
     parallel_groupby_f64::<f64, CountAggF64>(keys, values)
 }
 
+pub fn parallel_groupby_count_f64_sorted(
+    keys: &[i64],
+    values: &[f64],
+) -> PyResult<GroupByResultF64> {
+    let mut result = parallel_groupby_count_f64(keys, values)?;
+    reorder_single_result_by_key(&mut result);
+    Ok(result)
+}
+
 pub fn parallel_groupby_count_f64_firstseen_u32(
     keys: &[i64],
     values: &[f64],
@@ -437,6 +526,15 @@ pub fn parallel_groupby_count_f64_firstseen_u64(
 
 pub fn parallel_groupby_count_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultF64> {
     parallel_groupby_f64::<i64, CountAggI64>(keys, values)
+}
+
+pub fn parallel_groupby_count_i64_sorted(
+    keys: &[i64],
+    values: &[i64],
+) -> PyResult<GroupByResultF64> {
+    let mut result = parallel_groupby_count_i64(keys, values)?;
+    reorder_single_result_by_key(&mut result);
+    Ok(result)
 }
 
 pub fn parallel_groupby_count_i64_firstseen_u32(
@@ -511,6 +609,19 @@ mod tests {
         // All-NaN group returns 0.0, matching pandas behavior: df.groupby('k')['v'].sum()
         assert!((map[&1] - 0.0).abs() < 1e-10);
         assert!((map[&2] - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_groupby_sorted_orders_by_key() {
+        let keys = vec![3, 1, 2, 1, 3];
+        let values = vec![1.0, 10.0, 100.0, 1.0, 2.0];
+        let result = parallel_groupby_sum_f64_sorted(&keys, &values).unwrap();
+
+        assert_eq!(result.keys, vec![1, 2, 3]);
+        assert_eq!(result.values.len(), 3);
+        assert!((result.values[0] - 11.0).abs() < 1e-10);
+        assert!((result.values[1] - 100.0).abs() < 1e-10);
+        assert!((result.values[2] - 3.0).abs() < 1e-10);
     }
 
     #[test]

@@ -1,12 +1,39 @@
 from __future__ import annotations
 
-from collections.abc import Hashable
-from typing import Literal
+from collections.abc import Callable, Hashable
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 
 AggFunc = Literal["sum", "mean", "min", "max", "count"]
+
+
+def select_rust_groupby_func(
+    rust: Any,
+    func_base: str,
+    *,
+    sort: bool,
+    n_rows: int,
+    rust_sorted: bool,
+) -> tuple[Callable[..., Any], bool]:
+    """Resolve the Rust kernel for a groupby call.
+
+    Returns (callable, rust_sorted_effective).
+    """
+    if not sort:
+        suffix = firstseen_suffix(sort=False, n_rows=n_rows)
+        return getattr(rust, f"{func_base}{suffix}"), False
+
+    if rust_sorted:
+        try:
+            return getattr(rust, f"{func_base}_sorted"), True
+        except AttributeError:
+            # Python/Rust wheel mismatch (or older extension): fall back to the
+            # legacy path and let Python sort_index() handle ordering.
+            return getattr(rust, func_base), False
+
+    return getattr(rust, func_base), False
 
 
 def firstseen_suffix(*, sort: bool, n_rows: int) -> str:
@@ -59,6 +86,7 @@ def build_series_from_single_result(
     index_dtype: np.dtype,
     agg: str,
     sort: bool,
+    rust_sorted: bool = False,
 ) -> pd.Series:
     if keys_1d.ndim != 1:
         raise ValueError(f"keys_1d must be 1D, got ndim={keys_1d.ndim}")
@@ -85,7 +113,7 @@ def build_series_from_single_result(
     if agg == "count":
         result = result.astype(np.int64)
 
-    if sort:
+    if sort and not rust_sorted:
         result = result.sort_index()
     return result
 
@@ -99,6 +127,7 @@ def build_series_from_multi_result(
     name: Hashable | None,
     agg: str,
     sort: bool,
+    rust_sorted: bool = False,
 ) -> pd.Series:
     n_keys = len(by_cols)
 
@@ -128,6 +157,6 @@ def build_series_from_multi_result(
     if agg == "count":
         result = result.astype(np.int64)
 
-    if sort:
+    if sort and not rust_sorted:
         result = result.sort_index()
     return result

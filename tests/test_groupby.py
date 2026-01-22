@@ -34,7 +34,6 @@ def small_df():
 
 class TestBoosterGroupBy:
     def test_sum_f64_matches_pandas(self, large_df):
-
         booster_result = cast(BoosterAccessor, large_df.booster).groupby("key", "val_float", "sum")
         pandas_result = large_df.groupby("key")["val_float"].sum()
 
@@ -49,7 +48,6 @@ class TestBoosterGroupBy:
         )
 
     def test_mean_f64_matches_pandas(self, large_df):
-
         booster_result = cast(BoosterAccessor, large_df.booster).groupby("key", "val_float", "mean")
         pandas_result = large_df.groupby("key")["val_float"].mean()
 
@@ -64,7 +62,6 @@ class TestBoosterGroupBy:
         )
 
     def test_min_f64_matches_pandas(self, large_df):
-
         booster_result = cast(BoosterAccessor, large_df.booster).groupby("key", "val_float", "min")
         pandas_result = large_df.groupby("key")["val_float"].min()
 
@@ -79,7 +76,6 @@ class TestBoosterGroupBy:
         )
 
     def test_max_f64_matches_pandas(self, large_df):
-
         booster_result = cast(BoosterAccessor, large_df.booster).groupby("key", "val_float", "max")
         pandas_result = large_df.groupby("key")["val_float"].max()
 
@@ -94,7 +90,6 @@ class TestBoosterGroupBy:
         )
 
     def test_sum_i64_matches_pandas(self, large_df):
-
         booster_result = cast(BoosterAccessor, large_df.booster).groupby("key", "val_int", "sum")
         pandas_result = large_df.groupby("key")["val_int"].sum()
 
@@ -109,7 +104,6 @@ class TestBoosterGroupBy:
         )
 
     def test_small_df_uses_fallback(self, small_df):
-
         booster_result = cast(BoosterAccessor, small_df.booster).groupby("key", "val_float", "sum")
         pandas_result = small_df.groupby("key")["val_float"].sum()
 
@@ -123,7 +117,6 @@ class TestBoosterGroupBy:
 
 class TestGroupbyCount:
     def test_count_f64_matches_pandas(self, large_df):
-
         booster_result = cast(BoosterAccessor, large_df.booster).groupby(
             "key", "val_float", "count"
         )
@@ -143,7 +136,6 @@ class TestGroupbyCount:
         assert pd.api.types.is_integer_dtype(booster_result.dtype)
 
     def test_count_i64_matches_pandas(self, large_df):
-
         booster_result = cast(BoosterAccessor, large_df.booster).groupby("key", "val_int", "count")
         pandas_result = large_df.groupby("key")["val_int"].count()
 
@@ -158,7 +150,6 @@ class TestGroupbyCount:
         assert pd.api.types.is_integer_dtype(booster_result.dtype)
 
     def test_count_with_nan_matches_pandas(self):
-
         np.random.seed(42)
         n = 200_000
         values = np.random.random(n)
@@ -181,21 +172,18 @@ class TestGroupbyCount:
         assert pd.api.types.is_integer_dtype(booster_result.dtype)
 
     def test_invalid_agg_raises(self, large_df):
-
         with pytest.raises(ValueError, match="Unsupported aggregation"):
             cast(BoosterAccessor, large_df.booster).groupby(
                 "key", "val_float", cast(Any, "invalid")
             )
 
     def test_thread_count(self, large_df):
-
         thread_count = large_df.booster.thread_count()
         assert thread_count > 0
 
 
 class TestNaNHandling:
     def test_sum_with_nan(self):
-
         np.random.seed(123)
         n = 200_000
         values = np.random.random(n)
@@ -218,7 +206,6 @@ class TestNaNHandling:
         )
 
     def test_mean_with_nan(self):
-
         np.random.seed(456)
         n = 200_000
         values = np.random.random(n)
@@ -243,7 +230,6 @@ class TestNaNHandling:
 
 class TestAllNaNGroup:
     def test_sum_all_nan_group(self):
-
         n = 200_000
         df = pd.DataFrame(
             {
@@ -313,7 +299,6 @@ class TestFirstSeenOrderSingleKeySortFalse:
 
     @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count"])
     def test_sort_false_preserves_first_seen_float(self, agg: AggFunc):
-
         df = self._make_df()
         booster_result = cast(BoosterAccessor, df.booster).groupby("key", "val", agg, sort=False)
         pandas_result = getattr(df.groupby("key", sort=False)["val"], agg)()
@@ -330,7 +315,6 @@ class TestFirstSeenOrderSingleKeySortFalse:
 
     @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count"])
     def test_sort_false_preserves_first_seen_int(self, agg: AggFunc):
-
         n = 200_000
         keys = np.array([2, 99, 1, 5], dtype=np.int64)
         keys = np.tile(keys, (n + len(keys) - 1) // len(keys))[:n]
@@ -359,7 +343,6 @@ class TestFirstSeenOrderSingleKeySortFalse:
         )
 
     def test_mean_all_nan_group(self):
-
         n = 200_000
         df = pd.DataFrame(
             {
@@ -379,7 +362,6 @@ class TestFirstSeenOrderSingleKeySortFalse:
         )
 
     def test_min_all_nan_group(self):
-
         n = 200_000
         df = pd.DataFrame(
             {
@@ -399,7 +381,6 @@ class TestFirstSeenOrderSingleKeySortFalse:
         )
 
     def test_max_all_nan_group(self):
-
         n = 200_000
         df = pd.DataFrame(
             {
@@ -421,7 +402,6 @@ class TestFirstSeenOrderSingleKeySortFalse:
 
 class TestNullableInteger:
     def test_nullable_int_fallback(self):
-
         n = 200_000
         df = pd.DataFrame(
             {
@@ -444,7 +424,6 @@ class TestNullableInteger:
 
 class TestIntegerSum:
     def test_i64_sum_matches_pandas(self):
-
         np.random.seed(42)
         n = 500_000
         df = pd.DataFrame(
@@ -468,7 +447,6 @@ class TestIntegerSum:
         )
 
     def test_i64_min_matches_pandas(self):
-
         np.random.seed(42)
         n = 500_000
         df = pd.DataFrame(
@@ -492,7 +470,6 @@ class TestIntegerSum:
         )
 
     def test_i64_max_matches_pandas(self):
-
         np.random.seed(42)
         n = 500_000
         df = pd.DataFrame(
@@ -518,7 +495,6 @@ class TestIntegerSum:
 
 class TestNonContiguousArray:
     def test_non_contiguous_slice_still_works(self):
-
         np.random.seed(42)
         n = 300_000
         df = pd.DataFrame(
@@ -541,7 +517,6 @@ class TestNonContiguousArray:
         )
 
     def test_fortran_order_array_works(self):
-
         n = 200_000
         keys = np.asfortranarray(np.random.randint(0, 100, size=n))
         vals = np.asfortranarray(np.random.random(size=n))
@@ -560,7 +535,6 @@ class TestNonContiguousArray:
 
 class TestHighCardinality:
     def test_high_cardinality_unique_keys(self):
-
         n = 150_000
         df = pd.DataFrame(
             {
@@ -581,7 +555,6 @@ class TestHighCardinality:
         )
 
     def test_high_cardinality_mean(self):
-
         np.random.seed(123)
         n = 200_000
         n_groups = 50_000
@@ -622,7 +595,6 @@ class TestFirstSeenOrderSortFalse:
 
     @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count"])
     def test_booster_sort_false_preserves_first_seen_single_key(self, agg: AggFunc):
-
         df = self._make_ordered_df()
         booster_result = cast(BoosterAccessor, df.booster).groupby("key", "val", agg, sort=False)
         pandas_grouped = df.groupby("key", sort=False)["val"]

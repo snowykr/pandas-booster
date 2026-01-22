@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -58,8 +59,8 @@ except ImportError:
 BACKEND_DISPLAY_ORDER: tuple[str, ...] = ("pandas", "polars", "booster")
 
 sys.path.insert(0, str(Path(__file__).parent))
-from bench_utils import BenchmarkStats, run_cold_warm_benchmark
-from datasets import PRESETS, generate_multi_key_dataset, get_dataset_info
+from bench_utils import BenchmarkStats, run_cold_warm_benchmark  # noqa: E402
+from datasets import PRESETS, generate_multi_key_dataset, get_dataset_info  # noqa: E402
 
 if TYPE_CHECKING:
     from typing import Literal
@@ -871,6 +872,10 @@ Examples:
   python benches/benchmark.py --cardinality high --sort-mode unsorted  # Combine
   python benches/benchmark.py --output results.md                # Save results
   python benches/benchmark.py --samples 10                       # Adjust sample count
+
+Environment:
+  PANDAS_BOOSTER_RUST_SORT=1  # enable Rust-side sort=True (default for benchmark runs)
+  PANDAS_BOOSTER_RUST_SORT=0  # disable (use Python sort_index), for A/B comparison
         """,
     )
     parser.add_argument(
@@ -904,6 +909,19 @@ Examples:
     )
 
     args = parser.parse_args()
+
+    # Default to Rust-side sorting for sort=True benchmarks unless explicitly disabled.
+    if not args.worker:
+        os.environ.setdefault("PANDAS_BOOSTER_RUST_SORT", "1")
+        print(
+            f"PANDAS_BOOSTER_RUST_SORT={os.environ.get('PANDAS_BOOSTER_RUST_SORT')}",
+            file=sys.stderr,
+        )
+        print(
+            "Note: benchmarks default Rust-side sort=True unless you set "
+            "PANDAS_BOOSTER_RUST_SORT=0",
+            file=sys.stderr,
+        )
 
     if args.worker:
         worker_args = json.loads(args.worker)

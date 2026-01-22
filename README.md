@@ -97,6 +97,19 @@ Performs a Rust-accelerated groupby aggregation.
 | `agg` | `str` | Aggregation function name. |
 | `sort` | `bool` | If `True` (default), sort result by group keys. If `False`, preserve Pandas appearance order (first-seen group order). |
 
+### Configuration
+
+`pandas-booster` includes an emergency feature flag to control how `sort=True` is implemented.
+
+- `PANDAS_BOOSTER_RUST_SORT=0` (default when unset): compute groupby in Rust, then call `Series.sort_index()` in Python to match Pandas ordering.
+- `PANDAS_BOOSTER_RUST_SORT=1`: use Rust-side sorting kernels for `sort=True` (skips Python `sort_index()`), intended for benchmarking and A/B comparison.
+
+This toggle is primarily for comparing pandas-booster implementations (Python-side vs Rust-side sorting); it changes where the `sort=True` cost is paid and may not be directly comparable to Pandas' internal execution.
+
+Note: the Rust-side `sort=True` kernels allocate a permutation vector and perform an `O(G log G)` comparison sort over groups (G = number of groups). This can increase memory usage at very high cardinality.
+
+Note: the benchmark runner defaults `PANDAS_BOOSTER_RUST_SORT=1` unless you explicitly set `PANDAS_BOOSTER_RUST_SORT=0`.
+
 **Returns**: 
 - Single key (`by="col"`): A `pd.Series` indexed by the unique keys.
 - Multiple keys (`by=["col1", "col2"]`): A `pd.Series` with a `pd.MultiIndex`.

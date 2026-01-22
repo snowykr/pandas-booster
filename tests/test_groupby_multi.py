@@ -63,7 +63,6 @@ class TestFirstSeenOrderSortFalse:
 
     @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count"])
     def test_booster_sort_false_preserves_first_seen_multi_key(self, agg: AggFunc):
-
         df = self._make_ordered_multi_df()
         booster_result = cast(BoosterAccessor, df.booster).groupby(
             ["k1", "k2"], "val", agg, sort=False
@@ -134,7 +133,6 @@ class TestMultiKeyGroupBySum:
     """Test multi-key groupby sum operations."""
 
     def test_two_keys_sum_f64_matches_pandas(self, large_multi_df):
-
         booster_result = cast(BoosterAccessor, large_multi_df.booster).groupby(
             ["k1", "k2"], "val_float", "sum"
         )
@@ -151,7 +149,6 @@ class TestMultiKeyGroupBySum:
         )
 
     def test_three_keys_sum_f64_matches_pandas(self, large_multi_df):
-
         booster_result = cast(BoosterAccessor, large_multi_df.booster).groupby(
             ["k1", "k2", "k3"], "val_float", "sum"
         )
@@ -168,7 +165,6 @@ class TestMultiKeyGroupBySum:
         )
 
     def test_two_keys_sum_i64_matches_pandas(self, large_multi_df):
-
         booster_result = cast(BoosterAccessor, large_multi_df.booster).groupby(
             ["k1", "k2"], "val_int", "sum"
         )
@@ -189,7 +185,6 @@ class TestMultiKeyGroupByMean:
     """Test multi-key groupby mean operations."""
 
     def test_two_keys_mean_f64_matches_pandas(self, large_multi_df):
-
         booster_result = cast(BoosterAccessor, large_multi_df.booster).groupby(
             ["k1", "k2"], "val_float", "mean"
         )
@@ -206,7 +201,6 @@ class TestMultiKeyGroupByMean:
         )
 
     def test_three_keys_mean_f64_matches_pandas(self, large_multi_df):
-
         booster_result = cast(BoosterAccessor, large_multi_df.booster).groupby(
             ["k1", "k2", "k3"], "val_float", "mean"
         )
@@ -227,7 +221,6 @@ class TestMultiKeyGroupByMinMax:
     """Test multi-key groupby min/max operations."""
 
     def test_two_keys_min_f64_matches_pandas(self, large_multi_df):
-
         booster_result = cast(BoosterAccessor, large_multi_df.booster).groupby(
             ["k1", "k2"], "val_float", "min"
         )
@@ -244,7 +237,6 @@ class TestMultiKeyGroupByMinMax:
         )
 
     def test_two_keys_max_f64_matches_pandas(self, large_multi_df):
-
         booster_result = cast(BoosterAccessor, large_multi_df.booster).groupby(
             ["k1", "k2"], "val_float", "max"
         )
@@ -261,7 +253,6 @@ class TestMultiKeyGroupByMinMax:
         )
 
     def test_three_keys_min_i64_matches_pandas(self, large_multi_df):
-
         booster_result = cast(BoosterAccessor, large_multi_df.booster).groupby(
             ["k1", "k2", "k3"], "val_int", "min"
         )
@@ -282,7 +273,6 @@ class TestMultiKeyFallback:
     """Test fallback to Pandas for multi-key groupby."""
 
     def test_small_df_uses_fallback(self, small_multi_df):
-
         booster_result = cast(BoosterAccessor, small_multi_df.booster).groupby(
             ["k1", "k2"], "val_float", "sum"
         )
@@ -300,7 +290,6 @@ class TestSortParameter:
     """Test sort=True/False parameter behavior."""
 
     def test_sort_true_matches_pandas_order(self, large_multi_df):
-
         booster_result = cast(BoosterAccessor, large_multi_df.booster).groupby(
             ["k1", "k2"], "val_float", "sum", sort=True
         )
@@ -314,7 +303,6 @@ class TestSortParameter:
         )
 
     def test_sort_false_values_match_pandas(self, large_multi_df):
-
         booster_result = cast(BoosterAccessor, large_multi_df.booster).groupby(
             ["k1", "k2"], "val_float", "sum", sort=False
         )
@@ -328,7 +316,6 @@ class TestSortParameter:
         )
 
     def test_sort_false_single_key(self):
-
         np.random.seed(42)
         n = 200_000
         df = pd.DataFrame({"key": np.random.randint(0, 1000, n), "val": np.random.random(n)})
@@ -344,7 +331,6 @@ class TestSortParameter:
         )
 
     def test_sort_true_is_default(self, large_multi_df):
-
         result_default = cast(BoosterAccessor, large_multi_df.booster).groupby(
             ["k1", "k2"], "val_float", "sum"
         )
@@ -355,7 +341,6 @@ class TestSortParameter:
         pd.testing.assert_series_equal(result_default, result_explicit)
 
     def test_sort_parameter_three_keys(self, large_multi_df):
-
         booster_sorted = cast(BoosterAccessor, large_multi_df.booster).groupby(
             ["k1", "k2", "k3"], "val_float", "sum", sort=True
         )
@@ -369,7 +354,6 @@ class TestSortParameter:
         )
 
     def test_non_integer_key_uses_fallback(self):
-
         np.random.seed(42)
         n = 200_000
         df = pd.DataFrame(
@@ -392,7 +376,6 @@ class TestSortParameter:
         )
 
     def test_nullable_key_uses_fallback(self):
-
         np.random.seed(42)
         n = 200_000
         df = pd.DataFrame(
@@ -419,7 +402,6 @@ class TestMultiKeyNaNHandling:
     """Test NaN handling in multi-key groupby."""
 
     def test_sum_with_nan_values(self):
-
         np.random.seed(123)
         n = 200_000
         values = np.random.random(n)
@@ -443,7 +425,6 @@ class TestMultiKeyNaNHandling:
         )
 
     def test_mean_with_nan_values(self):
-
         np.random.seed(456)
         n = 200_000
         values = np.random.random(n)
@@ -638,7 +619,6 @@ class TestMultiKeyAllNaNGroup:
     """Test multi-key groupby with all-NaN groups."""
 
     def test_sum_all_nan_in_group(self):
-
         n = 200_000
         # First half of k1=0 groups have all NaN
         k1 = np.concatenate([np.zeros(n // 2, dtype=int), np.ones(n // 2, dtype=int)])
@@ -658,7 +638,6 @@ class TestMultiKeyAllNaNGroup:
         )
 
     def test_mean_all_nan_in_group(self):
-
         n = 200_000
         k1 = np.concatenate([np.zeros(n // 2, dtype=int), np.ones(n // 2, dtype=int)])
         k2 = np.random.randint(0, 10, n)

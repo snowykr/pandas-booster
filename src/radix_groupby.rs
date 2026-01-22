@@ -943,7 +943,10 @@ fn sort_groupby_result(result: &mut GroupByMultiResult) {
     perm.par_sort_unstable_by(|&i, &j| {
         let k_i = &keys_flat[i * n_keys..(i + 1) * n_keys];
         let k_j = &keys_flat[j * n_keys..(j + 1) * n_keys];
-        k_i.cmp(k_j)
+        // Groups are expected to be unique. The index tie-breaker ensures a
+        // total order (comparator never returns Equal), avoiding arbitrary
+        // reordering from the unstable parallel sort if duplicates ever appear.
+        k_i.cmp(k_j).then(i.cmp(&j))
     });
 
     let mut sorted_keys = Vec::with_capacity(result.keys_flat.len());

@@ -6,11 +6,12 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 import numpy as np
 import pandas as pd
 
+from ._config import rust_sort_enabled
 from ._groupby_accel import (
     build_series_from_multi_result,
     build_series_from_single_result,
     capture_key_numpy_dtype,
-    firstseen_suffix,
+    select_rust_groupby_func,
     should_fallback_for_key_dtype,
     to_i64_contiguous,
 )
@@ -110,7 +111,7 @@ class BoosterSeriesGroupBy:
         by_cols = self._by_cols
         target = self._target
         sort = self._sort
-        suffix = firstseen_suffix(sort=sort, n_rows=len(self._df))
+        rust_sorted = bool(sort) and rust_sort_enabled()
 
         val_col = self._df[target]
         if not isinstance(val_col, pd.Series):
@@ -126,12 +127,19 @@ class BoosterSeriesGroupBy:
             keys = to_i64_contiguous(key_col.to_numpy(copy=False))
             if is_val_int:
                 values = np.ascontiguousarray(val_col.to_numpy(dtype=np.int64))
-                func_name = f"groupby_{agg}_i64{suffix}"
+                func_base = f"groupby_{agg}_i64"
             else:
                 values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
-                func_name = f"groupby_{agg}_f64{suffix}"
+                func_base = f"groupby_{agg}_f64"
 
-            rust_func = getattr(_rust, func_name)
+            rust_func, rust_sorted = select_rust_groupby_func(
+                _rust,
+                func_base,
+                sort=sort,
+                n_rows=len(self._df),
+                rust_sorted=rust_sorted,
+            )
+
             result_keys, result_values = rust_func(keys, values)
 
             return build_series_from_single_result(
@@ -142,6 +150,7 @@ class BoosterSeriesGroupBy:
                 index_dtype=key_dtype,
                 agg=agg,
                 sort=sort,
+                rust_sorted=rust_sorted,
             )
         else:
             key_cols: list[pd.Series] = []
@@ -156,12 +165,19 @@ class BoosterSeriesGroupBy:
 
             if is_val_int:
                 values = np.ascontiguousarray(val_col.to_numpy(dtype=np.int64))
-                func_name = f"groupby_multi_{agg}_i64{suffix}"
+                func_base = f"groupby_multi_{agg}_i64"
             else:
                 values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
-                func_name = f"groupby_multi_{agg}_f64{suffix}"
+                func_base = f"groupby_multi_{agg}_f64"
 
-            rust_func = getattr(_rust, func_name)
+            rust_func, rust_sorted = select_rust_groupby_func(
+                _rust,
+                func_base,
+                sort=sort,
+                n_rows=len(self._df),
+                rust_sorted=rust_sorted,
+            )
+
             keys_2d, result_values = rust_func(key_arrays, values)
 
             return build_series_from_multi_result(
@@ -172,6 +188,7 @@ class BoosterSeriesGroupBy:
                 name=val_col.name,
                 agg=agg,
                 sort=sort,
+                rust_sorted=rust_sorted,
             )
 
     def _try_accelerate(self, agg: AggFunc) -> Series:

@@ -87,8 +87,12 @@ def run_worker_process(
 
     result = None
     try:
+        env = os.environ.copy()
+        env.setdefault("PANDAS_BOOSTER_RUST_SORT", "1")
+
         result = subprocess.run(
             cmd,
+            env=env,
             capture_output=True,
             text=True,
             timeout=timeout,

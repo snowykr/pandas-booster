@@ -7,11 +7,12 @@ from typing import TYPE_CHECKING, Literal, cast
 import numpy as np
 import pandas as pd
 
+from ._config import rust_sort_enabled
 from ._groupby_accel import (
     build_series_from_multi_result,
     build_series_from_single_result,
     capture_key_numpy_dtype,
-    firstseen_suffix,
+    select_rust_groupby_func,
     should_fallback_for_key_dtype,
     to_i64_contiguous,
 )
@@ -193,21 +194,28 @@ class BoosterAccessor:
     ) -> Series:
         rust = self._get_rust_module()
 
+        rust_sorted = bool(sort) and rust_sort_enabled()
+
         key_dtype = capture_key_numpy_dtype(key_col)
 
         keys = to_i64_contiguous(key_col.to_numpy(copy=False))
         is_val_int = pd.api.types.is_integer_dtype(val_col)
 
-        suffix = firstseen_suffix(sort=sort, n_rows=len(self._df))
-
         if is_val_int:
             values = np.ascontiguousarray(val_col.to_numpy(dtype=np.int64))
-            func_name = f"groupby_{agg}_i64{suffix}"
+            func_base = f"groupby_{agg}_i64"
         else:
             values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
-            func_name = f"groupby_{agg}_f64{suffix}"
+            func_base = f"groupby_{agg}_f64"
 
-        rust_func = getattr(rust, func_name)
+        rust_func, rust_sorted = select_rust_groupby_func(
+            rust,
+            func_base,
+            sort=sort,
+            n_rows=len(self._df),
+            rust_sorted=rust_sorted,
+        )
+
         result_keys, result_values = rust_func(keys, values)
 
         return build_series_from_single_result(
@@ -218,6 +226,7 @@ class BoosterAccessor:
             index_dtype=key_dtype,
             agg=agg,
             sort=sort,
+            rust_sorted=rust_sorted,
         )
 
     def _rust_groupby_multi(
@@ -231,22 +240,29 @@ class BoosterAccessor:
     ) -> Series:
         rust = self._get_rust_module()
 
+        rust_sorted = bool(sort) and rust_sort_enabled()
+
         key_dtypes = [capture_key_numpy_dtype(key_cols[col]) for col in by_cols]
 
         key_arrays = [to_i64_contiguous(key_cols[col].to_numpy(copy=False)) for col in by_cols]
 
         is_val_int = pd.api.types.is_integer_dtype(val_col)
 
-        suffix = firstseen_suffix(sort=sort, n_rows=len(self._df))
-
         if is_val_int:
             values = np.ascontiguousarray(val_col.to_numpy(dtype=np.int64))
-            func_name = f"groupby_multi_{agg}_i64{suffix}"
+            func_base = f"groupby_multi_{agg}_i64"
         else:
             values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
-            func_name = f"groupby_multi_{agg}_f64{suffix}"
+            func_base = f"groupby_multi_{agg}_f64"
 
-        rust_func = getattr(rust, func_name)
+        rust_func, rust_sorted = select_rust_groupby_func(
+            rust,
+            func_base,
+            sort=sort,
+            n_rows=len(self._df),
+            rust_sorted=rust_sorted,
+        )
+
         keys_2d, result_values = rust_func(key_arrays, values)
 
         return build_series_from_multi_result(
@@ -257,6 +273,7 @@ class BoosterAccessor:
             name=val_col.name,
             agg=agg,
             sort=sort,
+            rust_sorted=rust_sorted,
         )
 
     def thread_count(self) -> int:
