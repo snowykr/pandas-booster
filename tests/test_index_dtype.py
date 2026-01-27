@@ -154,6 +154,7 @@ def test_accessor_single_key_empty_result_preserves_index_dtype(monkeypatch):
         return np.empty((0,), dtype=np.int64), np.empty((0,), dtype=np.float64)
 
     monkeypatch.setattr(rust, "groupby_sum_f64", fake_groupby_sum_f64)
+    monkeypatch.setattr(rust, "groupby_sum_f64_sorted", fake_groupby_sum_f64)
 
     result = df.booster.groupby("k1", "val", "sum")
     assert len(result) == 0
@@ -169,6 +170,7 @@ def test_accessor_multi_key_empty_result_preserves_level_dtypes(monkeypatch):
         return np.empty((0, 2), dtype=np.int64), np.empty((0,), dtype=np.float64)
 
     monkeypatch.setattr(rust, "groupby_multi_sum_f64", fake_groupby_multi_sum_f64)
+    monkeypatch.setattr(rust, "groupby_multi_sum_f64_sorted", fake_groupby_multi_sum_f64)
 
     result = df.booster.groupby(["k1", "k2"], "val", "sum")
     assert len(result) == 0
@@ -188,6 +190,7 @@ def test_accessor_multi_key_empty_count_has_int64_values_and_preserves_index_dty
         return np.empty((0, 2), dtype=np.int64), np.empty((0,), dtype=np.float64)
 
     monkeypatch.setattr(rust, "groupby_multi_count_f64", fake_groupby_multi_count_f64)
+    monkeypatch.setattr(rust, "groupby_multi_count_f64_sorted", fake_groupby_multi_count_f64)
 
     result = df.booster.groupby(["k1", "k2"], "val", "count")
     assert len(result) == 0
