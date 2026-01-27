@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 import numpy as np
 import pandas as pd
 
-from ._config import rust_sort_enabled
+from ._config import force_pandas_sort_enabled
 from ._groupby_accel import (
     build_series_from_multi_result,
     build_series_from_single_result,
@@ -111,7 +111,7 @@ class BoosterSeriesGroupBy:
         by_cols = self._by_cols
         target = self._target
         sort = self._sort
-        rust_sorted = bool(sort) and rust_sort_enabled()
+        force_pandas_sort = bool(sort) and force_pandas_sort_enabled()
 
         val_col = self._df[target]
         if not isinstance(val_col, pd.Series):
@@ -132,12 +132,12 @@ class BoosterSeriesGroupBy:
                 values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
                 func_base = f"groupby_{agg}_f64"
 
-            rust_func, rust_sorted = select_rust_groupby_func(
+            rust_func, needs_python_sort = select_rust_groupby_func(
                 _rust,
                 func_base,
                 sort=sort,
                 n_rows=len(self._df),
-                rust_sorted=rust_sorted,
+                force_pandas_sort=force_pandas_sort,
             )
 
             result_keys, result_values = rust_func(keys, values)
@@ -150,7 +150,7 @@ class BoosterSeriesGroupBy:
                 index_dtype=key_dtype,
                 agg=agg,
                 sort=sort,
-                rust_sorted=rust_sorted,
+                needs_python_sort=needs_python_sort,
             )
         else:
             key_cols: list[pd.Series] = []
@@ -170,12 +170,12 @@ class BoosterSeriesGroupBy:
                 values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
                 func_base = f"groupby_multi_{agg}_f64"
 
-            rust_func, rust_sorted = select_rust_groupby_func(
+            rust_func, needs_python_sort = select_rust_groupby_func(
                 _rust,
                 func_base,
                 sort=sort,
                 n_rows=len(self._df),
-                rust_sorted=rust_sorted,
+                force_pandas_sort=force_pandas_sort,
             )
 
             keys_2d, result_values = rust_func(key_arrays, values)
@@ -188,7 +188,7 @@ class BoosterSeriesGroupBy:
                 name=val_col.name,
                 agg=agg,
                 sort=sort,
-                rust_sorted=rust_sorted,
+                needs_python_sort=needs_python_sort,
             )
 
     def _try_accelerate(self, agg: AggFunc) -> Series:

@@ -874,8 +874,8 @@ Examples:
   python benches/benchmark.py --samples 10                       # Adjust sample count
 
 Environment:
-  PANDAS_BOOSTER_RUST_SORT=1  # enable Rust-side sort=True (default for benchmark runs)
-  PANDAS_BOOSTER_RUST_SORT=0  # disable (use Python sort_index), for A/B comparison
+  PANDAS_BOOSTER_FORCE_PANDAS_SORT=1  # force Python sort_index() (panic button)
+  PANDAS_BOOSTER_FORCE_PANDAS_SORT=0  # use Rust-side sorting (default)
         """,
     )
     parser.add_argument(
@@ -910,16 +910,17 @@ Environment:
 
     args = parser.parse_args()
 
-    # Default to Rust-side sorting for sort=True benchmarks unless explicitly disabled.
+    # Default to Rust-side sorting for sort=True benchmarks unless explicitly forced off.
     if not args.worker:
-        os.environ.setdefault("PANDAS_BOOSTER_RUST_SORT", "1")
+        os.environ.setdefault("PANDAS_BOOSTER_FORCE_PANDAS_SORT", "0")
         print(
-            f"PANDAS_BOOSTER_RUST_SORT={os.environ.get('PANDAS_BOOSTER_RUST_SORT')}",
+            "PANDAS_BOOSTER_FORCE_PANDAS_SORT="
+            f"{os.environ.get('PANDAS_BOOSTER_FORCE_PANDAS_SORT')}",
             file=sys.stderr,
         )
         print(
             "Note: benchmarks default Rust-side sort=True unless you set "
-            "PANDAS_BOOSTER_RUST_SORT=0",
+            "PANDAS_BOOSTER_FORCE_PANDAS_SORT=1",
             file=sys.stderr,
         )
 

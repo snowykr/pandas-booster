@@ -15,25 +15,25 @@ def select_rust_groupby_func(
     *,
     sort: bool,
     n_rows: int,
-    rust_sorted: bool,
+    force_pandas_sort: bool,
 ) -> tuple[Callable[..., Any], bool]:
     """Resolve the Rust kernel for a groupby call.
 
-    Returns (callable, rust_sorted_effective).
+    Returns (callable, needs_python_sort).
     """
     if not sort:
         suffix = firstseen_suffix(sort=False, n_rows=n_rows)
         return getattr(rust, f"{func_base}{suffix}"), False
 
-    if rust_sorted:
-        try:
-            return getattr(rust, f"{func_base}_sorted"), True
-        except AttributeError:
-            # Python/Rust wheel mismatch (or older extension): fall back to the
-            # legacy path and let Python sort_index() handle ordering.
-            return getattr(rust, func_base), False
+    if force_pandas_sort:
+        return getattr(rust, func_base), True
 
-    return getattr(rust, func_base), False
+    try:
+        return getattr(rust, f"{func_base}_sorted"), False
+    except AttributeError:
+        # Python/Rust wheel mismatch (or older extension): fall back to the
+        # legacy path and let Python sort_index() handle ordering.
+        return getattr(rust, func_base), True
 
 
 def firstseen_suffix(*, sort: bool, n_rows: int) -> str:
@@ -86,7 +86,7 @@ def build_series_from_single_result(
     index_dtype: np.dtype,
     agg: str,
     sort: bool,
-    rust_sorted: bool = False,
+    needs_python_sort: bool = False,
 ) -> pd.Series:
     if keys_1d.ndim != 1:
         raise ValueError(f"keys_1d must be 1D, got ndim={keys_1d.ndim}")
@@ -113,7 +113,7 @@ def build_series_from_single_result(
     if agg == "count":
         result = result.astype(np.int64)
 
-    if sort and not rust_sorted:
+    if sort and needs_python_sort:
         result = result.sort_index()
     return result
 
@@ -127,7 +127,7 @@ def build_series_from_multi_result(
     name: Hashable | None,
     agg: str,
     sort: bool,
-    rust_sorted: bool = False,
+    needs_python_sort: bool = False,
 ) -> pd.Series:
     n_keys = len(by_cols)
 
@@ -157,6 +157,6 @@ def build_series_from_multi_result(
     if agg == "count":
         result = result.astype(np.int64)
 
-    if sort and not rust_sorted:
+    if sort and needs_python_sort:
         result = result.sort_index()
     return result

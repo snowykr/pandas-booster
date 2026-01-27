@@ -99,16 +99,18 @@ Performs a Rust-accelerated groupby aggregation.
 
 ### Configuration
 
-`pandas-booster` includes an emergency feature flag to control how `sort=True` is implemented.
+`pandas-booster` defaults to Rust-side sorting kernels for `sort=True`.
 
-- `PANDAS_BOOSTER_RUST_SORT=0` (default when unset): compute groupby in Rust, then call `Series.sort_index()` in Python to match Pandas ordering.
-- `PANDAS_BOOSTER_RUST_SORT=1`: use Rust-side sorting kernels for `sort=True` (skips Python `sort_index()`), intended for benchmarking and A/B comparison.
+Emergency toggle (panic button):
 
-This toggle is primarily for comparing pandas-booster implementations (Python-side vs Rust-side sorting); it changes where the `sort=True` cost is paid and may not be directly comparable to Pandas' internal execution.
+- `PANDAS_BOOSTER_FORCE_PANDAS_SORT=1`: force Python `Series.sort_index()` after Rust aggregation.
+- `PANDAS_BOOSTER_FORCE_PANDAS_SORT=0` (default when unset): keep Rust-side sorting.
+
+This toggle is intended for quick rollback if a Rust sorting bug is discovered. Forcing Python sort moves the `sort=True` cost to Pandas and is slower. If the Rust wheel is missing `*_sorted` kernels, pandas-booster also falls back to Python `sort_index()` automatically.
 
 Note: the Rust-side `sort=True` kernels allocate a permutation vector and perform an `O(G log G)` comparison sort over groups (G = number of groups). This can increase memory usage at very high cardinality.
 
-Note: the benchmark runner defaults `PANDAS_BOOSTER_RUST_SORT=1` unless you explicitly set `PANDAS_BOOSTER_RUST_SORT=0`.
+Note: the benchmark runner defaults `PANDAS_BOOSTER_FORCE_PANDAS_SORT=0`.
 
 **Returns**: 
 - Single key (`by="col"`): A `pd.Series` indexed by the unique keys.

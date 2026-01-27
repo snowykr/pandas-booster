@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Literal, cast
 import numpy as np
 import pandas as pd
 
-from ._config import rust_sort_enabled
+from ._config import force_pandas_sort_enabled
 from ._groupby_accel import (
     build_series_from_multi_result,
     build_series_from_single_result,
@@ -194,7 +194,7 @@ class BoosterAccessor:
     ) -> Series:
         rust = self._get_rust_module()
 
-        rust_sorted = bool(sort) and rust_sort_enabled()
+        force_pandas_sort = bool(sort) and force_pandas_sort_enabled()
 
         key_dtype = capture_key_numpy_dtype(key_col)
 
@@ -208,12 +208,12 @@ class BoosterAccessor:
             values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
             func_base = f"groupby_{agg}_f64"
 
-        rust_func, rust_sorted = select_rust_groupby_func(
+        rust_func, needs_python_sort = select_rust_groupby_func(
             rust,
             func_base,
             sort=sort,
             n_rows=len(self._df),
-            rust_sorted=rust_sorted,
+            force_pandas_sort=force_pandas_sort,
         )
 
         result_keys, result_values = rust_func(keys, values)
@@ -226,7 +226,7 @@ class BoosterAccessor:
             index_dtype=key_dtype,
             agg=agg,
             sort=sort,
-            rust_sorted=rust_sorted,
+            needs_python_sort=needs_python_sort,
         )
 
     def _rust_groupby_multi(
@@ -240,7 +240,7 @@ class BoosterAccessor:
     ) -> Series:
         rust = self._get_rust_module()
 
-        rust_sorted = bool(sort) and rust_sort_enabled()
+        force_pandas_sort = bool(sort) and force_pandas_sort_enabled()
 
         key_dtypes = [capture_key_numpy_dtype(key_cols[col]) for col in by_cols]
 
@@ -255,12 +255,12 @@ class BoosterAccessor:
             values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
             func_base = f"groupby_multi_{agg}_f64"
 
-        rust_func, rust_sorted = select_rust_groupby_func(
+        rust_func, needs_python_sort = select_rust_groupby_func(
             rust,
             func_base,
             sort=sort,
             n_rows=len(self._df),
-            rust_sorted=rust_sorted,
+            force_pandas_sort=force_pandas_sort,
         )
 
         keys_2d, result_values = rust_func(key_arrays, values)
@@ -273,7 +273,7 @@ class BoosterAccessor:
             name=val_col.name,
             agg=agg,
             sort=sort,
-            rust_sorted=rust_sorted,
+            needs_python_sort=needs_python_sort,
         )
 
     def thread_count(self) -> int:

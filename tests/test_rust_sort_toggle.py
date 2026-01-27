@@ -28,12 +28,9 @@ def _assert_groupby_series_equal(
     )
 
 
-@pytest.mark.parametrize("env_value", ["0", "1"])
 @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count"])
-def test_single_key_sort_true_matches_pandas_order(
-    monkeypatch: pytest.MonkeyPatch, env_value: str, agg: AggFunc
-):
-    monkeypatch.setenv("PANDAS_BOOSTER_RUST_SORT", env_value)
+def test_single_key_sort_true_matches_pandas_order(monkeypatch: pytest.MonkeyPatch, agg: AggFunc):
+    monkeypatch.delenv("PANDAS_BOOSTER_FORCE_PANDAS_SORT", raising=False)
 
     np.random.seed(123)
     n = 200_000
@@ -50,9 +47,8 @@ def test_single_key_sort_true_matches_pandas_order(
     _assert_groupby_series_equal(booster_result, pandas_result, agg=agg)
 
 
-@pytest.mark.parametrize("env_value", ["0", "1"])
-def test_single_key_uint32_boundary_order(monkeypatch: pytest.MonkeyPatch, env_value: str):
-    monkeypatch.setenv("PANDAS_BOOSTER_RUST_SORT", env_value)
+def test_single_key_uint32_boundary_order(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("PANDAS_BOOSTER_FORCE_PANDAS_SORT", raising=False)
 
     np.random.seed(456)
     n = 200_000
@@ -72,11 +68,8 @@ def test_single_key_uint32_boundary_order(monkeypatch: pytest.MonkeyPatch, env_v
 
 
 @pytest.mark.parametrize("n_keys", [2, 3, 4, 5, 10])
-@pytest.mark.parametrize("env_value", ["0", "1"])
-def test_multi_key_sort_true_matches_pandas_order(
-    monkeypatch: pytest.MonkeyPatch, n_keys: int, env_value: str
-):
-    monkeypatch.setenv("PANDAS_BOOSTER_RUST_SORT", env_value)
+def test_multi_key_sort_true_matches_pandas_order(monkeypatch: pytest.MonkeyPatch, n_keys: int):
+    monkeypatch.delenv("PANDAS_BOOSTER_FORCE_PANDAS_SORT", raising=False)
 
     np.random.seed(42 + n_keys)
     n = 200_000
@@ -94,9 +87,8 @@ def test_multi_key_sort_true_matches_pandas_order(
     _assert_groupby_series_equal(booster_result, pandas_result, agg="sum")
 
 
-@pytest.mark.parametrize("env_value", ["0", "1"])
-def test_multi_key_mixed_int_dtypes_preserved(monkeypatch: pytest.MonkeyPatch, env_value: str):
-    monkeypatch.setenv("PANDAS_BOOSTER_RUST_SORT", env_value)
+def test_multi_key_mixed_int_dtypes_preserved(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("PANDAS_BOOSTER_FORCE_PANDAS_SORT", raising=False)
 
     np.random.seed(999)
     n = 200_000
@@ -121,7 +113,7 @@ def test_multi_key_mixed_int_dtypes_preserved(monkeypatch: pytest.MonkeyPatch, e
     assert booster_result.index.levels[1].dtype == np.dtype(np.int64)
 
 
-def test_panic_button_no_python_sort_when_rust_sort_enabled(monkeypatch: pytest.MonkeyPatch):
+def test_default_no_python_sort_when_rust_sorted(monkeypatch: pytest.MonkeyPatch):
     import pandas_booster
 
     rust = getattr(pandas_booster, "_rust", None)
@@ -150,8 +142,7 @@ def test_panic_button_no_python_sort_when_rust_sort_enabled(monkeypatch: pytest.
         _ = (_self, _args, _kwargs)
         raise AssertionError("Series.sort_index() should not be called")
 
-    # Toggle ON: should NOT call sort_index()
-    monkeypatch.setenv("PANDAS_BOOSTER_RUST_SORT", "1")
+    monkeypatch.delenv("PANDAS_BOOSTER_FORCE_PANDAS_SORT", raising=False)
     monkeypatch.setattr(pd.Series, "sort_index", _raise_sort_index, raising=True)
 
     booster_on = cast(BoosterAccessor, df.booster).groupby(["k1", "k2"], "val", "sum", sort=True)
@@ -165,14 +156,51 @@ def test_panic_button_no_python_sort_when_rust_sort_enabled(monkeypatch: pytest.
 
     _assert_groupby_series_equal(proxy_on, pandas_on, agg="sum")
 
-    # Toggle OFF: should call sort_index() in Python builder (prove the panic button works)
-    monkeypatch.setenv("PANDAS_BOOSTER_RUST_SORT", "0")
+    # Force Python sort: should call sort_index() in Python builder.
+    monkeypatch.setenv("PANDAS_BOOSTER_FORCE_PANDAS_SORT", "1")
     with pytest.raises(AssertionError, match="should not be called"):
         cast(BoosterAccessor, df.booster).groupby(["k1", "k2"], "val", "sum", sort=True)
 
 
+@pytest.mark.parametrize("env_value", ["0", "false"])
+def test_force_pandas_sort_false_does_not_call_sort_index(
+    monkeypatch: pytest.MonkeyPatch, env_value: str
+):
+    import pandas_booster
+
+    rust = getattr(pandas_booster, "_rust", None)
+    if rust is None or not hasattr(rust, "groupby_multi_sum_f64_sorted"):
+        pytest.skip(
+            "Rust sorted kernels not available (likely Python/Rust wheel mismatch); "
+            "panic-button test requires groupby_multi_sum_f64_sorted"
+        )
+
+    np.random.seed(2026)
+    n = 200_000
+    df = pd.DataFrame(
+        {
+            "k1": np.random.randint(0, 100, size=n, dtype=np.int64),
+            "k2": np.random.randint(0, 50, size=n, dtype=np.int64),
+            "val": np.random.random(size=n).astype(np.float64),
+        }
+    )
+
+    pandas_on = df.groupby(["k1", "k2"], sort=True)["val"].sum()
+
+    def _raise_sort_index(_self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        _ = (_self, _args, _kwargs)
+        raise AssertionError("Series.sort_index() should not be called")
+
+    monkeypatch.setenv("PANDAS_BOOSTER_FORCE_PANDAS_SORT", env_value)
+    monkeypatch.setattr(pd.Series, "sort_index", _raise_sort_index, raising=True)
+
+    booster_on = cast(BoosterAccessor, df.booster).groupby(["k1", "k2"], "val", "sum", sort=True)
+
+    _assert_groupby_series_equal(booster_on, pandas_on, agg="sum")
+
+
 @pytest.mark.parametrize("agg", ["mean", "min", "max", "count"])
-def test_panic_button_no_python_sort_for_other_aggs_when_rust_sort_enabled(
+def test_default_no_python_sort_for_other_aggs_when_rust_sorted(
     monkeypatch: pytest.MonkeyPatch, agg: AggFunc
 ) -> None:
     import pandas_booster
@@ -204,7 +232,7 @@ def test_panic_button_no_python_sort_for_other_aggs_when_rust_sort_enabled(
         _ = (_self, _args, _kwargs)
         raise AssertionError("Series.sort_index() should not be called")
 
-    monkeypatch.setenv("PANDAS_BOOSTER_RUST_SORT", "1")
+    monkeypatch.delenv("PANDAS_BOOSTER_FORCE_PANDAS_SORT", raising=False)
     monkeypatch.setattr(pd.Series, "sort_index", _raise_sort_index, raising=True)
 
     booster_on = cast(BoosterAccessor, df.booster).groupby(["k1", "k2"], "val", agg, sort=True)
@@ -217,3 +245,22 @@ def test_panic_button_no_python_sort_for_other_aggs_when_rust_sort_enabled(
         pandas_booster.deactivate()
 
     _assert_groupby_series_equal(proxy_on, pandas_on, agg=agg)
+
+
+def test_force_pandas_sort_matches_pandas_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PANDAS_BOOSTER_FORCE_PANDAS_SORT", "1")
+
+    np.random.seed(2027)
+    n = 200_000
+    df = pd.DataFrame(
+        {
+            "k1": np.random.randint(0, 100, size=n, dtype=np.int64),
+            "k2": np.random.randint(0, 50, size=n, dtype=np.int64),
+            "val": np.random.random(size=n).astype(np.float64),
+        }
+    )
+
+    booster_on = cast(BoosterAccessor, df.booster).groupby(["k1", "k2"], "val", "sum", sort=True)
+    pandas_on = df.groupby(["k1", "k2"], sort=True)["val"].sum()
+
+    _assert_groupby_series_equal(booster_on, pandas_on, agg="sum")
