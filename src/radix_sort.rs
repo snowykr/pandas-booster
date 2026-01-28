@@ -137,9 +137,9 @@ pub(crate) fn radix_sort_perm_by_u64_for_indices_par(
 
         // Phase 2: global offsets
         let mut global = [0usize; 256];
-        for t in 0..counts.len() {
+        for local in &counts {
             for bkt in 0..256 {
-                global[bkt] += counts[t][bkt];
+                global[bkt] += local[bkt];
             }
         }
 
@@ -154,10 +154,10 @@ pub(crate) fn radix_sort_perm_by_u64_for_indices_par(
         // Phase 3: per-thread starting offsets (preserve chunk order)
         let mut thread_offsets: Vec<[usize; 256]> = vec![[0usize; 256]; counts.len()];
         let mut running = offsets;
-        for t in 0..counts.len() {
+        for (t, local) in counts.iter().enumerate() {
             thread_offsets[t] = running;
             for bkt in 0..256 {
-                running[bkt] += counts[t][bkt];
+                running[bkt] += local[bkt];
             }
         }
 

@@ -1661,8 +1661,8 @@ fn convert_multi_result_f64<'py>(
             (0..n_keys).map(|_| Vec::with_capacity(n_groups)).collect();
         for g in 0..n_groups {
             let base = g * n_keys;
-            for col in 0..n_keys {
-                key_cols[col].push(result.keys_flat[base + col]);
+            for (col, key_col) in key_cols.iter_mut().enumerate() {
+                key_col.push(result.keys_flat[base + col]);
             }
         }
 
@@ -1742,8 +1742,8 @@ fn convert_multi_result_i64<'py>(
             (0..n_keys).map(|_| Vec::with_capacity(n_groups)).collect();
         for g in 0..n_groups {
             let base = g * n_keys;
-            for col in 0..n_keys {
-                key_cols[col].push(result.keys_flat[base + col]);
+            for (col, key_col) in key_cols.iter_mut().enumerate() {
+                key_col.push(result.keys_flat[base + col]);
             }
         }
 
