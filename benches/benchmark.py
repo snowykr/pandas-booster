@@ -759,7 +759,10 @@ def run_benchmarks(
                 if backend_name not in backends:
                     continue
                 backend_data = backends[backend_name]
-                warm_stats: BenchmarkStats = backend_data["warm_stats"]
+                cold_stats = backend_data.get("cold_stats")
+                warm_stats = backend_data.get("warm_stats")
+                cold_str = "n/a" if cold_stats is None else cold_stats.format_ms(2)
+                warm_str = "n/a" if warm_stats is None else warm_stats.format_ms(2)
 
                 correctness_str = ""
                 if backend_name != "pandas":
@@ -768,7 +771,7 @@ def run_benchmarks(
                     if cold_corr != "not_checked" or warm_corr != "not_checked":
                         correctness_str = f" | Correctness: cold={cold_corr}, warm={warm_corr}"
 
-                print(f"  {backend_name:8s} | Warm: {warm_stats.format_ms(2)}{correctness_str}")
+                print(f"  {backend_name:8s} | Cold: {cold_str} | Warm: {warm_str}{correctness_str}")
 
     print("\n" + "=" * 90)
     print("Performance Tables")
