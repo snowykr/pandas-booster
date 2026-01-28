@@ -116,6 +116,11 @@ pub struct GroupByMultiResult<V> {
     pub keys_flat: Vec<i64>,
     pub n_keys: usize,
     pub values: Vec<V>,
+    /// Output ordering permutation.
+    ///
+    /// If present, output group at position `out_g` is sourced from group `perm[out_g]`.
+    /// If None, identity mapping is implied.
+    pub perm: Option<Vec<usize>>,
 }
 
 // -----------------------------------------------------------------------------
@@ -149,6 +154,7 @@ fn reorder_result_by_first_seen_u32<V: Copy>(
 
     result.keys_flat = sorted_keys;
     result.values = sorted_values;
+    result.perm = None;
 }
 
 fn reorder_result_by_first_seen_u64<V: Copy>(
@@ -178,6 +184,7 @@ fn reorder_result_by_first_seen_u64<V: Copy>(
 
     result.keys_flat = sorted_keys;
     result.values = sorted_values;
+    result.perm = None;
 }
 
 #[inline]
@@ -338,6 +345,7 @@ where
             keys_flat: Vec::new(),
             n_keys,
             values: Vec::new(),
+            perm: None,
         });
     }
 
@@ -433,6 +441,7 @@ where
         keys_flat,
         n_keys,
         values: out_values,
+        perm: None,
     })
 }
 
@@ -470,6 +479,7 @@ where
             keys_flat: Vec::new(),
             n_keys,
             values: Vec::new(),
+            perm: None,
         });
     }
 
@@ -589,6 +599,7 @@ where
         keys_flat,
         n_keys,
         values: out_values,
+        perm: None,
     };
     reorder_result_by_first_seen_u32(&mut result, &out_first_seen);
     Ok(result)
@@ -624,6 +635,7 @@ where
             keys_flat: Vec::new(),
             n_keys,
             values: Vec::new(),
+            perm: None,
         });
     }
 
@@ -739,6 +751,7 @@ where
         keys_flat,
         n_keys,
         values: out_values,
+        perm: None,
     };
     reorder_result_by_first_seen_u64(&mut result, &out_first_seen);
     Ok(result)
@@ -1000,6 +1013,7 @@ fn sort_groupby_result<V: Copy>(result: &mut GroupByMultiResult<V>) {
 
     result.keys_flat = sorted_keys;
     result.values = sorted_values;
+    result.perm = None;
 }
 
 fn radix_groupby_sorted<T, A, O>(
@@ -1166,6 +1180,26 @@ pub fn radix_groupby_count_i64_sorted(
 mod tests {
     use super::*;
 
+    #[inline]
+    fn src_group_for_out<V>(res: &GroupByMultiResult<V>, out_g: usize) -> usize {
+        match &res.perm {
+            Some(p) => p[out_g],
+            None => out_g,
+        }
+    }
+
+    #[inline]
+    fn key_at_out<V>(res: &GroupByMultiResult<V>, out_g: usize, col: usize) -> i64 {
+        let src_g = src_group_for_out(res, out_g);
+        res.keys_flat[src_g * res.n_keys + col]
+    }
+
+    #[inline]
+    fn value_at_out<V: Copy>(res: &GroupByMultiResult<V>, out_g: usize) -> V {
+        let src_g = src_group_for_out(res, out_g);
+        res.values[src_g]
+    }
+
     #[test]
     fn test_radix_groupby_sum_basic() {
         let col1 = vec![1i64, 2, 1, 2, 1];
@@ -1203,15 +1237,15 @@ mod tests {
         assert_eq!(result.values.len(), 2);
 
         // Verify sorted order: (1,10,100), (2,20,200)
-        assert_eq!(result.keys_flat[0], 1);
-        assert_eq!(result.keys_flat[1], 10);
-        assert_eq!(result.keys_flat[2], 100);
-        assert!((result.values[0] - 4.0).abs() < 1e-10);
+        assert_eq!(key_at_out(&result, 0, 0), 1);
+        assert_eq!(key_at_out(&result, 0, 1), 10);
+        assert_eq!(key_at_out(&result, 0, 2), 100);
+        assert!((value_at_out(&result, 0) - 4.0).abs() < 1e-10);
 
-        assert_eq!(result.keys_flat[3], 2);
-        assert_eq!(result.keys_flat[4], 20);
-        assert_eq!(result.keys_flat[5], 200);
-        assert!((result.values[1] - 2.0).abs() < 1e-10);
+        assert_eq!(key_at_out(&result, 1, 0), 2);
+        assert_eq!(key_at_out(&result, 1, 1), 20);
+        assert_eq!(key_at_out(&result, 1, 2), 200);
+        assert!((value_at_out(&result, 1) - 2.0).abs() < 1e-10);
     }
 
     #[test]
@@ -1227,16 +1261,16 @@ mod tests {
         assert_eq!(result.values.len(), 3);
 
         // Verify sorted order: (1,10), (2,20), (3,30)
-        assert_eq!(result.keys_flat[0], 1);
-        assert_eq!(result.keys_flat[1], 10);
-        assert_eq!(result.keys_flat[2], 2);
-        assert_eq!(result.keys_flat[3], 20);
-        assert_eq!(result.keys_flat[4], 3);
-        assert_eq!(result.keys_flat[5], 30);
+        assert_eq!(key_at_out(&result, 0, 0), 1);
+        assert_eq!(key_at_out(&result, 0, 1), 10);
+        assert_eq!(key_at_out(&result, 1, 0), 2);
+        assert_eq!(key_at_out(&result, 1, 1), 20);
+        assert_eq!(key_at_out(&result, 2, 0), 3);
+        assert_eq!(key_at_out(&result, 2, 1), 30);
 
-        assert!((result.values[0] - 6.0).abs() < 1e-10); // (1,10): 2+4
-        assert!((result.values[1] - 4.0).abs() < 1e-10); // (2,20): 1+3
-        assert!((result.values[2] - 5.0).abs() < 1e-10); // (3,30): 5
+        assert!((value_at_out(&result, 0) - 6.0).abs() < 1e-10); // (1,10): 2+4
+        assert!((value_at_out(&result, 1) - 4.0).abs() < 1e-10); // (2,20): 1+3
+        assert!((value_at_out(&result, 2) - 5.0).abs() < 1e-10); // (3,30): 5
     }
 
     #[test]
@@ -1252,19 +1286,19 @@ mod tests {
         assert_eq!(result.values.len(), 4);
 
         // Verify sorted order: (-3,3), (-1,4), (0,5), (2,6)
-        assert_eq!(result.keys_flat[0], -3);
-        assert_eq!(result.keys_flat[1], 3);
-        assert_eq!(result.keys_flat[2], -1);
-        assert_eq!(result.keys_flat[3], 4);
-        assert_eq!(result.keys_flat[4], 0);
-        assert_eq!(result.keys_flat[5], 5);
-        assert_eq!(result.keys_flat[6], 2);
-        assert_eq!(result.keys_flat[7], 6);
+        assert_eq!(key_at_out(&result, 0, 0), -3);
+        assert_eq!(key_at_out(&result, 0, 1), 3);
+        assert_eq!(key_at_out(&result, 1, 0), -1);
+        assert_eq!(key_at_out(&result, 1, 1), 4);
+        assert_eq!(key_at_out(&result, 2, 0), 0);
+        assert_eq!(key_at_out(&result, 2, 1), 5);
+        assert_eq!(key_at_out(&result, 3, 0), 2);
+        assert_eq!(key_at_out(&result, 3, 1), 6);
 
-        assert!((result.values[0] - 5.0).abs() < 1e-10);
-        assert!((result.values[1] - 6.0).abs() < 1e-10);
-        assert!((result.values[2] - 1.0).abs() < 1e-10);
-        assert!((result.values[3] - 3.0).abs() < 1e-10);
+        assert!((value_at_out(&result, 0) - 5.0).abs() < 1e-10);
+        assert!((value_at_out(&result, 1) - 6.0).abs() < 1e-10);
+        assert!((value_at_out(&result, 2) - 1.0).abs() < 1e-10);
+        assert!((value_at_out(&result, 3) - 3.0).abs() < 1e-10);
     }
 
     #[test]
@@ -1438,18 +1472,18 @@ mod tests {
         assert_eq!(result.values.len(), 2);
 
         // (1,10,100,1000) -> 1.0 + 3.0 = 4.0
-        assert_eq!(result.keys_flat[0], 1);
-        assert_eq!(result.keys_flat[1], 10);
-        assert_eq!(result.keys_flat[2], 100);
-        assert_eq!(result.keys_flat[3], 1000);
-        assert!((result.values[0] - 4.0).abs() < 1e-10);
+        assert_eq!(key_at_out(&result, 0, 0), 1);
+        assert_eq!(key_at_out(&result, 0, 1), 10);
+        assert_eq!(key_at_out(&result, 0, 2), 100);
+        assert_eq!(key_at_out(&result, 0, 3), 1000);
+        assert!((value_at_out(&result, 0) - 4.0).abs() < 1e-10);
 
         // (2,20,200,2000) -> 2.0
-        assert_eq!(result.keys_flat[4], 2);
-        assert_eq!(result.keys_flat[5], 20);
-        assert_eq!(result.keys_flat[6], 200);
-        assert_eq!(result.keys_flat[7], 2000);
-        assert!((result.values[1] - 2.0).abs() < 1e-10);
+        assert_eq!(key_at_out(&result, 1, 0), 2);
+        assert_eq!(key_at_out(&result, 1, 1), 20);
+        assert_eq!(key_at_out(&result, 1, 2), 200);
+        assert_eq!(key_at_out(&result, 1, 3), 2000);
+        assert!((value_at_out(&result, 1) - 2.0).abs() < 1e-10);
     }
 
     #[test]
@@ -1467,8 +1501,10 @@ mod tests {
         assert_eq!(result.n_keys, 5);
         assert_eq!(result.values.len(), 1);
 
-        assert_eq!(result.keys_flat, vec![1, 2, 3, 4, 5]);
-        assert!((result.values[0] - 3.0).abs() < 1e-10);
+        for (col, expected) in [1i64, 2, 3, 4, 5].into_iter().enumerate() {
+            assert_eq!(key_at_out(&result, 0, col), expected);
+        }
+        assert!((value_at_out(&result, 0) - 3.0).abs() < 1e-10);
     }
 
     #[test]
@@ -1500,12 +1536,12 @@ mod tests {
         assert_eq!(result.n_keys, 2);
         assert_eq!(result.values.len(), 2);
 
-        assert_eq!(result.keys_flat[0], 1);
-        assert_eq!(result.keys_flat[1], 10);
-        assert_eq!(result.values[0], 3);
+        assert_eq!(key_at_out(&result, 0, 0), 1);
+        assert_eq!(key_at_out(&result, 0, 1), 10);
+        assert_eq!(value_at_out(&result, 0), 3);
 
-        assert_eq!(result.keys_flat[2], 2);
-        assert_eq!(result.keys_flat[3], 20);
-        assert_eq!(result.values[1], 2);
+        assert_eq!(key_at_out(&result, 1, 0), 2);
+        assert_eq!(key_at_out(&result, 1, 1), 20);
+        assert_eq!(value_at_out(&result, 1), 2);
     }
 }

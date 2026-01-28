@@ -37,7 +37,8 @@ pub mod radix_sort;
 pub mod zero_copy;
 
 use groupby::{GroupByResultF64, GroupByResultI64};
-use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};
+use numpy::{IntoPyArray, PyArray1, PyArrayMethods, PyReadonlyArray1};
+use rayon::prelude::*;
 
 type MultiGroupByKeysReturn<'py> = Vec<Bound<'py, PyArray1<i64>>>;
 
@@ -1647,20 +1648,79 @@ fn convert_multi_result_f64<'py>(
     let n_keys = result.n_keys;
     debug_assert_eq!(result.keys_flat.len(), n_groups * n_keys);
 
-    let mut key_cols: Vec<Vec<i64>> = (0..n_keys).map(|_| Vec::with_capacity(n_groups)).collect();
-    for g in 0..n_groups {
-        let base = g * n_keys;
-        for col in 0..n_keys {
-            key_cols[col].push(result.keys_flat[base + col]);
-        }
+    let perm = result.perm.as_deref();
+    if let Some(p) = perm {
+        debug_assert_eq!(p.len(), n_groups);
     }
 
-    let key_arrays: Vec<Bound<'py, PyArray1<i64>>> = key_cols
-        .into_iter()
-        .map(|col| col.into_pyarray_bound(py))
+    // Fast path: for small outputs, build Rust Vec columns and transfer ownership into NumPy.
+    // This avoids per-element pointer writes and Rayon overhead.
+    const SMALL_DIRECT_THRESHOLD: usize = 200_000; // measured in elements (n_groups * n_keys)
+    if perm.is_none() && n_groups.saturating_mul(n_keys) <= SMALL_DIRECT_THRESHOLD {
+        let mut key_cols: Vec<Vec<i64>> =
+            (0..n_keys).map(|_| Vec::with_capacity(n_groups)).collect();
+        for g in 0..n_groups {
+            let base = g * n_keys;
+            for col in 0..n_keys {
+                key_cols[col].push(result.keys_flat[base + col]);
+            }
+        }
+
+        let key_arrays: Vec<Bound<'py, PyArray1<i64>>> = key_cols
+            .into_iter()
+            .map(|col| col.into_pyarray_bound(py))
+            .collect();
+        let values_1d = result.values.into_pyarray_bound(py);
+        return Ok((key_arrays, values_1d));
+    }
+
+    // Allocate output arrays under the GIL.
+    // SAFETY: we will initialize all elements before returning to Python.
+    let key_arrays: Vec<Bound<'py, PyArray1<i64>>> = (0..n_keys)
+        .map(|_| unsafe { PyArray1::<i64>::new_bound(py, n_groups, false) })
         .collect();
-    let values_1d = result.values.into_pyarray_bound(py);
-    Ok((key_arrays, values_1d))
+    let values_out = unsafe { PyArray1::<f64>::new_bound(py, n_groups, false) };
+
+    // Extract raw pointers under GIL; fill outside GIL.
+    let key_ptrs: Vec<usize> = key_arrays.iter().map(|a| a.data() as usize).collect();
+    let values_ptr: usize = values_out.data() as usize;
+
+    let keys_flat = result.keys_flat;
+    let values = result.values;
+
+    py.allow_threads(|| {
+        // Rayon overhead can dominate for small outputs.
+        if n_groups < 50_000 {
+            for out_g in 0..n_groups {
+                let src_g = perm.map_or(out_g, |p| p[out_g]);
+                let base = src_g * n_keys;
+                unsafe {
+                    *((values_ptr as *mut f64).add(out_g)) = values[src_g];
+                    for col in 0..n_keys {
+                        *((key_ptrs[col] as *mut i64).add(out_g)) = keys_flat[base + col];
+                    }
+                }
+            }
+            return;
+        }
+
+        let chunk = 1usize.max(n_groups / (rayon::current_num_threads() * 8));
+        (0..n_groups)
+            .into_par_iter()
+            .with_min_len(chunk)
+            .for_each(|out_g| {
+                let src_g = perm.map_or(out_g, |p| p[out_g]);
+                let base = src_g * n_keys;
+                unsafe {
+                    *((values_ptr as *mut f64).add(out_g)) = values[src_g];
+                    for col in 0..n_keys {
+                        *((key_ptrs[col] as *mut i64).add(out_g)) = keys_flat[base + col];
+                    }
+                }
+            });
+    });
+
+    Ok((key_arrays, values_out))
 }
 
 fn convert_multi_result_i64<'py>(
@@ -1671,20 +1731,73 @@ fn convert_multi_result_i64<'py>(
     let n_keys = result.n_keys;
     debug_assert_eq!(result.keys_flat.len(), n_groups * n_keys);
 
-    let mut key_cols: Vec<Vec<i64>> = (0..n_keys).map(|_| Vec::with_capacity(n_groups)).collect();
-    for g in 0..n_groups {
-        let base = g * n_keys;
-        for col in 0..n_keys {
-            key_cols[col].push(result.keys_flat[base + col]);
-        }
+    let perm = result.perm.as_deref();
+    if let Some(p) = perm {
+        debug_assert_eq!(p.len(), n_groups);
     }
 
-    let key_arrays: Vec<Bound<'py, PyArray1<i64>>> = key_cols
-        .into_iter()
-        .map(|col| col.into_pyarray_bound(py))
+    const SMALL_DIRECT_THRESHOLD: usize = 200_000; // measured in elements (n_groups * n_keys)
+    if perm.is_none() && n_groups.saturating_mul(n_keys) <= SMALL_DIRECT_THRESHOLD {
+        let mut key_cols: Vec<Vec<i64>> =
+            (0..n_keys).map(|_| Vec::with_capacity(n_groups)).collect();
+        for g in 0..n_groups {
+            let base = g * n_keys;
+            for col in 0..n_keys {
+                key_cols[col].push(result.keys_flat[base + col]);
+            }
+        }
+
+        let key_arrays: Vec<Bound<'py, PyArray1<i64>>> = key_cols
+            .into_iter()
+            .map(|col| col.into_pyarray_bound(py))
+            .collect();
+        let values_1d = result.values.into_pyarray_bound(py);
+        return Ok((key_arrays, values_1d));
+    }
+
+    let key_arrays: Vec<Bound<'py, PyArray1<i64>>> = (0..n_keys)
+        .map(|_| unsafe { PyArray1::<i64>::new_bound(py, n_groups, false) })
         .collect();
-    let values_1d = result.values.into_pyarray_bound(py);
-    Ok((key_arrays, values_1d))
+    let values_out = unsafe { PyArray1::<i64>::new_bound(py, n_groups, false) };
+
+    let key_ptrs: Vec<usize> = key_arrays.iter().map(|a| a.data() as usize).collect();
+    let values_ptr: usize = values_out.data() as usize;
+
+    let keys_flat = result.keys_flat;
+    let values = result.values;
+
+    py.allow_threads(|| {
+        if n_groups < 50_000 {
+            for out_g in 0..n_groups {
+                let src_g = perm.map_or(out_g, |p| p[out_g]);
+                let base = src_g * n_keys;
+                unsafe {
+                    *((values_ptr as *mut i64).add(out_g)) = values[src_g];
+                    for col in 0..n_keys {
+                        *((key_ptrs[col] as *mut i64).add(out_g)) = keys_flat[base + col];
+                    }
+                }
+            }
+            return;
+        }
+
+        let chunk = 1usize.max(n_groups / (rayon::current_num_threads() * 8));
+        (0..n_groups)
+            .into_par_iter()
+            .with_min_len(chunk)
+            .for_each(|out_g| {
+                let src_g = perm.map_or(out_g, |p| p[out_g]);
+                let base = src_g * n_keys;
+                unsafe {
+                    *((values_ptr as *mut i64).add(out_g)) = values[src_g];
+                    for col in 0..n_keys {
+                        *((key_ptrs[col] as *mut i64).add(out_g)) = keys_flat[base + col];
+                    }
+                }
+            });
+    });
+
+    Ok((key_arrays, values_out))
 }
 
 fn convert_multi_result<'py>(
