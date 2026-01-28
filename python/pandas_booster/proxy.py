@@ -178,10 +178,10 @@ class BoosterSeriesGroupBy:
                 force_pandas_sort=force_pandas_sort,
             )
 
-            keys_2d, result_values = rust_func(key_arrays, values)
+            keys_cols, result_values = rust_func(key_arrays, values)
 
             return build_series_from_multi_result(
-                np.asarray(keys_2d),
+                [np.asarray(col) for col in keys_cols],
                 np.asarray(result_values),
                 by_cols=by_cols,
                 key_dtypes=key_dtypes,
