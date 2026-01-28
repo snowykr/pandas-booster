@@ -14,7 +14,11 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 use std::collections::hash_map::Entry;
 
-use crate::radix_sort::{radix_sort_perm_by_u32, radix_sort_perm_by_u64};
+use crate::radix_sort::{
+    radix_sort_perm_by_i64_par, radix_sort_perm_by_u32, radix_sort_perm_by_u64,
+};
+
+const RADIX_SORT_THRESHOLD: usize = 2048;
 
 use crate::aggregation::{
     Aggregator, CountAggF64, CountAggI64, MaxAggF64, MaxAggI64, MeanAggF64, MeanAggI64, MinAggF64,
@@ -79,11 +83,13 @@ fn reorder_single_result_by_key(result: &mut GroupByResultF64) {
     let keys = &result.keys;
     let values = &result.values;
 
-    let mut perm: Vec<usize> = (0..keys.len()).collect();
-    // Groups are expected to be unique. The index tie-breaker ensures a total
-    // order (comparator never returns Equal), avoiding arbitrary reordering from
-    // the unstable parallel sort if duplicates ever appear.
-    perm.par_sort_unstable_by(|&i, &j| keys[i].cmp(&keys[j]).then(i.cmp(&j)));
+    let perm = if keys.len() < RADIX_SORT_THRESHOLD {
+        let mut perm: Vec<usize> = (0..keys.len()).collect();
+        perm.sort_unstable_by(|&i, &j| keys[i].cmp(&keys[j]).then(i.cmp(&j)));
+        perm
+    } else {
+        radix_sort_perm_by_i64_par(keys)
+    };
 
     let mut sorted_keys = Vec::with_capacity(keys.len());
     let mut sorted_values = Vec::with_capacity(values.len());
@@ -622,6 +628,20 @@ mod tests {
         assert!((result.values[0] - 11.0).abs() < 1e-10);
         assert!((result.values[1] - 100.0).abs() < 1e-10);
         assert!((result.values[2] - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_groupby_sorted_orders_negative_keys() {
+        let keys = vec![0, -1, 2, -3, -1];
+        let values = vec![1.0, 1.0, 1.0, 1.0, 2.0];
+        let result = parallel_groupby_sum_f64_sorted(&keys, &values).unwrap();
+
+        assert_eq!(result.keys, vec![-3, -1, 0, 2]);
+        assert_eq!(result.values.len(), 4);
+        assert!((result.values[0] - 1.0).abs() < 1e-10);
+        assert!((result.values[1] - 3.0).abs() < 1e-10);
+        assert!((result.values[2] - 1.0).abs() < 1e-10);
+        assert!((result.values[3] - 1.0).abs() < 1e-10);
     }
 
     #[test]

@@ -37,3 +37,7 @@ Thumbs.db
 # Benchmarking
 criterion/
 
+/.sisyphus/notepads/sort-true-optimization/issues.md
+/.sisyphus/notepads/sort-true-optimization/learnings.md
+/.sisyphus/plans/sort-true-optimization.md
+/.sisyphus/boulder.json

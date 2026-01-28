@@ -27,7 +27,12 @@ use crate::aggregation::{
     Aggregator, CountAggF64, CountAggI64, MaxAggF64, MaxAggI64, MeanAggF64, MeanAggI64, MinAggF64,
     MinAggI64, SumAggF64, SumAggI64,
 };
-use crate::radix_sort::{radix_sort_perm_by_u32, radix_sort_perm_by_u64};
+use crate::radix_sort::{
+    i64_to_sortable_u64, radix_sort_perm_by_u32, radix_sort_perm_by_u64,
+    radix_sort_perm_by_u64_for_indices_par,
+};
+
+const RADIX_SORT_THRESHOLD: usize = 2048;
 
 // CompositeKey is a fallback path. For the supported Python API (<= 10 key columns),
 // we specialize on FixedKey<N> for N=1..=10.
@@ -937,17 +942,25 @@ fn sort_groupby_result(result: &mut GroupByMultiResult) {
     let n_keys = result.n_keys;
     let n_groups = result.values.len();
 
-    let mut perm: Vec<usize> = (0..n_groups).collect();
     let keys_flat = &result.keys_flat;
+    let mut perm: Vec<usize> = (0..n_groups).collect();
 
-    perm.par_sort_unstable_by(|&i, &j| {
-        let k_i = &keys_flat[i * n_keys..(i + 1) * n_keys];
-        let k_j = &keys_flat[j * n_keys..(j + 1) * n_keys];
-        // Groups are expected to be unique. The index tie-breaker ensures a
-        // total order (comparator never returns Equal), avoiding arbitrary
-        // reordering from the unstable parallel sort if duplicates ever appear.
-        k_i.cmp(k_j).then(i.cmp(&j))
-    });
+    if n_groups < RADIX_SORT_THRESHOLD {
+        perm.sort_unstable_by(|&i, &j| {
+            let k_i = &keys_flat[i * n_keys..(i + 1) * n_keys];
+            let k_j = &keys_flat[j * n_keys..(j + 1) * n_keys];
+            k_i.cmp(k_j).then(i.cmp(&j))
+        });
+    } else {
+        for col in (0..n_keys).rev() {
+            let mut col_keys = Vec::with_capacity(n_groups);
+            for group in 0..n_groups {
+                let key = keys_flat[group * n_keys + col];
+                col_keys.push(i64_to_sortable_u64(key));
+            }
+            perm = radix_sort_perm_by_u64_for_indices_par(&col_keys, &perm);
+        }
+    }
 
     let mut sorted_keys = Vec::with_capacity(result.keys_flat.len());
     let mut sorted_values = Vec::with_capacity(result.values.len());
@@ -1195,6 +1208,34 @@ mod tests {
         assert!((result.values[0] - 6.0).abs() < 1e-10); // (1,10): 2+4
         assert!((result.values[1] - 4.0).abs() < 1e-10); // (2,20): 1+3
         assert!((result.values[2] - 5.0).abs() < 1e-10); // (3,30): 5
+    }
+
+    #[test]
+    fn test_radix_groupby_sorted_negative_keys() {
+        let col1 = vec![0i64, -1, 2, -1, -3];
+        let col2 = vec![5i64, 4, 6, 4, 3];
+        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+
+        let key_slices: Vec<&[i64]> = vec![&col1, &col2];
+        let result = radix_groupby_sum_f64_sorted(&key_slices, &values).unwrap();
+
+        assert_eq!(result.n_keys, 2);
+        assert_eq!(result.values.len(), 4);
+
+        // Verify sorted order: (-3,3), (-1,4), (0,5), (2,6)
+        assert_eq!(result.keys_flat[0], -3);
+        assert_eq!(result.keys_flat[1], 3);
+        assert_eq!(result.keys_flat[2], -1);
+        assert_eq!(result.keys_flat[3], 4);
+        assert_eq!(result.keys_flat[4], 0);
+        assert_eq!(result.keys_flat[5], 5);
+        assert_eq!(result.keys_flat[6], 2);
+        assert_eq!(result.keys_flat[7], 6);
+
+        assert!((result.values[0] - 5.0).abs() < 1e-10);
+        assert!((result.values[1] - 6.0).abs() < 1e-10);
+        assert!((result.values[2] - 1.0).abs() < 1e-10);
+        assert!((result.values[3] - 3.0).abs() < 1e-10);
     }
 
     #[test]
