@@ -24,75 +24,76 @@ use crate::radix_groupby::{
     radix_groupby_sum_i64_sorted,
 };
 
-pub use radix_groupby::GroupByMultiResult;
+pub type GroupByMultiResultF64 = radix_groupby::GroupByMultiResult<f64>;
+pub type GroupByMultiResultI64 = radix_groupby::GroupByMultiResult<i64>;
 
 pub fn multi_groupby_sum_f64(
     key_slices: &[&[i64]],
     values: &[f64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_sum_f64(key_slices, values).map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 pub fn multi_groupby_mean_f64(
     key_slices: &[&[i64]],
     values: &[f64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_mean_f64(key_slices, values).map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 pub fn multi_groupby_min_f64(
     key_slices: &[&[i64]],
     values: &[f64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_min_f64(key_slices, values).map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 pub fn multi_groupby_max_f64(
     key_slices: &[&[i64]],
     values: &[f64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_max_f64(key_slices, values).map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 pub fn multi_groupby_sum_i64(
     key_slices: &[&[i64]],
     values: &[i64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_sum_i64(key_slices, values).map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 pub fn multi_groupby_mean_i64(
     key_slices: &[&[i64]],
     values: &[i64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_mean_i64(key_slices, values).map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 pub fn multi_groupby_min_i64(
     key_slices: &[&[i64]],
     values: &[i64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_min_i64(key_slices, values).map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 pub fn multi_groupby_max_i64(
     key_slices: &[&[i64]],
     values: &[i64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_max_i64(key_slices, values).map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 pub fn multi_groupby_count_f64(
     key_slices: &[&[i64]],
     values: &[f64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultI64> {
     radix_groupby_count_f64(key_slices, values).map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 pub fn multi_groupby_count_i64(
     key_slices: &[&[i64]],
     values: &[i64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultI64> {
     radix_groupby_count_i64(key_slices, values).map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
@@ -103,7 +104,7 @@ pub fn multi_groupby_count_i64(
 pub fn multi_groupby_sum_f64_sorted(
     key_slices: &[&[i64]],
     values: &[f64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_sum_f64_sorted(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -111,7 +112,7 @@ pub fn multi_groupby_sum_f64_sorted(
 pub fn multi_groupby_mean_f64_sorted(
     key_slices: &[&[i64]],
     values: &[f64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_mean_f64_sorted(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -119,7 +120,7 @@ pub fn multi_groupby_mean_f64_sorted(
 pub fn multi_groupby_min_f64_sorted(
     key_slices: &[&[i64]],
     values: &[f64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_min_f64_sorted(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -127,7 +128,7 @@ pub fn multi_groupby_min_f64_sorted(
 pub fn multi_groupby_max_f64_sorted(
     key_slices: &[&[i64]],
     values: &[f64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_max_f64_sorted(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -135,7 +136,7 @@ pub fn multi_groupby_max_f64_sorted(
 pub fn multi_groupby_count_f64_sorted(
     key_slices: &[&[i64]],
     values: &[f64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultI64> {
     radix_groupby_count_f64_sorted(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -143,7 +144,7 @@ pub fn multi_groupby_count_f64_sorted(
 pub fn multi_groupby_sum_i64_sorted(
     key_slices: &[&[i64]],
     values: &[i64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_sum_i64_sorted(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -151,7 +152,7 @@ pub fn multi_groupby_sum_i64_sorted(
 pub fn multi_groupby_mean_i64_sorted(
     key_slices: &[&[i64]],
     values: &[i64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_mean_i64_sorted(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -159,7 +160,7 @@ pub fn multi_groupby_mean_i64_sorted(
 pub fn multi_groupby_min_i64_sorted(
     key_slices: &[&[i64]],
     values: &[i64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_min_i64_sorted(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -167,7 +168,7 @@ pub fn multi_groupby_min_i64_sorted(
 pub fn multi_groupby_max_i64_sorted(
     key_slices: &[&[i64]],
     values: &[i64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_max_i64_sorted(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -175,7 +176,7 @@ pub fn multi_groupby_max_i64_sorted(
 pub fn multi_groupby_count_i64_sorted(
     key_slices: &[&[i64]],
     values: &[i64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultI64> {
     radix_groupby_count_i64_sorted(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -187,7 +188,7 @@ pub fn multi_groupby_count_i64_sorted(
 pub fn multi_groupby_sum_f64_firstseen_u32(
     key_slices: &[&[i64]],
     values: &[f64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_sum_f64_firstseen_u32(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -195,7 +196,7 @@ pub fn multi_groupby_sum_f64_firstseen_u32(
 pub fn multi_groupby_mean_f64_firstseen_u32(
     key_slices: &[&[i64]],
     values: &[f64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_mean_f64_firstseen_u32(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -203,7 +204,7 @@ pub fn multi_groupby_mean_f64_firstseen_u32(
 pub fn multi_groupby_min_f64_firstseen_u32(
     key_slices: &[&[i64]],
     values: &[f64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_min_f64_firstseen_u32(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -211,7 +212,7 @@ pub fn multi_groupby_min_f64_firstseen_u32(
 pub fn multi_groupby_max_f64_firstseen_u32(
     key_slices: &[&[i64]],
     values: &[f64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_max_f64_firstseen_u32(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -219,7 +220,7 @@ pub fn multi_groupby_max_f64_firstseen_u32(
 pub fn multi_groupby_sum_i64_firstseen_u32(
     key_slices: &[&[i64]],
     values: &[i64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_sum_i64_firstseen_u32(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -227,7 +228,7 @@ pub fn multi_groupby_sum_i64_firstseen_u32(
 pub fn multi_groupby_mean_i64_firstseen_u32(
     key_slices: &[&[i64]],
     values: &[i64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_mean_i64_firstseen_u32(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -235,7 +236,7 @@ pub fn multi_groupby_mean_i64_firstseen_u32(
 pub fn multi_groupby_min_i64_firstseen_u32(
     key_slices: &[&[i64]],
     values: &[i64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_min_i64_firstseen_u32(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -243,7 +244,7 @@ pub fn multi_groupby_min_i64_firstseen_u32(
 pub fn multi_groupby_max_i64_firstseen_u32(
     key_slices: &[&[i64]],
     values: &[i64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_max_i64_firstseen_u32(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -251,7 +252,7 @@ pub fn multi_groupby_max_i64_firstseen_u32(
 pub fn multi_groupby_count_f64_firstseen_u32(
     key_slices: &[&[i64]],
     values: &[f64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultI64> {
     radix_groupby_count_f64_firstseen_u32(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -259,7 +260,7 @@ pub fn multi_groupby_count_f64_firstseen_u32(
 pub fn multi_groupby_count_i64_firstseen_u32(
     key_slices: &[&[i64]],
     values: &[i64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultI64> {
     radix_groupby_count_i64_firstseen_u32(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -267,7 +268,7 @@ pub fn multi_groupby_count_i64_firstseen_u32(
 pub fn multi_groupby_sum_f64_firstseen_u64(
     key_slices: &[&[i64]],
     values: &[f64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_sum_f64_firstseen_u64(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -275,7 +276,7 @@ pub fn multi_groupby_sum_f64_firstseen_u64(
 pub fn multi_groupby_mean_f64_firstseen_u64(
     key_slices: &[&[i64]],
     values: &[f64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_mean_f64_firstseen_u64(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -283,7 +284,7 @@ pub fn multi_groupby_mean_f64_firstseen_u64(
 pub fn multi_groupby_min_f64_firstseen_u64(
     key_slices: &[&[i64]],
     values: &[f64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_min_f64_firstseen_u64(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -291,7 +292,7 @@ pub fn multi_groupby_min_f64_firstseen_u64(
 pub fn multi_groupby_max_f64_firstseen_u64(
     key_slices: &[&[i64]],
     values: &[f64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_max_f64_firstseen_u64(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -299,7 +300,7 @@ pub fn multi_groupby_max_f64_firstseen_u64(
 pub fn multi_groupby_sum_i64_firstseen_u64(
     key_slices: &[&[i64]],
     values: &[i64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_sum_i64_firstseen_u64(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -307,7 +308,7 @@ pub fn multi_groupby_sum_i64_firstseen_u64(
 pub fn multi_groupby_mean_i64_firstseen_u64(
     key_slices: &[&[i64]],
     values: &[i64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_mean_i64_firstseen_u64(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -315,7 +316,7 @@ pub fn multi_groupby_mean_i64_firstseen_u64(
 pub fn multi_groupby_min_i64_firstseen_u64(
     key_slices: &[&[i64]],
     values: &[i64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_min_i64_firstseen_u64(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -323,7 +324,7 @@ pub fn multi_groupby_min_i64_firstseen_u64(
 pub fn multi_groupby_max_i64_firstseen_u64(
     key_slices: &[&[i64]],
     values: &[i64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultF64> {
     radix_groupby_max_i64_firstseen_u64(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -331,7 +332,7 @@ pub fn multi_groupby_max_i64_firstseen_u64(
 pub fn multi_groupby_count_f64_firstseen_u64(
     key_slices: &[&[i64]],
     values: &[f64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultI64> {
     radix_groupby_count_f64_firstseen_u64(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -339,7 +340,7 @@ pub fn multi_groupby_count_f64_firstseen_u64(
 pub fn multi_groupby_count_i64_firstseen_u64(
     key_slices: &[&[i64]],
     values: &[i64],
-) -> PyResult<GroupByMultiResult> {
+) -> PyResult<GroupByMultiResultI64> {
     radix_groupby_count_i64_firstseen_u64(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }

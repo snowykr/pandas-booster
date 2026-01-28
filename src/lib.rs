@@ -36,17 +36,45 @@ pub mod radix_groupby;
 pub mod radix_sort;
 pub mod zero_copy;
 
-use groupby::GroupByResultF64;
-use numpy::{IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, ToPyArray};
+use groupby::{GroupByResultF64, GroupByResultI64};
+use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};
 
-type MultiGroupByReturn<'py> = (Bound<'py, PyArray2<i64>>, Bound<'py, PyArray1<f64>>);
-type SingleGroupByReturn<'py> = (Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<f64>>);
+type MultiGroupByKeysReturn<'py> = Vec<Bound<'py, PyArray1<i64>>>;
+
+type MultiGroupByReturnF64<'py> = (MultiGroupByKeysReturn<'py>, Bound<'py, PyArray1<f64>>);
+type MultiGroupByReturnI64<'py> = (MultiGroupByKeysReturn<'py>, Bound<'py, PyArray1<i64>>);
+
+// Backwards-friendly aliases: most kernels still return f64 values.
+type MultiGroupByReturn<'py> = MultiGroupByReturnF64<'py>;
+
+type SingleGroupByReturnF64<'py> = (Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<f64>>);
+type SingleGroupByReturnI64<'py> = (Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>);
+
+// Backwards-friendly alias: most kernels still return f64 values.
+type SingleGroupByReturn<'py> = SingleGroupByReturnF64<'py>;
+
+fn convert_single_result_f64<'py>(
+    py: Python<'py>,
+    result: GroupByResultF64,
+) -> PyResult<SingleGroupByReturnF64<'py>> {
+    let GroupByResultF64 { keys, values } = result;
+    let keys_1d = keys.into_pyarray_bound(py);
+    let values_1d = values.into_pyarray_bound(py);
+    Ok((keys_1d, values_1d))
+}
 
 fn convert_single_result<'py>(
     py: Python<'py>,
     result: GroupByResultF64,
 ) -> PyResult<SingleGroupByReturn<'py>> {
-    let GroupByResultF64 { keys, values } = result;
+    convert_single_result_f64(py, result)
+}
+
+fn convert_single_result_i64<'py>(
+    py: Python<'py>,
+    result: GroupByResultI64,
+) -> PyResult<SingleGroupByReturnI64<'py>> {
+    let GroupByResultI64 { keys, values } = result;
     let keys_1d = keys.into_pyarray_bound(py);
     let values_1d = values.into_pyarray_bound(py);
     Ok((keys_1d, values_1d))
@@ -213,14 +241,14 @@ fn groupby_count_f64<'py>(
     py: Python<'py>,
     keys: PyReadonlyArray1<'py, i64>,
     values: PyReadonlyArray1<'py, f64>,
-) -> PyResult<SingleGroupByReturn<'py>> {
+) -> PyResult<SingleGroupByReturnI64<'py>> {
     let keys_slice = zero_copy::get_slice_i64(&keys)?;
     let values_slice = zero_copy::get_slice_f64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
     let result =
         py.allow_threads(|| groupby::parallel_groupby_count_f64(keys_slice, values_slice))?;
-    convert_single_result(py, result)
+    convert_single_result_i64(py, result)
 }
 
 /// Computes parallel groupby count for i64 values.
@@ -229,14 +257,14 @@ fn groupby_count_i64<'py>(
     py: Python<'py>,
     keys: PyReadonlyArray1<'py, i64>,
     values: PyReadonlyArray1<'py, i64>,
-) -> PyResult<SingleGroupByReturn<'py>> {
+) -> PyResult<SingleGroupByReturnI64<'py>> {
     let keys_slice = zero_copy::get_slice_i64(&keys)?;
     let values_slice = zero_copy::get_slice_i64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
     let result =
         py.allow_threads(|| groupby::parallel_groupby_count_i64(keys_slice, values_slice))?;
-    convert_single_result(py, result)
+    convert_single_result_i64(py, result)
 }
 
 // =============================================================================
@@ -308,14 +336,14 @@ fn groupby_count_f64_sorted<'py>(
     py: Python<'py>,
     keys: PyReadonlyArray1<'py, i64>,
     values: PyReadonlyArray1<'py, f64>,
-) -> PyResult<SingleGroupByReturn<'py>> {
+) -> PyResult<SingleGroupByReturnI64<'py>> {
     let keys_slice = zero_copy::get_slice_i64(&keys)?;
     let values_slice = zero_copy::get_slice_f64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
     let result =
         py.allow_threads(|| groupby::parallel_groupby_count_f64_sorted(keys_slice, values_slice))?;
-    convert_single_result(py, result)
+    convert_single_result_i64(py, result)
 }
 
 #[pyfunction]
@@ -383,14 +411,14 @@ fn groupby_count_i64_sorted<'py>(
     py: Python<'py>,
     keys: PyReadonlyArray1<'py, i64>,
     values: PyReadonlyArray1<'py, i64>,
-) -> PyResult<SingleGroupByReturn<'py>> {
+) -> PyResult<SingleGroupByReturnI64<'py>> {
     let keys_slice = zero_copy::get_slice_i64(&keys)?;
     let values_slice = zero_copy::get_slice_i64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
     let result =
         py.allow_threads(|| groupby::parallel_groupby_count_i64_sorted(keys_slice, values_slice))?;
-    convert_single_result(py, result)
+    convert_single_result_i64(py, result)
 }
 
 // =============================================================================
@@ -530,7 +558,7 @@ fn groupby_count_f64_firstseen_u32<'py>(
     py: Python<'py>,
     keys: PyReadonlyArray1<'py, i64>,
     values: PyReadonlyArray1<'py, f64>,
-) -> PyResult<SingleGroupByReturn<'py>> {
+) -> PyResult<SingleGroupByReturnI64<'py>> {
     let keys_slice = zero_copy::get_slice_i64(&keys)?;
     let values_slice = zero_copy::get_slice_f64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
@@ -538,7 +566,7 @@ fn groupby_count_f64_firstseen_u32<'py>(
     let result = py.allow_threads(|| {
         groupby::parallel_groupby_count_f64_firstseen_u32(keys_slice, values_slice)
     })?;
-    convert_single_result(py, result)
+    convert_single_result_i64(py, result)
 }
 
 #[pyfunction]
@@ -546,7 +574,7 @@ fn groupby_count_f64_firstseen_u64<'py>(
     py: Python<'py>,
     keys: PyReadonlyArray1<'py, i64>,
     values: PyReadonlyArray1<'py, f64>,
-) -> PyResult<SingleGroupByReturn<'py>> {
+) -> PyResult<SingleGroupByReturnI64<'py>> {
     let keys_slice = zero_copy::get_slice_i64(&keys)?;
     let values_slice = zero_copy::get_slice_f64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
@@ -554,7 +582,7 @@ fn groupby_count_f64_firstseen_u64<'py>(
     let result = py.allow_threads(|| {
         groupby::parallel_groupby_count_f64_firstseen_u64(keys_slice, values_slice)
     })?;
-    convert_single_result(py, result)
+    convert_single_result_i64(py, result)
 }
 
 #[pyfunction]
@@ -690,7 +718,7 @@ fn groupby_count_i64_firstseen_u32<'py>(
     py: Python<'py>,
     keys: PyReadonlyArray1<'py, i64>,
     values: PyReadonlyArray1<'py, i64>,
-) -> PyResult<SingleGroupByReturn<'py>> {
+) -> PyResult<SingleGroupByReturnI64<'py>> {
     let keys_slice = zero_copy::get_slice_i64(&keys)?;
     let values_slice = zero_copy::get_slice_i64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
@@ -698,7 +726,7 @@ fn groupby_count_i64_firstseen_u32<'py>(
     let result = py.allow_threads(|| {
         groupby::parallel_groupby_count_i64_firstseen_u32(keys_slice, values_slice)
     })?;
-    convert_single_result(py, result)
+    convert_single_result_i64(py, result)
 }
 
 #[pyfunction]
@@ -706,7 +734,7 @@ fn groupby_count_i64_firstseen_u64<'py>(
     py: Python<'py>,
     keys: PyReadonlyArray1<'py, i64>,
     values: PyReadonlyArray1<'py, i64>,
-) -> PyResult<SingleGroupByReturn<'py>> {
+) -> PyResult<SingleGroupByReturnI64<'py>> {
     let keys_slice = zero_copy::get_slice_i64(&keys)?;
     let values_slice = zero_copy::get_slice_i64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
@@ -714,7 +742,7 @@ fn groupby_count_i64_firstseen_u64<'py>(
     let result = py.allow_threads(|| {
         groupby::parallel_groupby_count_i64_firstseen_u64(keys_slice, values_slice)
     })?;
-    convert_single_result(py, result)
+    convert_single_result_i64(py, result)
 }
 
 /// Returns the minimum dataset size threshold for Rust acceleration.
@@ -946,7 +974,7 @@ fn groupby_multi_count_f64<'py>(
     py: Python<'py>,
     key_cols: Vec<PyReadonlyArray1<'py, i64>>,
     values: PyReadonlyArray1<'py, f64>,
-) -> PyResult<MultiGroupByReturn<'py>> {
+) -> PyResult<MultiGroupByReturnI64<'py>> {
     let values_slice = zero_copy::get_slice_f64(&values)?;
     let key_slices: Vec<&[i64]> = key_cols
         .iter()
@@ -959,7 +987,7 @@ fn groupby_multi_count_f64<'py>(
     let result =
         py.allow_threads(|| groupby_multi::multi_groupby_count_f64(&key_slices, values_slice))?;
 
-    convert_multi_result(py, result)
+    convert_multi_result_i64(py, result)
 }
 
 /// Multi-column groupby count for i64 values.
@@ -968,7 +996,7 @@ fn groupby_multi_count_i64<'py>(
     py: Python<'py>,
     key_cols: Vec<PyReadonlyArray1<'py, i64>>,
     values: PyReadonlyArray1<'py, i64>,
-) -> PyResult<MultiGroupByReturn<'py>> {
+) -> PyResult<MultiGroupByReturnI64<'py>> {
     let values_slice = zero_copy::get_slice_i64(&values)?;
     let key_slices: Vec<&[i64]> = key_cols
         .iter()
@@ -981,7 +1009,7 @@ fn groupby_multi_count_i64<'py>(
     let result =
         py.allow_threads(|| groupby_multi::multi_groupby_count_i64(&key_slices, values_slice))?;
 
-    convert_multi_result(py, result)
+    convert_multi_result_i64(py, result)
 }
 
 // =============================================================================
@@ -1083,7 +1111,7 @@ fn groupby_multi_count_f64_sorted<'py>(
     py: Python<'py>,
     key_cols: Vec<PyReadonlyArray1<'py, i64>>,
     values: PyReadonlyArray1<'py, f64>,
-) -> PyResult<MultiGroupByReturn<'py>> {
+) -> PyResult<MultiGroupByReturnI64<'py>> {
     let values_slice = zero_copy::get_slice_f64(&values)?;
     let key_slices: Vec<&[i64]> = key_cols
         .iter()
@@ -1097,7 +1125,7 @@ fn groupby_multi_count_f64_sorted<'py>(
         groupby_multi::multi_groupby_count_f64_sorted(&key_slices, values_slice)
     })?;
 
-    convert_multi_result(py, result)
+    convert_multi_result_i64(py, result)
 }
 
 /// Multi-column groupby sum for i64 values (sorted by key tuple).
@@ -1195,7 +1223,7 @@ fn groupby_multi_count_i64_sorted<'py>(
     py: Python<'py>,
     key_cols: Vec<PyReadonlyArray1<'py, i64>>,
     values: PyReadonlyArray1<'py, i64>,
-) -> PyResult<MultiGroupByReturn<'py>> {
+) -> PyResult<MultiGroupByReturnI64<'py>> {
     let values_slice = zero_copy::get_slice_i64(&values)?;
     let key_slices: Vec<&[i64]> = key_cols
         .iter()
@@ -1209,7 +1237,7 @@ fn groupby_multi_count_i64_sorted<'py>(
         groupby_multi::multi_groupby_count_i64_sorted(&key_slices, values_slice)
     })?;
 
-    convert_multi_result(py, result)
+    convert_multi_result_i64(py, result)
 }
 
 #[pyfunction]
@@ -1377,7 +1405,7 @@ fn groupby_multi_count_f64_firstseen_u32<'py>(
     py: Python<'py>,
     key_cols: Vec<PyReadonlyArray1<'py, i64>>,
     values: PyReadonlyArray1<'py, f64>,
-) -> PyResult<MultiGroupByReturn<'py>> {
+) -> PyResult<MultiGroupByReturnI64<'py>> {
     let values_slice = zero_copy::get_slice_f64(&values)?;
     let key_slices: Vec<&[i64]> = key_cols
         .iter()
@@ -1389,7 +1417,7 @@ fn groupby_multi_count_f64_firstseen_u32<'py>(
     let result = py.allow_threads(|| {
         groupby_multi::multi_groupby_count_f64_firstseen_u32(&key_slices, values_slice)
     })?;
-    convert_multi_result(py, result)
+    convert_multi_result_i64(py, result)
 }
 
 #[pyfunction]
@@ -1397,7 +1425,7 @@ fn groupby_multi_count_f64_firstseen_u64<'py>(
     py: Python<'py>,
     key_cols: Vec<PyReadonlyArray1<'py, i64>>,
     values: PyReadonlyArray1<'py, f64>,
-) -> PyResult<MultiGroupByReturn<'py>> {
+) -> PyResult<MultiGroupByReturnI64<'py>> {
     let values_slice = zero_copy::get_slice_f64(&values)?;
     let key_slices: Vec<&[i64]> = key_cols
         .iter()
@@ -1409,7 +1437,7 @@ fn groupby_multi_count_f64_firstseen_u64<'py>(
     let result = py.allow_threads(|| {
         groupby_multi::multi_groupby_count_f64_firstseen_u64(&key_slices, values_slice)
     })?;
-    convert_multi_result(py, result)
+    convert_multi_result_i64(py, result)
 }
 
 #[pyfunction]
@@ -1577,7 +1605,7 @@ fn groupby_multi_count_i64_firstseen_u32<'py>(
     py: Python<'py>,
     key_cols: Vec<PyReadonlyArray1<'py, i64>>,
     values: PyReadonlyArray1<'py, i64>,
-) -> PyResult<MultiGroupByReturn<'py>> {
+) -> PyResult<MultiGroupByReturnI64<'py>> {
     let values_slice = zero_copy::get_slice_i64(&values)?;
     let key_slices: Vec<&[i64]> = key_cols
         .iter()
@@ -1589,7 +1617,7 @@ fn groupby_multi_count_i64_firstseen_u32<'py>(
     let result = py.allow_threads(|| {
         groupby_multi::multi_groupby_count_i64_firstseen_u32(&key_slices, values_slice)
     })?;
-    convert_multi_result(py, result)
+    convert_multi_result_i64(py, result)
 }
 
 #[pyfunction]
@@ -1597,7 +1625,7 @@ fn groupby_multi_count_i64_firstseen_u64<'py>(
     py: Python<'py>,
     key_cols: Vec<PyReadonlyArray1<'py, i64>>,
     values: PyReadonlyArray1<'py, i64>,
-) -> PyResult<MultiGroupByReturn<'py>> {
+) -> PyResult<MultiGroupByReturnI64<'py>> {
     let values_slice = zero_copy::get_slice_i64(&values)?;
     let key_slices: Vec<&[i64]> = key_cols
         .iter()
@@ -1608,53 +1636,62 @@ fn groupby_multi_count_i64_firstseen_u64<'py>(
     let result = py.allow_threads(|| {
         groupby_multi::multi_groupby_count_i64_firstseen_u64(&key_slices, values_slice)
     })?;
-    convert_multi_result(py, result)
+    convert_multi_result_i64(py, result)
 }
 
-/// Convert GroupByMultiResult to (PyArray2<i64>, PyArray1<f64>).
-fn convert_multi_result<'py>(
+fn convert_multi_result_f64<'py>(
     py: Python<'py>,
-    result: groupby_multi::GroupByMultiResult,
-) -> PyResult<MultiGroupByReturn<'py>> {
+    result: groupby_multi::GroupByMultiResultF64,
+) -> PyResult<MultiGroupByReturnF64<'py>> {
     let n_groups = result.values.len();
     let n_keys = result.n_keys;
+    debug_assert_eq!(result.keys_flat.len(), n_groups * n_keys);
 
-    // Create 2D array for keys: shape (n_groups, n_keys)
-    let keys_2d = if n_groups > 0 {
-        // Safety invariant: keys_flat must have exactly n_groups * n_keys elements.
-        // This must be enforced in release as well, since we use unsafe raw copies below.
-        let expected_len = n_groups.checked_mul(n_keys).ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err("n_groups * n_keys overflow")
-        })?;
-        if result.keys_flat.len() != expected_len {
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-                "keys_flat length {} does not match expected {} (n_groups={} * n_keys={})",
-                result.keys_flat.len(),
-                expected_len,
-                n_groups,
-                n_keys
-            )));
+    let mut key_cols: Vec<Vec<i64>> = (0..n_keys).map(|_| Vec::with_capacity(n_groups)).collect();
+    for g in 0..n_groups {
+        let base = g * n_keys;
+        for col in 0..n_keys {
+            key_cols[col].push(result.keys_flat[base + col]);
         }
+    }
 
-        // Reshape flat keys to 2D
-        // SAFETY: We verified keys_flat.len() == n_groups * n_keys above.
-        // The PyArray2 is created with shape [n_groups, n_keys] which has the same total
-        // element count, so the copy is within bounds.
-        unsafe {
-            let arr = PyArray2::new_bound(py, [n_groups, n_keys], false);
-            let ptr = arr.as_raw_array_mut().as_mut_ptr();
-            std::ptr::copy_nonoverlapping(result.keys_flat.as_ptr(), ptr, result.keys_flat.len());
-            arr
+    let key_arrays: Vec<Bound<'py, PyArray1<i64>>> = key_cols
+        .into_iter()
+        .map(|col| col.into_pyarray_bound(py))
+        .collect();
+    let values_1d = result.values.into_pyarray_bound(py);
+    Ok((key_arrays, values_1d))
+}
+
+fn convert_multi_result_i64<'py>(
+    py: Python<'py>,
+    result: groupby_multi::GroupByMultiResultI64,
+) -> PyResult<MultiGroupByReturnI64<'py>> {
+    let n_groups = result.values.len();
+    let n_keys = result.n_keys;
+    debug_assert_eq!(result.keys_flat.len(), n_groups * n_keys);
+
+    let mut key_cols: Vec<Vec<i64>> = (0..n_keys).map(|_| Vec::with_capacity(n_groups)).collect();
+    for g in 0..n_groups {
+        let base = g * n_keys;
+        for col in 0..n_keys {
+            key_cols[col].push(result.keys_flat[base + col]);
         }
-    } else {
-        // Empty result
-        // SAFETY: the array is zero-length (no elements to initialize).
-        unsafe { PyArray2::new_bound(py, [0, n_keys], false) }
-    };
+    }
 
-    let values_1d = result.values.to_pyarray_bound(py);
+    let key_arrays: Vec<Bound<'py, PyArray1<i64>>> = key_cols
+        .into_iter()
+        .map(|col| col.into_pyarray_bound(py))
+        .collect();
+    let values_1d = result.values.into_pyarray_bound(py);
+    Ok((key_arrays, values_1d))
+}
 
-    Ok((keys_2d, values_1d))
+fn convert_multi_result<'py>(
+    py: Python<'py>,
+    result: groupby_multi::GroupByMultiResultF64,
+) -> PyResult<MultiGroupByReturn<'py>> {
+    convert_multi_result_f64(py, result)
 }
 
 #[pymodule]

@@ -305,7 +305,7 @@ pub struct CountAggF64 {
     pub count: u64,
 }
 
-impl Aggregator<f64, f64> for CountAggF64 {
+impl Aggregator<f64, i64> for CountAggF64 {
     fn init() -> Self {
         Self { count: 0 }
     }
@@ -320,8 +320,8 @@ impl Aggregator<f64, f64> for CountAggF64 {
         self.count += other.count;
     }
 
-    fn finalize(&self) -> f64 {
-        self.count as f64
+    fn finalize(&self) -> i64 {
+        self.count as i64
     }
 }
 
@@ -331,7 +331,7 @@ pub struct CountAggI64 {
     pub count: u64,
 }
 
-impl Aggregator<i64, f64> for CountAggI64 {
+impl Aggregator<i64, i64> for CountAggI64 {
     fn init() -> Self {
         Self { count: 0 }
     }
@@ -344,8 +344,8 @@ impl Aggregator<i64, f64> for CountAggI64 {
         self.count += other.count;
     }
 
-    fn finalize(&self) -> f64 {
-        self.count as f64
+    fn finalize(&self) -> i64 {
+        self.count as i64
     }
 }
 
@@ -509,7 +509,7 @@ mod tests {
         agg.update(1.0);
         agg.update(f64::NAN);
         agg.update(2.0);
-        assert!((agg.finalize() - 2.0).abs() < 1e-10);
+        assert_eq!(agg.finalize(), 2);
     }
 
     #[test]
@@ -517,7 +517,7 @@ mod tests {
         let mut agg = CountAggF64::init();
         agg.update(f64::NAN);
         agg.update(f64::NAN);
-        assert!((agg.finalize() - 0.0).abs() < 1e-10);
+        assert_eq!(agg.finalize(), 0);
     }
 
     #[test]
@@ -526,7 +526,7 @@ mod tests {
         agg.update(1);
         agg.update(2);
         agg.update(3);
-        assert!((agg.finalize() - 3.0).abs() < 1e-10);
+        assert_eq!(agg.finalize(), 3);
     }
 
     #[test]
@@ -539,6 +539,6 @@ mod tests {
         agg2.update(3.0);
 
         agg1.merge(agg2);
-        assert!((agg1.finalize() - 3.0).abs() < 1e-10);
+        assert_eq!(agg1.finalize(), 3);
     }
 }
