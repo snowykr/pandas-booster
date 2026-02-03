@@ -112,6 +112,13 @@ Note: the Rust-side `sort=True` kernels allocate a permutation vector and perfor
 
 Note: the benchmark runner defaults `PANDAS_BOOSTER_FORCE_PANDAS_SORT=0`.
 
+ABI skew controls:
+
+- `PANDAS_BOOSTER_STRICT_ABI=1`: treat detected ABI skew as a hard error (no fallback).
+- `PANDAS_BOOSTER_STRICT_ABI=0` / unset (default): fall back to pandas on detected ABI skew.
+- `PANDAS_BOOSTER_ABI_SKEW_NOTICE=0`: disable ABI-skew warnings.
+- `PANDAS_BOOSTER_ABI_SKEW_NOTICE` unset / truthy (`1/true/yes/on`): enable ABI-skew warnings (default).
+
 **Returns**: 
 - Single key (`by="col"`): A `pd.Series` indexed by the unique keys.
 - Multiple keys (`by=["col1", "col2"]`): A `pd.Series` with a `pd.MultiIndex`.

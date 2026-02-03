@@ -793,7 +793,8 @@ fn validate_multi_inputs(key_lengths: &[usize], values_len: usize) -> PyResult<(
 }
 
 /// Multi-column groupby sum for f64 values.
-/// Returns (keys_2d, values_1d) where keys_2d is shape (n_groups, n_keys).
+/// Returns (keys_cols, values_1d) where keys_cols is a list of n_keys 1D arrays
+/// (each length n_groups). Older extensions returned a single 2D array.
 #[pyfunction]
 fn groupby_multi_sum_f64<'py>(
     py: Python<'py>,

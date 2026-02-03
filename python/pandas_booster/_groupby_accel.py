@@ -149,7 +149,7 @@ def build_series_from_multi_result(
         return pd.Series([], index=idx, name=name, dtype=out_dtype)
 
     # Cast each level array BEFORE MultiIndex construction to ensure level dtype preservation.
-    # keys_cols is already per-column 1D (contiguous) from Rust.
+    # keys_cols is expected to be per-column 1D arrays (from Rust or normalization).
     index_arrays: list[np.ndarray] = []
     for i in range(n_keys):
         arr = np.asarray(keys_cols[i])
