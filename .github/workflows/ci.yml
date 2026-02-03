@@ -41,7 +41,7 @@ jobs:
         run: cargo test
 
   python-typecheck:
-    name: Python Typecheck (basedpyright)
+    name: Python Typecheck (basedpyright, ruff)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
