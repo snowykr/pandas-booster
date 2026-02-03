@@ -1,12 +1,39 @@
 from __future__ import annotations
 
-from collections.abc import Hashable
-from typing import Literal
+from collections.abc import Callable, Hashable
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 
 AggFunc = Literal["sum", "mean", "min", "max", "count"]
+
+
+def select_rust_groupby_func(
+    rust: Any,
+    func_base: str,
+    *,
+    sort: bool,
+    n_rows: int,
+    force_pandas_sort: bool,
+) -> tuple[Callable[..., Any], bool]:
+    """Resolve the Rust kernel for a groupby call.
+
+    Returns (callable, needs_python_sort).
+    """
+    if not sort:
+        suffix = firstseen_suffix(sort=False, n_rows=n_rows)
+        return getattr(rust, f"{func_base}{suffix}"), False
+
+    if force_pandas_sort:
+        return getattr(rust, func_base), True
+
+    try:
+        return getattr(rust, f"{func_base}_sorted"), False
+    except AttributeError:
+        # Python/Rust wheel mismatch (or older extension): fall back to the
+        # legacy path and let Python sort_index() handle ordering.
+        return getattr(rust, func_base), True
 
 
 def firstseen_suffix(*, sort: bool, n_rows: int) -> str:
@@ -59,6 +86,7 @@ def build_series_from_single_result(
     index_dtype: np.dtype,
     agg: str,
     sort: bool,
+    needs_python_sort: bool = False,
 ) -> pd.Series:
     if keys_1d.ndim != 1:
         raise ValueError(f"keys_1d must be 1D, got ndim={keys_1d.ndim}")
@@ -78,20 +106,20 @@ def build_series_from_single_result(
     idx = pd.Index(keys_arr, dtype=index_dtype, name=index_name, copy=False)
 
     values_arr = np.asarray(result_values)
-    if agg != "count":
+    if agg == "count":
+        values_arr = values_arr.astype(np.int64, copy=False)
+    else:
         values_arr = values_arr.astype(np.float64, copy=False)
 
     result = pd.Series(values_arr, index=idx, name=name)
-    if agg == "count":
-        result = result.astype(np.int64)
 
-    if sort:
+    if sort and needs_python_sort:
         result = result.sort_index()
     return result
 
 
 def build_series_from_multi_result(
-    keys_2d: np.ndarray,
+    keys_cols: list[np.ndarray],
     result_values: np.ndarray,
     *,
     by_cols: list[str],
@@ -99,19 +127,21 @@ def build_series_from_multi_result(
     name: Hashable | None,
     agg: str,
     sort: bool,
+    needs_python_sort: bool = False,
 ) -> pd.Series:
     n_keys = len(by_cols)
 
     if len(key_dtypes) != n_keys:
         raise ValueError(f"key_dtypes length mismatch: expected {n_keys}, got {len(key_dtypes)}")
 
-    if keys_2d.ndim != 2:
-        raise ValueError(f"keys_2d must be 2D, got ndim={keys_2d.ndim}")
+    if len(keys_cols) != n_keys:
+        raise ValueError(f"keys_cols length mismatch: expected {n_keys}, got {len(keys_cols)}")
 
-    if keys_2d.shape[1] != n_keys:
-        raise ValueError(f"keys_2d column mismatch: expected {n_keys}, got {keys_2d.shape[1]}")
+    if result_values.ndim != 1:
+        raise ValueError(f"result_values must be 1D, got ndim={result_values.ndim}")
 
-    if keys_2d.shape[0] == 0:
+    n_groups = result_values.shape[0]
+    if n_groups == 0:
         empty_arrays = [np.array([], dtype=key_dtypes[i]) for i in range(n_keys)]
         idx = pd.MultiIndex.from_arrays(empty_arrays, names=by_cols)
 
@@ -119,15 +149,27 @@ def build_series_from_multi_result(
         return pd.Series([], index=idx, name=name, dtype=out_dtype)
 
     # Cast each level array BEFORE MultiIndex construction to ensure level dtype preservation.
-    index_arrays = [
-        np.ascontiguousarray(keys_2d[:, i]).astype(key_dtypes[i], copy=False) for i in range(n_keys)
-    ]
+    # keys_cols is expected to be per-column 1D arrays (from Rust or normalization).
+    index_arrays: list[np.ndarray] = []
+    for i in range(n_keys):
+        arr = np.asarray(keys_cols[i])
+        if arr.ndim != 1:
+            raise ValueError(f"keys_cols[{i}] must be 1D, got ndim={arr.ndim}")
+        if arr.shape[0] != n_groups:
+            raise ValueError(
+                f"keys_cols[{i}] length {arr.shape[0]} != result_values length {n_groups}"
+            )
+        index_arrays.append(arr.astype(key_dtypes[i], copy=False))
     idx = pd.MultiIndex.from_arrays(index_arrays, names=by_cols)
 
-    result = pd.Series(result_values, index=idx, name=name)
+    values_arr = np.asarray(result_values)
     if agg == "count":
-        result = result.astype(np.int64)
+        values_arr = values_arr.astype(np.int64, copy=False)
+    else:
+        values_arr = values_arr.astype(np.float64, copy=False)
 
-    if sort:
+    result = pd.Series(values_arr, index=idx, name=name)
+
+    if sort and needs_python_sort:
         result = result.sort_index()
     return result

@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -58,8 +59,8 @@ except ImportError:
 BACKEND_DISPLAY_ORDER: tuple[str, ...] = ("pandas", "polars", "booster")
 
 sys.path.insert(0, str(Path(__file__).parent))
-from bench_utils import BenchmarkStats, run_cold_warm_benchmark
-from datasets import PRESETS, generate_multi_key_dataset, get_dataset_info
+from bench_utils import BenchmarkStats, run_cold_warm_benchmark  # noqa: E402
+from datasets import PRESETS, generate_multi_key_dataset, get_dataset_info  # noqa: E402
 
 if TYPE_CHECKING:
     from typing import Literal
@@ -758,7 +759,10 @@ def run_benchmarks(
                 if backend_name not in backends:
                     continue
                 backend_data = backends[backend_name]
-                warm_stats: BenchmarkStats = backend_data["warm_stats"]
+                cold_stats = backend_data.get("cold_stats")
+                warm_stats = backend_data.get("warm_stats")
+                cold_str = "n/a" if cold_stats is None else cold_stats.format_ms(2)
+                warm_str = "n/a" if warm_stats is None else warm_stats.format_ms(2)
 
                 correctness_str = ""
                 if backend_name != "pandas":
@@ -767,7 +771,7 @@ def run_benchmarks(
                     if cold_corr != "not_checked" or warm_corr != "not_checked":
                         correctness_str = f" | Correctness: cold={cold_corr}, warm={warm_corr}"
 
-                print(f"  {backend_name:8s} | Warm: {warm_stats.format_ms(2)}{correctness_str}")
+                print(f"  {backend_name:8s} | Cold: {cold_str} | Warm: {warm_str}{correctness_str}")
 
     print("\n" + "=" * 90)
     print("Performance Tables")
@@ -871,6 +875,10 @@ Examples:
   python benches/benchmark.py --cardinality high --sort-mode unsorted  # Combine
   python benches/benchmark.py --output results.md                # Save results
   python benches/benchmark.py --samples 10                       # Adjust sample count
+
+Environment:
+  PANDAS_BOOSTER_FORCE_PANDAS_SORT=1  # force Python sort_index() (panic button)
+  PANDAS_BOOSTER_FORCE_PANDAS_SORT=0  # use Rust-side sorting (default)
         """,
     )
     parser.add_argument(
@@ -904,6 +912,20 @@ Examples:
     )
 
     args = parser.parse_args()
+
+    # Default to Rust-side sorting for sort=True benchmarks unless explicitly forced off.
+    if not args.worker:
+        os.environ.setdefault("PANDAS_BOOSTER_FORCE_PANDAS_SORT", "0")
+        print(
+            "PANDAS_BOOSTER_FORCE_PANDAS_SORT="
+            f"{os.environ.get('PANDAS_BOOSTER_FORCE_PANDAS_SORT')}",
+            file=sys.stderr,
+        )
+        print(
+            "Note: benchmarks default Rust-side sort=True unless you set "
+            "PANDAS_BOOSTER_FORCE_PANDAS_SORT=1",
+            file=sys.stderr,
+        )
 
     if args.worker:
         worker_args = json.loads(args.worker)

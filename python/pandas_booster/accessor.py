@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+# NOTE: Keep this module lightweight; it is on the hot path for groupby acceleration.
 from collections.abc import Sequence
 from types import ModuleType
 from typing import TYPE_CHECKING, Literal, cast
@@ -7,14 +8,9 @@ from typing import TYPE_CHECKING, Literal, cast
 import numpy as np
 import pandas as pd
 
-from ._groupby_accel import (
-    build_series_from_multi_result,
-    build_series_from_single_result,
-    capture_key_numpy_dtype,
-    firstseen_suffix,
-    should_fallback_for_key_dtype,
-    to_i64_contiguous,
-)
+from . import _abi_compat as _abi_compat
+from . import _groupby_accel as _groupby_accel_mod
+from ._config import force_pandas_sort_enabled, strict_abi_enabled
 
 if TYPE_CHECKING:
     from pandas import DataFrame, Series
@@ -120,7 +116,7 @@ class BoosterAccessor:
         if not pd.api.types.is_integer_dtype(key_col):
             return self._pandas_fallback([by], target, agg, sort=sort)
 
-        if should_fallback_for_key_dtype(key_col):
+        if _groupby_accel_mod.should_fallback_for_key_dtype(key_col):
             return self._pandas_fallback([by], target, agg, sort=sort)
 
         if not self._is_numeric_dtype(val_col):
@@ -158,7 +154,7 @@ class BoosterAccessor:
             col = key_cols[col_name]
             if not pd.api.types.is_integer_dtype(col):
                 return self._pandas_fallback(by_cols, target, agg, sort=sort)
-            if should_fallback_for_key_dtype(col):
+            if _groupby_accel_mod.should_fallback_for_key_dtype(col):
                 return self._pandas_fallback(by_cols, target, agg, sort=sort)
             if self._has_nullable_na(col):
                 return self._pandas_fallback(by_cols, target, agg, sort=sort)
@@ -172,7 +168,7 @@ class BoosterAccessor:
         if self._has_nullable_na(val_col):
             return self._pandas_fallback(by_cols, target, agg, sort=sort)
 
-        return self._rust_groupby_multi(by_cols, key_cols, val_col, agg, sort=sort)
+        return self._rust_groupby_multi(by_cols, target, key_cols, val_col, agg, sort=sort)
 
     def _is_numeric_dtype(self, series: Series) -> bool:
         return pd.api.types.is_integer_dtype(series) or pd.api.types.is_float_dtype(series)
@@ -193,24 +189,31 @@ class BoosterAccessor:
     ) -> Series:
         rust = self._get_rust_module()
 
-        key_dtype = capture_key_numpy_dtype(key_col)
+        force_pandas_sort = bool(sort) and force_pandas_sort_enabled()
 
-        keys = to_i64_contiguous(key_col.to_numpy(copy=False))
+        key_dtype = _groupby_accel_mod.capture_key_numpy_dtype(key_col)
+
+        keys = _groupby_accel_mod.to_i64_contiguous(key_col.to_numpy(copy=False))
         is_val_int = pd.api.types.is_integer_dtype(val_col)
-
-        suffix = firstseen_suffix(sort=sort, n_rows=len(self._df))
 
         if is_val_int:
             values = np.ascontiguousarray(val_col.to_numpy(dtype=np.int64))
-            func_name = f"groupby_{agg}_i64{suffix}"
+            func_base = f"groupby_{agg}_i64"
         else:
             values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
-            func_name = f"groupby_{agg}_f64{suffix}"
+            func_base = f"groupby_{agg}_f64"
 
-        rust_func = getattr(rust, func_name)
+        rust_func, needs_python_sort = _groupby_accel_mod.select_rust_groupby_func(
+            rust,
+            func_base,
+            sort=sort,
+            n_rows=len(self._df),
+            force_pandas_sort=force_pandas_sort,
+        )
+
         result_keys, result_values = rust_func(keys, values)
 
-        return build_series_from_single_result(
+        return _groupby_accel_mod.build_series_from_single_result(
             np.asarray(result_keys),
             np.asarray(result_values),
             name=val_col.name,
@@ -218,11 +221,13 @@ class BoosterAccessor:
             index_dtype=key_dtype,
             agg=agg,
             sort=sort,
+            needs_python_sort=needs_python_sort,
         )
 
     def _rust_groupby_multi(
         self,
         by_cols: list[str],
+        target: str,
         key_cols: dict[str, Series],
         val_col: Series,
         agg: AggFunc,
@@ -231,33 +236,80 @@ class BoosterAccessor:
     ) -> Series:
         rust = self._get_rust_module()
 
-        key_dtypes = [capture_key_numpy_dtype(key_cols[col]) for col in by_cols]
+        strict = strict_abi_enabled()
 
-        key_arrays = [to_i64_contiguous(key_cols[col].to_numpy(copy=False)) for col in by_cols]
+        force_pandas_sort = bool(sort) and force_pandas_sort_enabled()
+
+        key_dtypes = [_groupby_accel_mod.capture_key_numpy_dtype(key_cols[col]) for col in by_cols]
+
+        key_arrays = [
+            _groupby_accel_mod.to_i64_contiguous(key_cols[col].to_numpy(copy=False))
+            for col in by_cols
+        ]
 
         is_val_int = pd.api.types.is_integer_dtype(val_col)
 
-        suffix = firstseen_suffix(sort=sort, n_rows=len(self._df))
-
         if is_val_int:
             values = np.ascontiguousarray(val_col.to_numpy(dtype=np.int64))
-            func_name = f"groupby_multi_{agg}_i64{suffix}"
+            func_base = f"groupby_multi_{agg}_i64"
         else:
             values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
-            func_name = f"groupby_multi_{agg}_f64{suffix}"
+            func_base = f"groupby_multi_{agg}_f64"
 
-        rust_func = getattr(rust, func_name)
-        keys_2d, result_values = rust_func(key_arrays, values)
-
-        return build_series_from_multi_result(
-            np.asarray(keys_2d),
-            np.asarray(result_values),
-            by_cols=by_cols,
-            key_dtypes=key_dtypes,
-            name=val_col.name,
-            agg=agg,
+        rust_func, needs_python_sort = _groupby_accel_mod.select_rust_groupby_func(
+            rust,
+            func_base,
             sort=sort,
+            n_rows=len(self._df),
+            force_pandas_sort=force_pandas_sort,
         )
+
+        try:
+            rust_result = rust_func(key_arrays, values)
+            if not isinstance(rust_result, tuple) or len(rust_result) != 2:
+                _abi_compat.raise_abi_skew(
+                    context="accessor",
+                    detail=(
+                        "expected Rust groupby_multi result as (keys_cols, result_values) tuple; "
+                        f"got type={type(rust_result)!r}."
+                        if not isinstance(rust_result, tuple)
+                        else (
+                            "expected 2-tuple (keys_cols, result_values); "
+                            f"got len={len(rust_result)}."
+                        )
+                    ),
+                )
+            keys_cols, result_values = rust_result
+            result_values_arr = np.asarray(result_values)
+            if result_values_arr.ndim != 1:
+                _abi_compat.raise_abi_skew(
+                    context="accessor",
+                    detail=(
+                        f"result_values must be 1D, got ndim={result_values_arr.ndim} "
+                        f"shape={result_values_arr.shape}."
+                    ),
+                )
+            keys_cols_arr = _abi_compat.normalize_multi_keys_cols(
+                keys_cols,
+                n_groups=result_values_arr.shape[0],
+                n_keys=len(by_cols),
+                context="accessor",
+                strict=strict,
+            )
+            return _groupby_accel_mod.build_series_from_multi_result(
+                keys_cols_arr,
+                result_values_arr,
+                by_cols=by_cols,
+                key_dtypes=key_dtypes,
+                name=val_col.name,
+                agg=agg,
+                sort=sort,
+                needs_python_sort=needs_python_sort,
+            )
+        except _abi_compat.PandasBoosterKeyShapeSkewError:
+            if strict:
+                raise
+            return self._pandas_fallback(by_cols, target, agg, sort=sort)
 
     def thread_count(self) -> int:
         """Return the number of threads used by the Rust parallel runtime."""

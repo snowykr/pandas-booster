@@ -37,3 +37,5 @@ Thumbs.db
 # Benchmarking
 criterion/
 
+/.sisyphus/
+/.benchmarks/

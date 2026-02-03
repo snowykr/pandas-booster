@@ -6,11 +6,13 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 import numpy as np
 import pandas as pd
 
+from ._abi_compat import PandasBoosterKeyShapeSkewError, normalize_multi_keys_cols, raise_abi_skew
+from ._config import force_pandas_sort_enabled, strict_abi_enabled
 from ._groupby_accel import (
     build_series_from_multi_result,
     build_series_from_single_result,
     capture_key_numpy_dtype,
-    firstseen_suffix,
+    select_rust_groupby_func,
     should_fallback_for_key_dtype,
     to_i64_contiguous,
 )
@@ -110,7 +112,9 @@ class BoosterSeriesGroupBy:
         by_cols = self._by_cols
         target = self._target
         sort = self._sort
-        suffix = firstseen_suffix(sort=sort, n_rows=len(self._df))
+        force_pandas_sort = bool(sort) and force_pandas_sort_enabled()
+
+        strict = strict_abi_enabled()
 
         val_col = self._df[target]
         if not isinstance(val_col, pd.Series):
@@ -126,12 +130,19 @@ class BoosterSeriesGroupBy:
             keys = to_i64_contiguous(key_col.to_numpy(copy=False))
             if is_val_int:
                 values = np.ascontiguousarray(val_col.to_numpy(dtype=np.int64))
-                func_name = f"groupby_{agg}_i64{suffix}"
+                func_base = f"groupby_{agg}_i64"
             else:
                 values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
-                func_name = f"groupby_{agg}_f64{suffix}"
+                func_base = f"groupby_{agg}_f64"
 
-            rust_func = getattr(_rust, func_name)
+            rust_func, needs_python_sort = select_rust_groupby_func(
+                _rust,
+                func_base,
+                sort=sort,
+                n_rows=len(self._df),
+                force_pandas_sort=force_pandas_sort,
+            )
+
             result_keys, result_values = rust_func(keys, values)
 
             return build_series_from_single_result(
@@ -142,6 +153,7 @@ class BoosterSeriesGroupBy:
                 index_dtype=key_dtype,
                 agg=agg,
                 sort=sort,
+                needs_python_sort=needs_python_sort,
             )
         else:
             key_cols: list[pd.Series] = []
@@ -156,23 +168,66 @@ class BoosterSeriesGroupBy:
 
             if is_val_int:
                 values = np.ascontiguousarray(val_col.to_numpy(dtype=np.int64))
-                func_name = f"groupby_multi_{agg}_i64{suffix}"
+                func_base = f"groupby_multi_{agg}_i64"
             else:
                 values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
-                func_name = f"groupby_multi_{agg}_f64{suffix}"
+                func_base = f"groupby_multi_{agg}_f64"
 
-            rust_func = getattr(_rust, func_name)
-            keys_2d, result_values = rust_func(key_arrays, values)
-
-            return build_series_from_multi_result(
-                np.asarray(keys_2d),
-                np.asarray(result_values),
-                by_cols=by_cols,
-                key_dtypes=key_dtypes,
-                name=val_col.name,
-                agg=agg,
+            rust_func, needs_python_sort = select_rust_groupby_func(
+                _rust,
+                func_base,
                 sort=sort,
+                n_rows=len(self._df),
+                force_pandas_sort=force_pandas_sort,
             )
+
+            try:
+                rust_result = rust_func(key_arrays, values)
+                if not isinstance(rust_result, tuple) or len(rust_result) != 2:
+                    raise_abi_skew(
+                        context="proxy",
+                        detail=(
+                            "expected Rust groupby_multi result as "
+                            "(keys_cols, result_values) tuple; "
+                            f"got type={type(rust_result)!r}."
+                            if not isinstance(rust_result, tuple)
+                            else (
+                                "expected 2-tuple (keys_cols, result_values); "
+                                f"got len={len(rust_result)}."
+                            )
+                        ),
+                    )
+                keys_cols, result_values = rust_result
+                result_values_arr = np.asarray(result_values)
+                if result_values_arr.ndim != 1:
+                    raise_abi_skew(
+                        context="proxy",
+                        detail=(
+                            f"result_values must be 1D, got ndim={result_values_arr.ndim} "
+                            f"shape={result_values_arr.shape}."
+                        ),
+                    )
+                keys_cols_arr = normalize_multi_keys_cols(
+                    keys_cols,
+                    n_groups=result_values_arr.shape[0],
+                    n_keys=len(by_cols),
+                    context="proxy",
+                    strict=strict,
+                )
+                return build_series_from_multi_result(
+                    keys_cols_arr,
+                    result_values_arr,
+                    by_cols=by_cols,
+                    key_dtypes=key_dtypes,
+                    name=val_col.name,
+                    agg=agg,
+                    sort=sort,
+                    needs_python_sort=needs_python_sort,
+                )
+            except PandasBoosterKeyShapeSkewError:
+                if strict:
+                    raise
+                return cast("Series", getattr(self._obj, agg)())
 
     def _try_accelerate(self, agg: AggFunc) -> Series:
         if agg in _ACCELERATED_AGGS and self._can_accelerate():
