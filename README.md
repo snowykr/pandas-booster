@@ -103,8 +103,9 @@ Performs a Rust-accelerated groupby aggregation.
 
 Emergency toggle (panic button):
 
-- `PANDAS_BOOSTER_FORCE_PANDAS_SORT=1`: force Python `Series.sort_index()` after Rust aggregation.
-- `PANDAS_BOOSTER_FORCE_PANDAS_SORT=0` (default when unset): keep Rust-side sorting.
+- `PANDAS_BOOSTER_FORCE_PANDAS_SORT` (default: OFF when unset):
+  - truthy (`1/true/yes/on`, case-insensitive): force Python `Series.sort_index()` after Rust aggregation for `sort=True`.
+  - anything else (including `0/false/no/off`): keep Rust-side sorting.
 
 This toggle is intended for quick rollback if a Rust sorting bug is discovered. Forcing Python sort moves the `sort=True` cost to Pandas and is slower. If the Rust wheel is missing `*_sorted` kernels, pandas-booster also falls back to Python `sort_index()` automatically.
 
@@ -114,10 +115,12 @@ Note: the benchmark runner defaults `PANDAS_BOOSTER_FORCE_PANDAS_SORT=0`.
 
 ABI skew controls:
 
-- `PANDAS_BOOSTER_STRICT_ABI=1`: treat detected ABI skew as a hard error (no fallback).
-- `PANDAS_BOOSTER_STRICT_ABI=0` / unset (default): fall back to pandas on detected ABI skew.
-- `PANDAS_BOOSTER_ABI_SKEW_NOTICE=0`: disable ABI-skew warnings.
-- `PANDAS_BOOSTER_ABI_SKEW_NOTICE` unset / truthy (`1/true/yes/on`): enable ABI-skew warnings (default).
+- `PANDAS_BOOSTER_STRICT_ABI` (default: OFF when unset):
+  - truthy (`1/true/yes/on`, case-insensitive): treat detected ABI skew as a hard error (no fallback).
+  - anything else (including `0/false/no/off`): fall back to pandas on detected ABI skew.
+- `PANDAS_BOOSTER_ABI_SKEW_NOTICE` (default: ON when unset):
+  - unset / truthy (`1/true/yes/on`, case-insensitive): enable ABI-skew warnings.
+  - anything else (including `0/false/no/off`): disable ABI-skew warnings.
 
 **Returns**: 
 - Single key (`by="col"`): A `pd.Series` indexed by the unique keys.

@@ -199,6 +199,46 @@ def test_force_pandas_sort_false_does_not_call_sort_index(
     _assert_groupby_series_equal(booster_on, pandas_on, agg="sum")
 
 
+@pytest.mark.parametrize("env_value", ["1", "true", "yes", "on", " TRUE "])
+def test_force_pandas_sort_truthy_calls_sort_index(monkeypatch: pytest.MonkeyPatch, env_value: str):
+    import pandas_booster
+
+    rust = getattr(pandas_booster, "_rust", None)
+    if rust is None or not hasattr(rust, "groupby_multi_sum_f64_sorted"):
+        pytest.skip(
+            "Rust sorted kernels not available (likely Python/Rust wheel mismatch); "
+            "panic-button test requires groupby_multi_sum_f64_sorted"
+        )
+
+    np.random.seed(2028)
+    n = 200_000
+    df = pd.DataFrame(
+        {
+            "k1": np.random.randint(0, 100, size=n, dtype=np.int64),
+            "k2": np.random.randint(0, 50, size=n, dtype=np.int64),
+            "val": np.random.random(size=n).astype(np.float64),
+        }
+    )
+
+    # Compute the Pandas baseline before monkeypatching (see sum test above).
+    pandas_on = df.groupby(["k1", "k2"], sort=True)["val"].sum()
+
+    def _raise_sort_index(_self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        _ = (_self, _args, _kwargs)
+        raise AssertionError("Series.sort_index() should be called")
+
+    monkeypatch.setenv("PANDAS_BOOSTER_FORCE_PANDAS_SORT", env_value)
+    monkeypatch.setattr(pd.Series, "sort_index", _raise_sort_index, raising=True)
+
+    with pytest.raises(AssertionError, match="should be called"):
+        cast(BoosterAccessor, df.booster).groupby(["k1", "k2"], "val", "sum", sort=True)
+
+    # Sanity check: without the panic button, we should not call sort_index() here.
+    monkeypatch.setenv("PANDAS_BOOSTER_FORCE_PANDAS_SORT", "0")
+    booster_off = cast(BoosterAccessor, df.booster).groupby(["k1", "k2"], "val", "sum", sort=True)
+    _assert_groupby_series_equal(booster_off, pandas_on, agg="sum")
+
+
 @pytest.mark.parametrize("agg", ["mean", "min", "max", "count"])
 def test_default_no_python_sort_for_other_aggs_when_rust_sorted(
     monkeypatch: pytest.MonkeyPatch, agg: AggFunc

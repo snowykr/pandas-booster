@@ -187,12 +187,13 @@ def test_unrelated_rust_exception_propagates(monkeypatch):
     assert len(abi_warnings) == 0
 
 
-def test_strict_abi_legacy_2d_keys_hard_fails(monkeypatch):
+@pytest.mark.parametrize("env_value", ["1", "true", "yes", "on", " ON "])
+def test_strict_abi_legacy_2d_keys_hard_fails(monkeypatch, env_value):
     import pandas_booster._abi_compat as abi
     import pandas_booster._rust as rust
     from pandas_booster.accessor import BoosterAccessor
 
-    monkeypatch.setenv("PANDAS_BOOSTER_STRICT_ABI", "1")
+    monkeypatch.setenv("PANDAS_BOOSTER_STRICT_ABI", env_value)
 
     df = _make_df()
     by_cols = ["k1", "k2"]
@@ -216,9 +217,10 @@ def test_strict_abi_legacy_2d_keys_hard_fails(monkeypatch):
         _ = booster.groupby(by_cols, "val", "sum", sort=True)
 
 
-def test_abi_skew_notice_can_be_disabled(monkeypatch):
+@pytest.mark.parametrize("env_value", ["0", "false", "no", "off", " 0 "])
+def test_abi_skew_notice_can_be_disabled(monkeypatch, env_value):
     monkeypatch.delenv("PANDAS_BOOSTER_STRICT_ABI", raising=False)
-    monkeypatch.setenv("PANDAS_BOOSTER_ABI_SKEW_NOTICE", "0")
+    monkeypatch.setenv("PANDAS_BOOSTER_ABI_SKEW_NOTICE", env_value)
 
     import pandas_booster._abi_compat as abi
     import pandas_booster._rust as rust
