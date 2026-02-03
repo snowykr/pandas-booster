@@ -187,10 +187,14 @@ class BoosterSeriesGroupBy:
                     raise_abi_skew(
                         context="proxy",
                         detail=(
-                            "expected Rust groupby_multi result as (keys_cols, result_values) tuple; "
+                            "expected Rust groupby_multi result as "
+                            "(keys_cols, result_values) tuple; "
                             f"got type={type(rust_result)!r}."
                             if not isinstance(rust_result, tuple)
-                            else f"expected 2-tuple (keys_cols, result_values); got len={len(rust_result)}."
+                            else (
+                                "expected 2-tuple (keys_cols, result_values); "
+                                f"got len={len(rust_result)}."
+                            )
                         ),
                     )
                 keys_cols, result_values = rust_result

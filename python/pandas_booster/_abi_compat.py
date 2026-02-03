@@ -1,17 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Any, NoReturn
-
 import logging
+import sys
 import threading
 import warnings
-import sys
+from collections.abc import Sequence
+from typing import Any, NoReturn
 
 import numpy as np
 
 from ._config import abi_skew_notice_enabled, strict_abi_enabled
-
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +46,6 @@ def _best_effort_warning_stacklevel() -> int:
 
     This function must never raise.
     """
-
     try:
         # Frame of the `warnings.warn` call site (`emit_abi_skew_notice_once`).
         frame = sys._getframe(1)
@@ -85,7 +82,6 @@ def emit_abi_skew_notice_once(message: str) -> None:
     ABI skew must not crash execution in non-strict mode, so we swallow any
     Warning raised by warnings.warn.
     """
-
     if not abi_skew_notice_enabled():
         return
 
@@ -131,7 +127,6 @@ def normalize_multi_keys_cols(
     - If `PANDAS_BOOSTER_STRICT_ABI=1`, *any* ABI skew (including legacy 2D keys)
       raises and must not be normalized.
     """
-
     if strict is None:
         strict = strict_abi_enabled()
 
@@ -183,7 +178,8 @@ def normalize_multi_keys_cols(
         raise_abi_skew(
             context=context,
             detail=(
-                f"expected multi-key keys as a sequence of {n_keys} 1D arrays (or legacy 2D ndarray). "
+                "expected multi-key keys as a sequence of "
+                f"{n_keys} 1D arrays (or legacy 2D ndarray). "
                 f"Got type={type(keys_cols)!r}."
             ),
         )

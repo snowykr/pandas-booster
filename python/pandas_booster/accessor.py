@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING, Literal, cast
 import numpy as np
 import pandas as pd
 
-from ._config import force_pandas_sort_enabled, strict_abi_enabled
 from . import _abi_compat as _abi_compat
 from . import _groupby_accel as _groupby_accel_mod
+from ._config import force_pandas_sort_enabled, strict_abi_enabled
 
 if TYPE_CHECKING:
     from pandas import DataFrame, Series
@@ -273,7 +273,10 @@ class BoosterAccessor:
                         "expected Rust groupby_multi result as (keys_cols, result_values) tuple; "
                         f"got type={type(rust_result)!r}."
                         if not isinstance(rust_result, tuple)
-                        else f"expected 2-tuple (keys_cols, result_values); got len={len(rust_result)}."
+                        else (
+                            "expected 2-tuple (keys_cols, result_values); "
+                            f"got len={len(rust_result)}."
+                        )
                     ),
                 )
             keys_cols, result_values = rust_result
