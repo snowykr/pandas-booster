@@ -152,6 +152,7 @@ class BoosterSeriesGroupBy:
                 index_name=key_col.name,
                 index_dtype=key_dtype,
                 agg=agg,
+                is_val_int=is_val_int,
                 sort=sort,
                 needs_python_sort=needs_python_sort,
             )
@@ -221,6 +222,7 @@ class BoosterSeriesGroupBy:
                     key_dtypes=key_dtypes,
                     name=val_col.name,
                     agg=agg,
+                    is_val_int=is_val_int,
                     sort=sort,
                     needs_python_sort=needs_python_sort,
                 )

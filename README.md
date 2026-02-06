@@ -148,7 +148,7 @@ To ensure correctness and performance, the following constraints apply:
 - **Value column**: Must be a numeric dtype (integers or floats).
 - **Extension dtypes**: Pandas extension dtypes (e.g., nullable `Int64` / `Float64` using `pd.NA`) are not supported and will trigger a fallback to Pandas.
 - **NaN handling**: `NaN` values in the target column are skipped in aggregations, matching standard Pandas behavior.
-- **Return types**: Integer aggregations (like `sum` on `int64`) return `float64` to match Pandas' behavior regarding potential overflows and consistency.
+- **Return types**: Integer aggregations follow Pandas-style dtypes: `sum/min/max/count` return integer results, and `mean` returns `float64`.
 
 ## Performance
 
@@ -171,53 +171,53 @@ The library is designed for large datasets where multi-core parallelism can be f
 
 | Operation | Groups | Sort | Type | Pandas | Polars | Booster |
 |-----------|--------|------|------|--------|--------|---------|
-| Single-key | 1,000 | True | Cold | 30.7±4.7ms (1.0x) | 21.1±6.9ms (**1.5x**) | 4.7±1.1ms (**6.5x**) |
-|  |  |  | Warm | 24.7±0.6ms (1.0x) | 17.1±1.1ms (**1.4x**) | 2.1±0.0ms (**11.8x**) |
-|  |  | False | Cold | 26.7±1.2ms (1.0x) | 19.4±2.1ms (**1.4x**) | 4.9±0.7ms (**5.5x**) |
-|  |  |  | Warm | 22.9±1.0ms (1.0x) | 17.2±1.3ms (**1.3x**) | 2.2±0.1ms (**10.2x**) |
-| 2-key | 5,000 | True | Cold | 81.3±5.8ms (1.0x) | 57.1±15.1ms (**1.4x**) | 103.6±10.2ms (0.8x) |
-|  |  |  | Warm | 70.5±4.5ms (1.0x) | 42.3±5.7ms (**1.7x**) | 97.6±6.6ms (0.7x) |
-|  |  | False | Cold | 66.1±8.9ms (1.0x) | 48.8±19.0ms (**1.4x**) | 92.3±1.8ms (0.7x) |
-|  |  |  | Warm | 56.5±8.4ms (1.0x) | 36.0±2.7ms (**1.6x**) | 88.8±0.8ms (0.6x) |
-| 3-key | 25,000 | True | Cold | 133.1±23.7ms (1.0x) | 62.1±14.2ms (**2.1x**) | 115.6±13.2ms (**1.2x**) |
-|  |  |  | Warm | 117.5±25.9ms (1.0x) | 52.4±4.6ms (**2.2x**) | 102.3±9.0ms (**1.1x**) |
-|  |  | False | Cold | 103.2±6.4ms (1.0x) | 60.4±11.2ms (**1.7x**) | 105.9±5.6ms (1.0x) |
-|  |  |  | Warm | 88.6±2.0ms (1.0x) | 54.6±9.3ms (**1.6x**) | 101.0±3.5ms (0.9x) |
-| 4-key | 100,000 | True | Cold | 150.7±8.9ms (1.0x) | 95.1±16.4ms (**1.6x**) | 113.1±3.0ms (**1.3x**) |
-|  |  |  | Warm | 131.5±7.5ms (1.0x) | 76.8±6.0ms (**1.7x**) | 108.9±1.8ms (**1.2x**) |
-|  |  | False | Cold | 119.3±8.9ms (1.0x) | 88.1±9.7ms (**1.4x**) | 113.1±3.5ms (1.1x) |
-|  |  |  | Warm | 107.7±6.6ms (1.0x) | 76.1±3.7ms (**1.4x**) | 108.2±1.7ms (1.0x) |
-| 5-key | 993,138 | True | Cold | 268.3±11.5ms (1.0x) | 195.6±26.6ms (**1.4x**) | 199.4±4.7ms (**1.3x**) |
-|  |  |  | Warm | 246.4±4.7ms (1.0x) | 179.4±9.4ms (**1.4x**) | 196.4±17.9ms (**1.3x**) |
-|  |  | False | Cold | 171.8±16.0ms (1.0x) | 174.4±49.0ms (1.0x) | 174.3±7.0ms (1.0x) |
-|  |  |  | Warm | 151.5±3.9ms (1.0x) | 152.3±3.5ms (1.0x) | 163.4±2.5ms (0.9x) |
+| Single-key | 1,000 | True | Cold | 31.3±4.5ms (1.0x) | 22.2±5.5ms (**1.4x**) | 4.7±0.8ms (**6.6x**) |
+|  |  |  | Warm | 23.9±0.9ms (1.0x) | 18.0±1.4ms (**1.3x**) | 2.4±0.5ms (**10.1x**) |
+|  |  | False | Cold | 30.4±5.2ms (1.0x) | 23.7±8.3ms (**1.3x**) | 5.3±0.8ms (**5.7x**) |
+|  |  |  | Warm | 22.6±1.0ms (1.0x) | 20.3±7.2ms (**1.1x**) | 2.7±0.4ms (**8.3x**) |
+| 2-key | 5,000 | True | Cold | 84.4±6.1ms (1.0x) | 46.9±5.4ms (**1.8x**) | 31.0±3.2ms (**2.7x**) |
+|  |  |  | Warm | 68.7±2.2ms (1.0x) | 38.8±2.6ms (**1.8x**) | 29.6±2.7ms (**2.3x**) |
+|  |  | False | Cold | 70.7±7.4ms (1.0x) | 49.0±7.6ms (**1.4x**) | 32.0±4.3ms (**2.2x**) |
+|  |  |  | Warm | 55.4±4.6ms (1.0x) | 56.0±41.4ms (1.0x) | 29.5±5.4ms (**1.9x**) |
+| 3-key | 25,000 | True | Cold | 123.8±7.9ms (1.0x) | 59.2±3.7ms (**2.1x**) | 44.9±4.9ms (**2.8x**) |
+|  |  |  | Warm | 108.6±3.6ms (1.0x) | 55.5±4.5ms (**2.0x**) | 39.5±2.4ms (**2.7x**) |
+|  |  | False | Cold | 104.2±10.5ms (1.0x) | 67.5±14.3ms (**1.5x**) | 45.8±2.3ms (**2.3x**) |
+|  |  |  | Warm | 89.9±3.7ms (1.0x) | 62.2±9.0ms (**1.4x**) | 43.3±1.9ms (**2.1x**) |
+| 4-key | 100,000 | True | Cold | 151.7±15.7ms (1.0x) | 104.5±18.2ms (**1.5x**) | 56.3±3.1ms (**2.7x**) |
+|  |  |  | Warm | 132.8±4.7ms (1.0x) | 86.9±6.4ms (**1.5x**) | 51.4±4.0ms (**2.6x**) |
+|  |  | False | Cold | 123.1±12.6ms (1.0x) | 100.1±20.8ms (**1.2x**) | 55.4±2.1ms (**2.2x**) |
+|  |  |  | Warm | 106.6±1.6ms (1.0x) | 89.0±5.6ms (**1.2x**) | 52.4±2.8ms (**2.0x**) |
+| 5-key | 993,138 | True | Cold | 302.5±23.4ms (1.0x) | 241.1±36.1ms (**1.3x**) | 175.5±4.7ms (**1.7x**) |
+|  |  |  | Warm | 305.1±14.7ms (1.0x) | 221.0±26.1ms (**1.4x**) | 167.2±4.5ms (**1.8x**) |
+|  |  | False | Cold | 206.7±24.2ms (1.0x) | 173.2±15.6ms (**1.2x**) | 102.0±5.2ms (**2.0x**) |
+|  |  |  | Warm | 169.4±5.2ms (1.0x) | 165.4±7.4ms (1.0x) | 93.0±2.6ms (**1.8x**) |
 
 ### High Cardinality (5M rows, ~5M unique groups)
 
 | Operation | Groups | Sort | Type | Pandas | Polars | Booster |
 |-----------|--------|------|------|--------|--------|---------|
-| Single-key | 3,160,983 | True | Cold | 773.4±65.4ms (1.0x) | 118.2±2.4ms (**6.5x**) | 223.7±10.1ms (**3.5x**) |
-|  |  |  | Warm | 750.9±57.0ms (1.0x) | 114.5±4.5ms (**6.6x**) | 214.3±5.3ms (**3.5x**) |
-|  |  | False | Cold | 220.1±12.7ms (1.0x) | 165.8±3.0ms (**1.3x**) | 217.4±3.9ms (1.0x) |
-|  |  |  | Warm | 212.0±6.8ms (1.0x) | 166.5±6.5ms (**1.3x**) | 204.5±13.6ms (1.0x) |
-| 2-key | 4,532,339 | True | Cold | 871.2±28.4ms (1.0x) | 235.1±8.5ms (**3.7x**) | 397.7±5.3ms (**2.2x**) |
-|  |  |  | Warm | 845.7±67.5ms (1.0x) | 222.9±4.0ms (**3.8x**) | 375.2±7.4ms (**2.3x**) |
-|  |  | False | Cold | 359.8±7.0ms (1.0x) | 241.1±24.2ms (**1.5x**) | 312.4±16.9ms (**1.2x**) |
-|  |  |  | Warm | 346.2±27.6ms (1.0x) | 235.6±6.1ms (**1.5x**) | 281.0±14.3ms (**1.2x**) |
-| 3-key | 4,901,309 | True | Cold | 973.0±68.5ms (1.0x) | 317.6±9.6ms (**3.1x**) | 563.0±6.8ms (**1.7x**) |
-|  |  |  | Warm | 875.2±19.6ms (1.0x) | 311.2±7.7ms (**2.8x**) | 531.5±6.0ms (**1.6x**) |
-|  |  | False | Cold | 394.1±11.2ms (1.0x) | 252.2±15.5ms (**1.6x**) | 364.7±8.3ms (1.1x) |
-|  |  |  | Warm | 367.6±19.1ms (1.0x) | 241.0±3.3ms (**1.5x**) | 339.0±4.3ms (1.1x) |
+| Single-key | 3,160,983 | True | Cold | 855.9±86.2ms (1.0x) | 135.6±11.6ms (**6.3x**) | 246.7±22.9ms (**3.5x**) |
+|  |  |  | Warm | 785.4±70.2ms (1.0x) | 130.1±24.0ms (**6.0x**) | 227.7±14.3ms (**3.5x**) |
+|  |  | False | Cold | 231.9±8.0ms (1.0x) | 173.4±3.1ms (**1.3x**) | 225.2±14.4ms (1.0x) |
+|  |  |  | Warm | 224.8±3.7ms (1.0x) | 176.8±8.6ms (**1.3x**) | 199.9±4.1ms (**1.1x**) |
+| 2-key | 4,532,339 | True | Cold | 879.0±23.3ms (1.0x) | 261.6±21.2ms (**3.4x**) | 369.4±25.4ms (**2.4x**) |
+|  |  |  | Warm | 904.2±64.9ms (1.0x) | 241.7±24.6ms (**3.7x**) | 355.3±38.5ms (**2.5x**) |
+|  |  | False | Cold | 375.9±8.7ms (1.0x) | 248.5±6.3ms (**1.5x**) | 170.1±7.3ms (**2.2x**) |
+|  |  |  | Warm | 354.1±4.0ms (1.0x) | 245.1±11.0ms (**1.4x**) | 151.4±5.3ms (**2.3x**) |
+| 3-key | 4,901,309 | True | Cold | 1004.5±95.8ms (1.0x) | 355.6±26.5ms (**2.8x**) | 541.5±16.1ms (**1.9x**) |
+|  |  |  | Warm | 911.4±22.5ms (1.0x) | 334.1±18.6ms (**2.7x**) | 513.6±44.1ms (**1.8x**) |
+|  |  | False | Cold | 399.6±16.6ms (1.0x) | 259.9±15.6ms (**1.5x**) | 220.7±11.8ms (**1.8x**) |
+|  |  |  | Warm | 388.4±40.0ms (1.0x) | 252.4±5.3ms (**1.5x**) | 194.2±4.5ms (**2.0x**) |
 
 **Performance characteristics**:
-- **Single-key (standard cardinality)**: Warm state shows **9.8-11.9x** speedup over Pandas baseline (cold: **4.8-5.7x**). Booster outperforms Polars in warm state.
-- **Multi-key (standard cardinality)**: Performance depends on key count and `sort`. 2-key is slower than Pandas (**0.6-0.8x** warm); 3-key ranges **0.9-1.1x** warm; 4-key ranges **1.0-1.2x** warm; 5-key ranges **1.0-1.4x** warm. Polars is typically faster here (**1.1-2.0x** warm).
-- **Multi-key (high cardinality)**: With `sort=True`, Booster achieves **1.6-3.4x** speedup in warm state; with `sort=False`, it is near parity (**1.0-1.2x**). Polars is faster than Booster on these workloads (sorted: **2.8-6.4x**, unsorted: **1.3-1.5x**).
-- **Sort overhead**: For Pandas, `sort=False` is often a meaningful win (about **1.2-1.4x** on standard multi-key, and ~**3.0x** on high-cardinality single-key). For Booster, the difference between `sort=True/False` is smaller and can go either direction (roughly **0.8-1.1x** in these tables), so choose based on desired output ordering first.
+- **Single-key (standard cardinality)**: Warm state shows **8.3-10.1x** speedup over Pandas baseline (cold: **5.7-6.6x**). Booster also outperforms Polars on these single-key standard-cardinality runs.
+- **Multi-key (standard cardinality)**: Booster is consistently faster than Pandas across 2-5 keys for both `sort=True` and `sort=False` (warm: **1.8-2.7x**, cold: **1.7-2.8x**), and also faster than Polars in these standard-cardinality multi-key runs.
+- **High cardinality (~5M unique groups)**: With `sort=True`, Booster remains faster than Pandas (warm: **1.8-3.5x**), but Polars is faster on the sorted path. With `sort=False`, Booster ranges from near-parity on single-key (**1.1x**) to clear gains on multi-key (**2.0-2.3x** warm).
+- **Sort overhead**: For Pandas, `sort=False` is a strong win on high-cardinality workloads (about **2.3-3.5x** warm) and still beneficial on standard multi-key (**1.2-1.8x** warm). For Booster, `sort=False` impact is workload-dependent: near parity (or slightly slower) on most standard cases, but much faster on high-cardinality multi-key (**~2.3-2.6x** warm) and on standard 5-key (**~1.8x** warm).
 
 ### Sorted vs Appearance-Ordered Results
 
-By default, results are sorted by group keys to match Pandas `sort=True` output. Pass `sort=False` to preserve Pandas' appearance order (first-seen group order) and avoid the key sort cost:
+By default, results are sorted by group keys to match Pandas `sort=True` output. Pass `sort=False` to preserve Pandas' appearance order (first-seen group order). Performance impact depends on workload (see tables above):
 
 ```python
 # Sorted (default) - matches Pandas exactly

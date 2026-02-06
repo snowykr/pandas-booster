@@ -93,14 +93,13 @@ class TestBoosterGroupBy:
         booster_result = cast(BoosterAccessor, large_df.booster).groupby("key", "val_int", "sum")
         pandas_result = large_df.groupby("key")["val_int"].sum()
 
-        booster_sorted = booster_result.sort_index().astype(float)
-        pandas_sorted = pandas_result.sort_index().astype(float)
+        booster_sorted = booster_result.sort_index()
+        pandas_sorted = pandas_result.sort_index()
 
         pd.testing.assert_series_equal(
             booster_sorted,
             pandas_sorted,
-            check_exact=False,
-            rtol=1e-10,
+            check_exact=True,
         )
 
     def test_small_df_uses_fallback(self, small_df):
@@ -325,21 +324,12 @@ class TestFirstSeenOrderSingleKeySortFalse:
         pandas_result = getattr(df.groupby("key", sort=False)["val"], agg)()
 
         assert booster_result.index.tolist() == pandas_result.index.tolist() == [2, 99, 1, 5]
-        # For integer targets, Booster returns float64 for several aggs to match
-        # Pandas' overflow promotion behavior.
-        if agg in {"sum", "min", "max"}:
-            booster_cmp = booster_result.astype(float)
-            pandas_cmp = pandas_result.astype(float)
-        else:
-            booster_cmp = booster_result
-            pandas_cmp = pandas_result
-
         pd.testing.assert_series_equal(
-            booster_cmp,
-            pandas_cmp,
-            check_exact=(agg in {"min", "max", "count"}),
-            check_dtype=False,
-            rtol=(0.0 if agg in {"min", "max", "count"} else 1e-10),
+            booster_result,
+            pandas_result,
+            check_exact=(agg != "mean"),
+            check_dtype=True,
+            rtol=(1e-10 if agg == "mean" else 0.0),
         )
 
     def test_mean_all_nan_group(self):
@@ -437,13 +427,12 @@ class TestIntegerSum:
         pandas_result = df.groupby("key")["val_int"].sum()
 
         booster_sorted = booster_result.sort_index()
-        pandas_sorted = pandas_result.sort_index().astype(float)
+        pandas_sorted = pandas_result.sort_index()
 
         pd.testing.assert_series_equal(
             booster_sorted,
             pandas_sorted,
-            check_exact=False,
-            rtol=1e-10,
+            check_exact=True,
         )
 
     def test_i64_min_matches_pandas(self):
@@ -460,13 +449,12 @@ class TestIntegerSum:
         pandas_result = df.groupby("key")["val_int"].min()
 
         booster_sorted = booster_result.sort_index()
-        pandas_sorted = pandas_result.sort_index().astype(float)
+        pandas_sorted = pandas_result.sort_index()
 
         pd.testing.assert_series_equal(
             booster_sorted,
             pandas_sorted,
-            check_exact=False,
-            rtol=1e-10,
+            check_exact=True,
         )
 
     def test_i64_max_matches_pandas(self):
@@ -483,13 +471,12 @@ class TestIntegerSum:
         pandas_result = df.groupby("key")["val_int"].max()
 
         booster_sorted = booster_result.sort_index()
-        pandas_sorted = pandas_result.sort_index().astype(float)
+        pandas_sorted = pandas_result.sort_index()
 
         pd.testing.assert_series_equal(
             booster_sorted,
             pandas_sorted,
-            check_exact=False,
-            rtol=1e-10,
+            check_exact=True,
         )
 
 

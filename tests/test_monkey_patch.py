@@ -183,14 +183,12 @@ class TestAcceleratedAggregations:
         booster_sorted = booster_result.sort_index()
         pandas_sorted = pandas_result.sort_index()
 
-        if agg in ("sum", "min", "max"):
-            pandas_sorted = pandas_sorted.astype(float)
-
         pd.testing.assert_series_equal(
             booster_sorted,
             pandas_sorted,
-            check_exact=False,
-            rtol=1e-10,
+            check_exact=(agg != "mean"),
+            check_dtype=True,
+            rtol=(1e-10 if agg == "mean" else 0.0),
         )
 
 

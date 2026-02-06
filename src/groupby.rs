@@ -19,6 +19,7 @@ use crate::radix_sort::{
 };
 
 const RADIX_SORT_THRESHOLD: usize = 2048;
+const FIRSTSEEN_SORT_THRESHOLD: usize = 2048;
 
 use crate::aggregation::{
     Aggregator, CountAggF64, CountAggI64, MaxAggF64, MaxAggI64, MeanAggF64, MeanAggI64, MinAggF64,
@@ -45,7 +46,13 @@ fn reorder_single_result_by_first_seen_u32<V: Copy>(
     debug_assert_eq!(result.values.len(), first_seen.len());
     debug_assert_eq!(result.keys.len(), first_seen.len());
 
-    let perm = radix_sort_perm_by_u32(first_seen);
+    let perm = if first_seen.len() < FIRSTSEEN_SORT_THRESHOLD {
+        let mut perm: Vec<usize> = (0..first_seen.len()).collect();
+        perm.sort_unstable_by(|&i, &j| first_seen[i].cmp(&first_seen[j]).then(i.cmp(&j)));
+        perm
+    } else {
+        radix_sort_perm_by_u32(first_seen)
+    };
 
     let keys = &result.keys;
     let values = &result.values;
@@ -69,7 +76,13 @@ fn reorder_single_result_by_first_seen_u64<V: Copy>(
     debug_assert_eq!(result.values.len(), first_seen.len());
     debug_assert_eq!(result.keys.len(), first_seen.len());
 
-    let perm = radix_sort_perm_by_u64(first_seen);
+    let perm = if first_seen.len() < FIRSTSEEN_SORT_THRESHOLD {
+        let mut perm: Vec<usize> = (0..first_seen.len()).collect();
+        perm.sort_unstable_by(|&i, &j| first_seen[i].cmp(&first_seen[j]).then(i.cmp(&j)));
+        perm
+    } else {
+        radix_sort_perm_by_u64(first_seen)
+    };
 
     let keys = &result.keys;
     let values = &result.values;
@@ -416,11 +429,11 @@ pub fn parallel_groupby_max_f64_firstseen_u64(
     parallel_groupby_firstseen_u64::<f64, MaxAggF64, f64>(keys, values)
 }
 
-pub fn parallel_groupby_sum_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultF64> {
-    parallel_groupby::<i64, SumAggI64, f64>(keys, values)
+pub fn parallel_groupby_sum_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultI64> {
+    parallel_groupby::<i64, SumAggI64, i64>(keys, values)
 }
 
-pub fn parallel_groupby_sum_i64_sorted(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultF64> {
+pub fn parallel_groupby_sum_i64_sorted(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultI64> {
     let mut result = parallel_groupby_sum_i64(keys, values)?;
     reorder_single_result_by_key(&mut result);
     Ok(result)
@@ -429,15 +442,15 @@ pub fn parallel_groupby_sum_i64_sorted(keys: &[i64], values: &[i64]) -> PyResult
 pub fn parallel_groupby_sum_i64_firstseen_u32(
     keys: &[i64],
     values: &[i64],
-) -> PyResult<GroupByResultF64> {
-    parallel_groupby_firstseen_u32::<i64, SumAggI64, f64>(keys, values)
+) -> PyResult<GroupByResultI64> {
+    parallel_groupby_firstseen_u32::<i64, SumAggI64, i64>(keys, values)
 }
 
 pub fn parallel_groupby_sum_i64_firstseen_u64(
     keys: &[i64],
     values: &[i64],
-) -> PyResult<GroupByResultF64> {
-    parallel_groupby_firstseen_u64::<i64, SumAggI64, f64>(keys, values)
+) -> PyResult<GroupByResultI64> {
+    parallel_groupby_firstseen_u64::<i64, SumAggI64, i64>(keys, values)
 }
 
 pub fn parallel_groupby_mean_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultF64> {
@@ -467,11 +480,11 @@ pub fn parallel_groupby_mean_i64_firstseen_u64(
     parallel_groupby_firstseen_u64::<i64, MeanAggI64, f64>(keys, values)
 }
 
-pub fn parallel_groupby_min_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultF64> {
-    parallel_groupby::<i64, MinAggI64, f64>(keys, values)
+pub fn parallel_groupby_min_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultI64> {
+    parallel_groupby::<i64, MinAggI64, i64>(keys, values)
 }
 
-pub fn parallel_groupby_min_i64_sorted(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultF64> {
+pub fn parallel_groupby_min_i64_sorted(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultI64> {
     let mut result = parallel_groupby_min_i64(keys, values)?;
     reorder_single_result_by_key(&mut result);
     Ok(result)
@@ -480,22 +493,22 @@ pub fn parallel_groupby_min_i64_sorted(keys: &[i64], values: &[i64]) -> PyResult
 pub fn parallel_groupby_min_i64_firstseen_u32(
     keys: &[i64],
     values: &[i64],
-) -> PyResult<GroupByResultF64> {
-    parallel_groupby_firstseen_u32::<i64, MinAggI64, f64>(keys, values)
+) -> PyResult<GroupByResultI64> {
+    parallel_groupby_firstseen_u32::<i64, MinAggI64, i64>(keys, values)
 }
 
 pub fn parallel_groupby_min_i64_firstseen_u64(
     keys: &[i64],
     values: &[i64],
-) -> PyResult<GroupByResultF64> {
-    parallel_groupby_firstseen_u64::<i64, MinAggI64, f64>(keys, values)
+) -> PyResult<GroupByResultI64> {
+    parallel_groupby_firstseen_u64::<i64, MinAggI64, i64>(keys, values)
 }
 
-pub fn parallel_groupby_max_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultF64> {
-    parallel_groupby::<i64, MaxAggI64, f64>(keys, values)
+pub fn parallel_groupby_max_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultI64> {
+    parallel_groupby::<i64, MaxAggI64, i64>(keys, values)
 }
 
-pub fn parallel_groupby_max_i64_sorted(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultF64> {
+pub fn parallel_groupby_max_i64_sorted(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultI64> {
     let mut result = parallel_groupby_max_i64(keys, values)?;
     reorder_single_result_by_key(&mut result);
     Ok(result)
@@ -504,15 +517,15 @@ pub fn parallel_groupby_max_i64_sorted(keys: &[i64], values: &[i64]) -> PyResult
 pub fn parallel_groupby_max_i64_firstseen_u32(
     keys: &[i64],
     values: &[i64],
-) -> PyResult<GroupByResultF64> {
-    parallel_groupby_firstseen_u32::<i64, MaxAggI64, f64>(keys, values)
+) -> PyResult<GroupByResultI64> {
+    parallel_groupby_firstseen_u32::<i64, MaxAggI64, i64>(keys, values)
 }
 
 pub fn parallel_groupby_max_i64_firstseen_u64(
     keys: &[i64],
     values: &[i64],
-) -> PyResult<GroupByResultF64> {
-    parallel_groupby_firstseen_u64::<i64, MaxAggI64, f64>(keys, values)
+) -> PyResult<GroupByResultI64> {
+    parallel_groupby_firstseen_u64::<i64, MaxAggI64, i64>(keys, values)
 }
 
 pub fn parallel_groupby_count_f64(keys: &[i64], values: &[f64]) -> PyResult<GroupByResultI64> {
@@ -707,13 +720,13 @@ mod tests {
         let values: Vec<i64> = vec![1, 2, 3, 4, 5];
         let result = parallel_groupby_sum_i64(&keys, &values).unwrap();
 
-        let mut map: AHashMap<i64, f64> = AHashMap::new();
+        let mut map: AHashMap<i64, i64> = AHashMap::new();
         for (k, v) in result.keys.iter().zip(result.values.iter()) {
             map.insert(*k, *v);
         }
 
-        assert!((map[&1] - 9.0).abs() < 1e-10);
-        assert!((map[&2] - 6.0).abs() < 1e-10);
+        assert_eq!(map[&1], 9);
+        assert_eq!(map[&2], 6);
     }
 
     #[test]
@@ -722,13 +735,13 @@ mod tests {
         let values: Vec<i64> = vec![5, 2, 3, 4, 1];
         let result = parallel_groupby_min_i64(&keys, &values).unwrap();
 
-        let mut map: AHashMap<i64, f64> = AHashMap::new();
+        let mut map: AHashMap<i64, i64> = AHashMap::new();
         for (k, v) in result.keys.iter().zip(result.values.iter()) {
             map.insert(*k, *v);
         }
 
-        assert!((map[&1] - 1.0).abs() < 1e-10);
-        assert!((map[&2] - 2.0).abs() < 1e-10);
+        assert_eq!(map[&1], 1);
+        assert_eq!(map[&2], 2);
     }
 
     #[test]
@@ -737,13 +750,13 @@ mod tests {
         let values: Vec<i64> = vec![5, 2, 3, 4, 1];
         let result = parallel_groupby_max_i64(&keys, &values).unwrap();
 
-        let mut map: AHashMap<i64, f64> = AHashMap::new();
+        let mut map: AHashMap<i64, i64> = AHashMap::new();
         for (k, v) in result.keys.iter().zip(result.values.iter()) {
             map.insert(*k, *v);
         }
 
-        assert!((map[&1] - 5.0).abs() < 1e-10);
-        assert!((map[&2] - 4.0).abs() < 1e-10);
+        assert_eq!(map[&1], 5);
+        assert_eq!(map[&2], 4);
     }
 
     #[test]

@@ -99,6 +99,29 @@ class TestFirstSeenOrderSortFalse:
             rtol=(0.0 if agg == "count" else 1e-10),
         )
 
+    @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count"])
+    def test_booster_sort_false_preserves_first_seen_multi_key_int(self, agg: AggFunc):
+        df = self._make_ordered_multi_df()[["k1", "k2"]].copy()
+        n = len(df)
+        df["val"] = (np.arange(n, dtype=np.int64) % 17) - 8
+
+        booster_result = cast(BoosterAccessor, df.booster).groupby(
+            ["k1", "k2"], "val", agg, sort=False
+        )
+        pandas_grouped = df.groupby(["k1", "k2"], sort=False)["val"]
+        pandas_result = getattr(pandas_grouped, agg)()
+
+        expected_order = [(1, 10), (2, 20), (3, 30), (4, 40)]
+        assert booster_result.index.tolist() == pandas_result.index.tolist() == expected_order
+
+        pd.testing.assert_series_equal(
+            booster_result,
+            pandas_result,
+            check_exact=(agg != "mean"),
+            check_dtype=True,
+            rtol=(1e-10 if agg == "mean" else 0.0),
+        )
+
 
 @pytest.fixture
 def large_multi_df():
@@ -170,14 +193,13 @@ class TestMultiKeyGroupBySum:
         )
         pandas_result = large_multi_df.groupby(["k1", "k2"])["val_int"].sum()
 
-        booster_sorted = booster_result.sort_index().astype(float)
-        pandas_sorted = pandas_result.sort_index().astype(float)
+        booster_sorted = booster_result.sort_index()
+        pandas_sorted = pandas_result.sort_index()
 
         pd.testing.assert_series_equal(
             booster_sorted,
             pandas_sorted,
-            check_exact=False,
-            rtol=1e-10,
+            check_exact=True,
         )
 
 
@@ -258,14 +280,13 @@ class TestMultiKeyGroupByMinMax:
         )
         pandas_result = large_multi_df.groupby(["k1", "k2", "k3"])["val_int"].min()
 
-        booster_sorted = booster_result.sort_index().astype(float)
-        pandas_sorted = pandas_result.sort_index().astype(float)
+        booster_sorted = booster_result.sort_index()
+        pandas_sorted = pandas_result.sort_index()
 
         pd.testing.assert_series_equal(
             booster_sorted,
             pandas_sorted,
-            check_exact=False,
-            rtol=1e-10,
+            check_exact=True,
         )
 
 
