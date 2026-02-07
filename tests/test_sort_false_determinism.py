@@ -56,6 +56,51 @@ print(
 )
 """
 
+_SINGLE_KEY_SCRIPT = r"""
+import hashlib
+import json
+
+import numpy as np
+import pandas as pd
+from pandas_booster.accessor import BoosterAccessor  # noqa: F401
+
+
+def series_fingerprint(series: pd.Series) -> str:
+    h = hashlib.sha256()
+    arr_idx = np.asarray(series.index)
+    h.update(arr_idx.dtype.str.encode("ascii"))
+    h.update(arr_idx.tobytes())
+
+    vals = np.asarray(series.to_numpy())
+    h.update(vals.dtype.str.encode("ascii"))
+    h.update(vals.tobytes())
+    return h.hexdigest()
+
+
+n = 260_000
+idx = np.arange(n, dtype=np.int64)
+k = idx % 257
+
+v = np.where(
+    idx % 4 == 0,
+    1e16,
+    np.where(idx % 4 == 1, 1.0, np.where(idx % 4 == 2, -1e16, 0.25)),
+).astype(np.float64)
+v[idx % 997 == 0] = np.nan
+v[idx % 991 == 0] = -0.0
+
+df = pd.DataFrame({"k": k, "v": v})
+
+res = {
+    "sum_sorted": series_fingerprint(df.booster.groupby("k", "v", "sum", sort=True)),
+    "sum_firstseen": series_fingerprint(df.booster.groupby("k", "v", "sum", sort=False)),
+    "mean_sorted": series_fingerprint(df.booster.groupby("k", "v", "mean", sort=True)),
+    "mean_firstseen": series_fingerprint(df.booster.groupby("k", "v", "mean", sort=False)),
+}
+
+print(json.dumps(res, sort_keys=True))
+"""
+
 
 def _run_once(ray_threads: int) -> str:
     env = os.environ.copy()
@@ -63,6 +108,21 @@ def _run_once(ray_threads: int) -> str:
     root = Path(__file__).resolve().parents[1]
     proc = subprocess.run(
         [sys.executable, "-c", _SCRIPT],
+        cwd=root,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return proc.stdout.strip()
+
+
+def _run_script_once(ray_threads: int, script: str) -> str:
+    env = os.environ.copy()
+    env["RAYON_NUM_THREADS"] = str(ray_threads)
+    root = Path(__file__).resolve().parents[1]
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
         cwd=root,
         env=env,
         check=True,
@@ -80,3 +140,13 @@ def test_sort_false_fingerprint_deterministic_across_threads_and_repeats() -> No
 
     for _ in range(10):
         assert _run_once(8) == baseline
+
+
+def test_single_key_float_sum_mean_bitwise_deterministic_across_threads() -> None:
+    baseline = _run_script_once(1, _SINGLE_KEY_SCRIPT)
+
+    for _ in range(2):
+        assert _run_script_once(1, _SINGLE_KEY_SCRIPT) == baseline
+
+    for _ in range(10):
+        assert _run_script_once(8, _SINGLE_KEY_SCRIPT) == baseline

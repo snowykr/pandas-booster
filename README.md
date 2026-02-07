@@ -106,8 +106,11 @@ Emergency toggle (panic button):
 - `PANDAS_BOOSTER_FORCE_PANDAS_SORT` (default: OFF when unset):
   - truthy (`1/true/yes/on`, case-insensitive): force Python `Series.sort_index()` after Rust aggregation for `sort=True`.
   - anything else (including `0/false/no/off`): keep Rust-side sorting.
+- `PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY` (default: OFF when unset):
+  - truthy (`1/true/yes/on`, case-insensitive): force pandas fallback for **single-key float** `sum`/`mean`.
+  - anything else (including `0/false/no/off`): use Rust deterministic reduction kernels.
 
-This toggle is intended for quick rollback if a Rust sorting bug is discovered. Forcing Python sort moves the `sort=True` cost to Pandas and is slower. If the Rust wheel is missing `*_sorted` kernels, pandas-booster also falls back to Python `sort_index()` automatically.
+These toggles are intended for quick rollback if a Rust ordering or deterministic-float reduction issue is discovered. Forcing Python sort moves the `sort=True` cost to Pandas and is slower. Forcing pandas float groupby rolls single-key float `sum`/`mean` back to pandas semantics/performance.
 
 Note: the Rust-side `sort=True` kernels allocate a permutation vector and perform an `O(G log G)` comparison sort over groups (G = number of groups). This can increase memory usage at very high cardinality.
 
@@ -148,6 +151,7 @@ To ensure correctness and performance, the following constraints apply:
 - **Value column**: Must be a numeric dtype (integers or floats).
 - **Extension dtypes**: Pandas extension dtypes (e.g., nullable `Int64` / `Float64` using `pd.NA`) are not supported and will trigger a fallback to Pandas.
 - **NaN handling**: `NaN` values in the target column are skipped in aggregations, matching standard Pandas behavior.
+- **Determinism policy (single-key float `sum`/`mean`)**: Results are bitwise deterministic across thread counts for identical inputs. `NaN` inputs are skipped; all-`NaN` groups follow existing semantics (`sum -> +0.0`, `mean -> NaN`); signed zero is not canonicalized and may differ by IEEE-754 addition semantics. The deterministic reduction order is implementation-defined and may differ from pandas at the last-bit level.
 - **Return types**: Integer aggregations follow Pandas-style dtypes: `sum/min/max/count` return integer results, and `mean` returns `float64`.
 
 ## Performance

@@ -10,7 +10,11 @@ import pandas as pd
 
 from . import _abi_compat as _abi_compat
 from . import _groupby_accel as _groupby_accel_mod
-from ._config import force_pandas_sort_enabled, strict_abi_enabled
+from ._config import (
+    force_pandas_float_groupby_enabled,
+    force_pandas_sort_enabled,
+    strict_abi_enabled,
+)
 
 if TYPE_CHECKING:
     from pandas import DataFrame, Series
@@ -126,6 +130,13 @@ class BoosterAccessor:
             return self._pandas_fallback([by], target, agg, sort=sort)
 
         if self._has_nullable_na(key_col) or self._has_nullable_na(val_col):
+            return self._pandas_fallback([by], target, agg, sort=sort)
+
+        if (
+            pd.api.types.is_float_dtype(val_col)
+            and agg in {"sum", "mean"}
+            and force_pandas_float_groupby_enabled()
+        ):
             return self._pandas_fallback([by], target, agg, sort=sort)
 
         return self._rust_groupby_single(key_col, val_col, agg, sort=sort)
