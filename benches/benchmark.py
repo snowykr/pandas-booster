@@ -18,6 +18,9 @@ Usage:
     # Run only high cardinality benchmarks
     python benches/benchmark.py --cardinality high
 
+    # Run only threshold-neighborhood benchmarks
+    python benches/benchmark.py --cardinality threshold --sort-mode unsorted
+
     # Run only sorted benchmarks
     python benches/benchmark.py --sort-mode sorted
 
@@ -614,6 +617,124 @@ def render_high_table(results: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def render_threshold_table(results: list[dict]) -> str:
+    """Render threshold-neighborhood table with cold/warm stats.
+
+    Args:
+        results: List of benchmark results for threshold presets (can include both sorted
+            and unsorted).
+
+    Returns:
+        Markdown table string.
+    """
+    if not results:
+        return ""
+
+    preset_order = ["threshold_180k", "threshold_200k", "threshold_220k"]
+    preset_labels = {
+        "threshold_180k": "2-key (~180k elems)",
+        "threshold_200k": "2-key (~200k elems)",
+        "threshold_220k": "2-key (~220k elems)",
+    }
+
+    results_by_preset_sort = {}
+    for r in results:
+        key = (r["preset"], r["sort"])
+        results_by_preset_sort[key] = r
+
+    lines = []
+    lines.append("| Operation | Groups | Sort | Type | Pandas | Polars | Booster |")
+    lines.append("|-----------|--------|------|------|--------|--------|---------|")
+
+    prev_label = None
+    prev_groups = None
+    prev_sort_str = None
+
+    for preset in preset_order:
+        for sort_val in [True, False]:
+            key = (preset, sort_val)
+            if key not in results_by_preset_sort:
+                continue
+
+            r = results_by_preset_sort[key]
+            label = preset_labels[preset]
+            groups = f"{r['combo_cardinality']:,}"
+            sort_str = "True" if sort_val else "False"
+            backends = r["backends"]
+
+            if "pandas" not in backends:
+                continue
+
+            pandas_cold: BenchmarkStats = backends["pandas"]["cold_stats"]
+            pandas_warm: BenchmarkStats = backends["pandas"]["warm_stats"]
+            pandas_cold_mean = pandas_cold.mean
+            pandas_warm_mean = pandas_warm.mean
+
+            def fmt_cell_cold(name, *, backends=backends, pandas_cold_mean=pandas_cold_mean):
+                if name not in backends:
+                    return "-"
+                cold_stats: BenchmarkStats = backends[name]["cold_stats"]
+
+                cold_mean_ms = cold_stats.mean * 1000
+                cold_std_ms = cold_stats.std * 1000
+                cold_speedup = pandas_cold_mean / cold_stats.mean if cold_stats.mean > 0 else 0
+
+                cold_str = f"{cold_mean_ms:.1f}±{cold_std_ms:.1f}ms"
+
+                if name == "pandas":
+                    return f"{cold_str} (1.0x)"
+
+                cold_speedup_str = (
+                    f"**{cold_speedup:.1f}x**" if cold_speedup >= 1.1 else f"{cold_speedup:.1f}x"
+                )
+                return f"{cold_str} ({cold_speedup_str})"
+
+            def fmt_cell_warm(name, *, backends=backends, pandas_warm_mean=pandas_warm_mean):
+                if name not in backends:
+                    return "-"
+                warm_stats: BenchmarkStats = backends[name]["warm_stats"]
+
+                warm_mean_ms = warm_stats.mean * 1000
+                warm_std_ms = warm_stats.std * 1000
+                warm_speedup = pandas_warm_mean / warm_stats.mean if warm_stats.mean > 0 else 0
+
+                warm_str = f"{warm_mean_ms:.1f}±{warm_std_ms:.1f}ms"
+
+                if name == "pandas":
+                    return f"{warm_str} (1.0x)"
+
+                warm_speedup_str = (
+                    f"**{warm_speedup:.1f}x**" if warm_speedup >= 1.1 else f"{warm_speedup:.1f}x"
+                )
+                return f"{warm_str} ({warm_speedup_str})"
+
+            pandas_cold_str = fmt_cell_cold("pandas")
+            polars_cold_str = fmt_cell_cold("polars")
+            booster_cold_str = fmt_cell_cold("booster")
+
+            pandas_warm_str = fmt_cell_warm("pandas")
+            polars_warm_str = fmt_cell_warm("polars")
+            booster_warm_str = fmt_cell_warm("booster")
+
+            display_label = label if label != prev_label else ""
+            display_groups = groups if groups != prev_groups else ""
+            display_sort = sort_str if sort_str != prev_sort_str else ""
+
+            lines.append(
+                f"| {display_label} | {display_groups} | {display_sort} | Cold | "
+                f"{pandas_cold_str} | {polars_cold_str} | {booster_cold_str} |"
+            )
+            lines.append(
+                f"|  |  |  | Warm | {pandas_warm_str} | {polars_warm_str} | {booster_warm_str} |"
+            )
+
+            prev_label = label
+            prev_groups = groups
+            prev_sort_str = sort_str
+
+    return "\n".join(lines)
+
+
 def format_performance_section(
     results: list[dict],
     sort_mode: str,
@@ -624,13 +745,14 @@ def format_performance_section(
     Args:
         results: List of all benchmark result dictionaries.
         sort_mode: "all", "sorted", or "unsorted".
-        cardinality: "all", "standard", or "high".
+        cardinality: "all", "standard", "high", or "threshold".
 
     Returns:
         Markdown string with Performance section structure.
     """
     standard_presets = {"1key", "2key", "3key", "4key", "5key"}
     high_presets = {"high_cardinality_1key", "high_cardinality_2key", "high_cardinality_3key"}
+    threshold_presets = {"threshold_180k", "threshold_200k", "threshold_220k"}
 
     # Filter results by sort_mode
     filtered_results = []
@@ -645,6 +767,7 @@ def format_performance_section(
     # Separate by cardinality
     standard_results = [r for r in filtered_results if r["preset"] in standard_presets]
     high_results = [r for r in filtered_results if r["preset"] in high_presets]
+    threshold_results = [r for r in filtered_results if r["preset"] in threshold_presets]
 
     sections = []
     sections.append("## Performance")
@@ -662,6 +785,12 @@ def format_performance_section(
         sections.append(render_high_table(high_results))
         sections.append("")
 
+    if cardinality in ["all", "threshold"] and threshold_results:
+        sections.append("### Threshold Neighborhood (2-key, n_groups * n_keys near 200k)")
+        sections.append("")
+        sections.append(render_threshold_table(threshold_results))
+        sections.append("")
+
     return "\n".join(sections)
 
 
@@ -669,20 +798,23 @@ def resolve_presets(cardinality: str) -> list[str]:
     """Resolve cardinality option to list of preset names.
 
     Args:
-        cardinality: "all", "standard", or "high".
+        cardinality: "all", "standard", "high", or "threshold".
 
     Returns:
         List of preset names.
     """
     standard = ["1key", "2key", "3key", "4key", "5key"]
     high = ["high_cardinality_1key", "high_cardinality_2key", "high_cardinality_3key"]
+    threshold = ["threshold_180k", "threshold_200k", "threshold_220k"]
 
     if cardinality == "standard":
         return standard
     elif cardinality == "high":
         return high
+    elif cardinality == "threshold":
+        return threshold
     elif cardinality == "all":
-        return standard + high
+        return standard + high + threshold
     else:
         raise ValueError(f"Unknown cardinality: {cardinality}")
 
@@ -714,7 +846,7 @@ def run_benchmarks(
     """Run benchmark suite based on cardinality and sort-mode.
 
     Args:
-        cardinality: "all", "standard", or "high".
+        cardinality: "all", "standard", "high", or "threshold".
         sort_mode: "all", "sorted", or "unsorted".
         n_samples: Number of samples per benchmark (applies to both cold and warm).
 
@@ -726,7 +858,9 @@ def run_benchmarks(
 
     cardinality_label = cardinality.capitalize()
     if cardinality == "all":
-        cardinality_label = "Standard + High"
+        cardinality_label = "Standard + High + Threshold"
+    elif cardinality == "threshold":
+        cardinality_label = "Threshold Neighborhood"
 
     print("=" * 90)
     print(f"Pandas-Booster Benchmarks: {cardinality_label} Cardinality")
@@ -871,6 +1005,7 @@ Examples:
   python benches/benchmark.py                                    # Run all benchmarks
   python benches/benchmark.py --cardinality standard             # Standard only
   python benches/benchmark.py --cardinality high                 # High only
+  python benches/benchmark.py --cardinality threshold --sort-mode unsorted  # Threshold only
   python benches/benchmark.py --sort-mode sorted                 # Sorted only
   python benches/benchmark.py --cardinality high --sort-mode unsorted  # Combine
   python benches/benchmark.py --output results.md                # Save results
@@ -883,7 +1018,7 @@ Environment:
     )
     parser.add_argument(
         "--cardinality",
-        choices=["all", "standard", "high"],
+        choices=["all", "standard", "high", "threshold"],
         default="all",
         help="Which cardinality benchmarks to run (default: all)",
     )

@@ -32,7 +32,7 @@ use crate::radix_sort::{
 };
 
 const RADIX_SORT_THRESHOLD: usize = 2048;
-const SMALL_DIRECT_THRESHOLD: usize = 200_000; // measured in elements (n_groups * n_keys)
+pub(crate) const SMALL_DIRECT_THRESHOLD_ELEMS: usize = 200_000;
 
 // CompositeKey is a fallback path. For the supported Python API (<= 10 key columns),
 // we specialize on FixedKey<N> for N=1..=10.
@@ -119,7 +119,8 @@ pub struct GroupByMultiResult<V> {
     /// Output ordering permutation.
     ///
     /// If present, output group at position `out_g` is sourced from group `perm[out_g]`.
-    /// If None, identity mapping is implied.
+    /// If None, `keys_flat`/`values` are already materialized in output order,
+    /// so identity mapping is implied and consumers must not apply any additional permutation.
     pub perm: Option<Vec<usize>>,
 }
 
@@ -145,7 +146,7 @@ fn reorder_result_by_first_seen_u32<V: Copy>(
     let keys_flat = &result.keys_flat;
     let values = &result.values;
 
-    if n_groups.saturating_mul(n_keys) > SMALL_DIRECT_THRESHOLD {
+    if n_groups.saturating_mul(n_keys) > SMALL_DIRECT_THRESHOLD_ELEMS {
         result.perm = Some(perm);
         return;
     }
@@ -181,7 +182,7 @@ fn reorder_result_by_first_seen_u64<V: Copy>(
     let keys_flat = &result.keys_flat;
     let values = &result.values;
 
-    if n_groups.saturating_mul(n_keys) > SMALL_DIRECT_THRESHOLD {
+    if n_groups.saturating_mul(n_keys) > SMALL_DIRECT_THRESHOLD_ELEMS {
         result.perm = Some(perm);
         return;
     }
@@ -1541,7 +1542,7 @@ mod tests {
 
     #[test]
     fn test_firstseen_large_output_returns_perm_without_materialized_reorder() {
-        let n_groups = 120_000usize; // n_groups * n_keys (2) > SMALL_DIRECT_THRESHOLD (200_000)
+        let n_groups = 120_000usize; // n_groups * n_keys (2) > SMALL_DIRECT_THRESHOLD_ELEMS
         let k1: Vec<i64> = (0..n_groups as i64).collect();
         let k2: Vec<i64> = (0..n_groups as i64)
             .map(|i| i.wrapping_mul(0x9E37_79B9_i64))

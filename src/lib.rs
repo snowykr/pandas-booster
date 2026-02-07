@@ -36,6 +36,7 @@ pub mod radix_groupby;
 pub mod radix_sort;
 pub mod zero_copy;
 
+use crate::radix_groupby::SMALL_DIRECT_THRESHOLD_ELEMS;
 use groupby::{GroupByResultF64, GroupByResultI64};
 use numpy::{IntoPyArray, PyArray1, PyArrayMethods, PyReadonlyArray1};
 use rayon::prelude::*;
@@ -1656,8 +1657,7 @@ fn convert_multi_result_f64<'py>(
 
     // Fast path: for small outputs, build Rust Vec columns and transfer ownership into NumPy.
     // This avoids per-element pointer writes and Rayon overhead.
-    const SMALL_DIRECT_THRESHOLD: usize = 200_000; // measured in elements (n_groups * n_keys)
-    if perm.is_none() && n_groups.saturating_mul(n_keys) <= SMALL_DIRECT_THRESHOLD {
+    if perm.is_none() && n_groups.saturating_mul(n_keys) <= SMALL_DIRECT_THRESHOLD_ELEMS {
         let mut key_cols: Vec<Vec<i64>> =
             (0..n_keys).map(|_| Vec::with_capacity(n_groups)).collect();
         for g in 0..n_groups {
@@ -1737,8 +1737,7 @@ fn convert_multi_result_i64<'py>(
         debug_assert_eq!(p.len(), n_groups);
     }
 
-    const SMALL_DIRECT_THRESHOLD: usize = 200_000; // measured in elements (n_groups * n_keys)
-    if perm.is_none() && n_groups.saturating_mul(n_keys) <= SMALL_DIRECT_THRESHOLD {
+    if perm.is_none() && n_groups.saturating_mul(n_keys) <= SMALL_DIRECT_THRESHOLD_ELEMS {
         let mut key_cols: Vec<Vec<i64>> =
             (0..n_keys).map(|_| Vec::with_capacity(n_groups)).collect();
         for g in 0..n_groups {
