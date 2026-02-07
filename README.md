@@ -151,7 +151,7 @@ To ensure correctness and performance, the following constraints apply:
 - **Value column**: Must be a numeric dtype (integers or floats).
 - **Extension dtypes**: Pandas extension dtypes (e.g., nullable `Int64` / `Float64` using `pd.NA`) are not supported and will trigger a fallback to Pandas.
 - **NaN handling**: `NaN` values in the target column are skipped in aggregations, matching standard Pandas behavior.
-- **Determinism policy (single-key float `sum`/`mean`)**: Results are bitwise deterministic across thread counts for identical inputs. `NaN` inputs are skipped; all-`NaN` groups follow existing semantics (`sum -> +0.0`, `mean -> NaN`); signed zero is not canonicalized and may differ by IEEE-754 addition semantics. The deterministic reduction order is implementation-defined and may differ from pandas at the last-bit level.
+- **Determinism policy (single-key float `sum`/`mean`)**: For identical inputs in the same runtime environment, pandas-booster returns bitwise-identical results across thread counts. `NaN` inputs are skipped; all-`NaN` groups follow existing semantics (`sum -> +0.0`, `mean -> NaN`). Compared with pandas, outputs may differ at the last-bit level (including `+0.0` vs `-0.0`) because pandas-booster uses an implementation-defined deterministic reduction order.
 - **Return types**: Integer aggregations follow Pandas-style dtypes: `sum/min/max/count` return integer results, and `mean` returns `float64`.
 
 ## Performance

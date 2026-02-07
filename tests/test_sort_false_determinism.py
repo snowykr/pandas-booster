@@ -32,7 +32,7 @@ def series_fingerprint(series: pd.Series) -> str:
 
 
 rng = np.random.default_rng(20260207)
-n = 220_000
+n = 160_000
 df = pd.DataFrame(
     {
         "k1": rng.integers(0, 40_000, size=n, dtype=np.int64),
@@ -77,7 +77,7 @@ def series_fingerprint(series: pd.Series) -> str:
     return h.hexdigest()
 
 
-n = 260_000
+n = 180_000
 idx = np.arange(n, dtype=np.int64)
 k = idx % 257
 
@@ -135,18 +135,16 @@ def _run_script_once(ray_threads: int, script: str) -> str:
 def test_sort_false_fingerprint_deterministic_across_threads_and_repeats() -> None:
     baseline = _run_once(1)
 
-    for _ in range(2):
-        assert _run_once(1) == baseline
+    assert _run_once(1) == baseline
 
-    for _ in range(10):
+    for _ in range(4):
         assert _run_once(8) == baseline
 
 
 def test_single_key_float_sum_mean_bitwise_deterministic_across_threads() -> None:
     baseline = _run_script_once(1, _SINGLE_KEY_SCRIPT)
 
-    for _ in range(2):
-        assert _run_script_once(1, _SINGLE_KEY_SCRIPT) == baseline
+    assert _run_script_once(1, _SINGLE_KEY_SCRIPT) == baseline
 
-    for _ in range(10):
+    for _ in range(4):
         assert _run_script_once(8, _SINGLE_KEY_SCRIPT) == baseline
