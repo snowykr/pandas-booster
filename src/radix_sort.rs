@@ -94,6 +94,19 @@ pub(crate) fn radix_sort_perm_by_u32(keys: &[u32]) -> Vec<usize> {
 
 pub(crate) fn radix_sort_perm_by_u64(keys: &[u64]) -> Vec<usize> {
     let n = keys.len();
+
+    if n <= 1 {
+        return (0..n).collect();
+    }
+
+    const SMALL_SORT_THRESHOLD: usize = 2048;
+
+    if n < SMALL_SORT_THRESHOLD {
+        let mut perm: Vec<usize> = (0..n).collect();
+        perm.sort_unstable_by(|&i, &j| keys[i].cmp(&keys[j]).then(i.cmp(&j)));
+        return perm;
+    }
+
     let mut a: Vec<usize> = (0..n).collect();
     let mut b: Vec<usize> = vec![0; n];
 
