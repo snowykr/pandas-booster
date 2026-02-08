@@ -9,6 +9,52 @@ pub(crate) fn i64_to_sortable_u64(value: i64) -> u64 {
 
 pub(crate) fn radix_sort_perm_by_u32(keys: &[u32]) -> Vec<usize> {
     let n = keys.len();
+
+    if n <= 1 {
+        return (0..n).collect();
+    }
+
+    const SMALL_SORT_THRESHOLD: usize = 2048;
+    const RADIX16_THRESHOLD: usize = 131_072;
+
+    if n < SMALL_SORT_THRESHOLD {
+        let mut perm: Vec<usize> = (0..n).collect();
+        perm.sort_unstable_by(|&i, &j| keys[i].cmp(&keys[j]).then(i.cmp(&j)));
+        return perm;
+    }
+
+    if n >= RADIX16_THRESHOLD {
+        let mut a: Vec<usize> = (0..n).collect();
+        let mut b: Vec<usize> = vec![0; n];
+        let mut counts = vec![0usize; 1 << 16];
+
+        for shift in [0usize, 16usize] {
+            counts.fill(0);
+            for &idx in &a {
+                let digit = ((keys[idx] >> shift) & 0xFFFF) as usize;
+                counts[digit] += 1;
+            }
+
+            let mut sum = 0usize;
+            for c in &mut counts {
+                let tmp = *c;
+                *c = sum;
+                sum += tmp;
+            }
+
+            for &idx in &a {
+                let digit = ((keys[idx] >> shift) & 0xFFFF) as usize;
+                let pos = counts[digit];
+                b[pos] = idx;
+                counts[digit] = pos + 1;
+            }
+
+            std::mem::swap(&mut a, &mut b);
+        }
+
+        return a;
+    }
+
     let mut a: Vec<usize> = (0..n).collect();
     let mut b: Vec<usize> = vec![0; n];
 
@@ -48,6 +94,19 @@ pub(crate) fn radix_sort_perm_by_u32(keys: &[u32]) -> Vec<usize> {
 
 pub(crate) fn radix_sort_perm_by_u64(keys: &[u64]) -> Vec<usize> {
     let n = keys.len();
+
+    if n <= 1 {
+        return (0..n).collect();
+    }
+
+    const SMALL_SORT_THRESHOLD: usize = 2048;
+
+    if n < SMALL_SORT_THRESHOLD {
+        let mut perm: Vec<usize> = (0..n).collect();
+        perm.sort_unstable_by(|&i, &j| keys[i].cmp(&keys[j]).then(i.cmp(&j)));
+        return perm;
+    }
+
     let mut a: Vec<usize> = (0..n).collect();
     let mut b: Vec<usize> = vec![0; n];
 

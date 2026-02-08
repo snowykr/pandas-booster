@@ -97,7 +97,7 @@ def groupby_count_f64_firstseen_u64(
 def groupby_sum_i64(
     keys: NDArray[np.int64],
     values: NDArray[np.int64],
-) -> SingleReturnF64: ...
+) -> SingleReturnI64: ...
 def groupby_mean_i64(
     keys: NDArray[np.int64],
     values: NDArray[np.int64],
@@ -105,11 +105,11 @@ def groupby_mean_i64(
 def groupby_min_i64(
     keys: NDArray[np.int64],
     values: NDArray[np.int64],
-) -> SingleReturnF64: ...
+) -> SingleReturnI64: ...
 def groupby_max_i64(
     keys: NDArray[np.int64],
     values: NDArray[np.int64],
-) -> SingleReturnF64: ...
+) -> SingleReturnI64: ...
 def groupby_count_i64(
     keys: NDArray[np.int64],
     values: NDArray[np.int64],
@@ -117,7 +117,7 @@ def groupby_count_i64(
 def groupby_sum_i64_sorted(
     keys: NDArray[np.int64],
     values: NDArray[np.int64],
-) -> SingleReturnF64: ...
+) -> SingleReturnI64: ...
 def groupby_mean_i64_sorted(
     keys: NDArray[np.int64],
     values: NDArray[np.int64],
@@ -125,11 +125,11 @@ def groupby_mean_i64_sorted(
 def groupby_min_i64_sorted(
     keys: NDArray[np.int64],
     values: NDArray[np.int64],
-) -> SingleReturnF64: ...
+) -> SingleReturnI64: ...
 def groupby_max_i64_sorted(
     keys: NDArray[np.int64],
     values: NDArray[np.int64],
-) -> SingleReturnF64: ...
+) -> SingleReturnI64: ...
 def groupby_count_i64_sorted(
     keys: NDArray[np.int64],
     values: NDArray[np.int64],
@@ -137,11 +137,11 @@ def groupby_count_i64_sorted(
 def groupby_sum_i64_firstseen_u32(
     keys: NDArray[np.int64],
     values: NDArray[np.int64],
-) -> SingleReturnF64: ...
+) -> SingleReturnI64: ...
 def groupby_sum_i64_firstseen_u64(
     keys: NDArray[np.int64],
     values: NDArray[np.int64],
-) -> SingleReturnF64: ...
+) -> SingleReturnI64: ...
 def groupby_mean_i64_firstseen_u32(
     keys: NDArray[np.int64],
     values: NDArray[np.int64],
@@ -153,19 +153,19 @@ def groupby_mean_i64_firstseen_u64(
 def groupby_min_i64_firstseen_u32(
     keys: NDArray[np.int64],
     values: NDArray[np.int64],
-) -> SingleReturnF64: ...
+) -> SingleReturnI64: ...
 def groupby_min_i64_firstseen_u64(
     keys: NDArray[np.int64],
     values: NDArray[np.int64],
-) -> SingleReturnF64: ...
+) -> SingleReturnI64: ...
 def groupby_max_i64_firstseen_u32(
     keys: NDArray[np.int64],
     values: NDArray[np.int64],
-) -> SingleReturnF64: ...
+) -> SingleReturnI64: ...
 def groupby_max_i64_firstseen_u64(
     keys: NDArray[np.int64],
     values: NDArray[np.int64],
-) -> SingleReturnF64: ...
+) -> SingleReturnI64: ...
 def groupby_count_i64_firstseen_u32(
     keys: NDArray[np.int64],
     values: NDArray[np.int64],
@@ -257,7 +257,7 @@ def groupby_multi_count_f64_firstseen_u64(
 def groupby_multi_sum_i64(
     key_arrays: Sequence[NDArray[np.int64]],
     values: NDArray[np.int64],
-) -> MultiReturnF64: ...
+) -> MultiReturnI64: ...
 def groupby_multi_mean_i64(
     key_arrays: Sequence[NDArray[np.int64]],
     values: NDArray[np.int64],
@@ -265,11 +265,11 @@ def groupby_multi_mean_i64(
 def groupby_multi_min_i64(
     key_arrays: Sequence[NDArray[np.int64]],
     values: NDArray[np.int64],
-) -> MultiReturnF64: ...
+) -> MultiReturnI64: ...
 def groupby_multi_max_i64(
     key_arrays: Sequence[NDArray[np.int64]],
     values: NDArray[np.int64],
-) -> MultiReturnF64: ...
+) -> MultiReturnI64: ...
 def groupby_multi_count_i64(
     key_arrays: Sequence[NDArray[np.int64]],
     values: NDArray[np.int64],
@@ -277,7 +277,7 @@ def groupby_multi_count_i64(
 def groupby_multi_sum_i64_sorted(
     key_arrays: Sequence[NDArray[np.int64]],
     values: NDArray[np.int64],
-) -> MultiReturnF64: ...
+) -> MultiReturnI64: ...
 def groupby_multi_mean_i64_sorted(
     key_arrays: Sequence[NDArray[np.int64]],
     values: NDArray[np.int64],
@@ -285,11 +285,11 @@ def groupby_multi_mean_i64_sorted(
 def groupby_multi_min_i64_sorted(
     key_arrays: Sequence[NDArray[np.int64]],
     values: NDArray[np.int64],
-) -> MultiReturnF64: ...
+) -> MultiReturnI64: ...
 def groupby_multi_max_i64_sorted(
     key_arrays: Sequence[NDArray[np.int64]],
     values: NDArray[np.int64],
-) -> MultiReturnF64: ...
+) -> MultiReturnI64: ...
 def groupby_multi_count_i64_sorted(
     key_arrays: Sequence[NDArray[np.int64]],
     values: NDArray[np.int64],
@@ -297,11 +297,11 @@ def groupby_multi_count_i64_sorted(
 def groupby_multi_sum_i64_firstseen_u32(
     key_arrays: Sequence[NDArray[np.int64]],
     values: NDArray[np.int64],
-) -> MultiReturnF64: ...
+) -> MultiReturnI64: ...
 def groupby_multi_sum_i64_firstseen_u64(
     key_arrays: Sequence[NDArray[np.int64]],
     values: NDArray[np.int64],
-) -> MultiReturnF64: ...
+) -> MultiReturnI64: ...
 def groupby_multi_mean_i64_firstseen_u32(
     key_arrays: Sequence[NDArray[np.int64]],
     values: NDArray[np.int64],
@@ -313,19 +313,19 @@ def groupby_multi_mean_i64_firstseen_u64(
 def groupby_multi_min_i64_firstseen_u32(
     key_arrays: Sequence[NDArray[np.int64]],
     values: NDArray[np.int64],
-) -> MultiReturnF64: ...
+) -> MultiReturnI64: ...
 def groupby_multi_min_i64_firstseen_u64(
     key_arrays: Sequence[NDArray[np.int64]],
     values: NDArray[np.int64],
-) -> MultiReturnF64: ...
+) -> MultiReturnI64: ...
 def groupby_multi_max_i64_firstseen_u32(
     key_arrays: Sequence[NDArray[np.int64]],
     values: NDArray[np.int64],
-) -> MultiReturnF64: ...
+) -> MultiReturnI64: ...
 def groupby_multi_max_i64_firstseen_u64(
     key_arrays: Sequence[NDArray[np.int64]],
     values: NDArray[np.int64],
-) -> MultiReturnF64: ...
+) -> MultiReturnI64: ...
 def groupby_multi_count_i64_firstseen_u32(
     key_arrays: Sequence[NDArray[np.int64]],
     values: NDArray[np.int64],

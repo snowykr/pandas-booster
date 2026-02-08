@@ -6,8 +6,8 @@
 //! ## Design Decisions
 //!
 //! - **NaN Handling**: Float aggregators skip NaN values (matching Pandas behavior).
-//! - **Integer Output**: All `i64` aggregations return `f64` to match Pandas' overflow
-//!   promotion behavior and avoid silent integer clamping.
+//! - **Integer Output**: Integer aggregations follow Pandas semantics:
+//!   `sum/min/max/count` return integer outputs and `mean` returns `f64`.
 //! - **Thread Safety**: All aggregators implement `Send + Sync` for parallel execution.
 
 /// Core trait for streaming aggregation with support for parallel merge.
@@ -179,14 +179,14 @@ impl Aggregator<f64, f64> for MaxAggF64 {
     }
 }
 
-/// Sum aggregator for i64. Uses i128 internally to prevent overflow.
-/// Returns f64 to match Pandas overflow promotion behavior. Avoids silent clamping.
+/// Sum aggregator for i64. Uses i128 internally and truncates back to i64,
+/// matching Pandas integer-overflow wrap behavior.
 #[derive(Clone, Default)]
 pub struct SumAggI64 {
     pub sum: i128,
 }
 
-impl Aggregator<i64, f64> for SumAggI64 {
+impl Aggregator<i64, i64> for SumAggI64 {
     fn init() -> Self {
         Self { sum: 0 }
     }
@@ -199,8 +199,8 @@ impl Aggregator<i64, f64> for SumAggI64 {
         self.sum += other.sum;
     }
 
-    fn finalize(&self) -> f64 {
-        self.sum as f64
+    fn finalize(&self) -> i64 {
+        self.sum as i64
     }
 }
 
@@ -235,13 +235,13 @@ impl Aggregator<i64, f64> for MeanAggI64 {
     }
 }
 
-/// Min aggregator for i64. Returns NaN for empty groups.
+/// Min aggregator for i64.
 #[derive(Clone, Default)]
 pub struct MinAggI64 {
     pub min: Option<i64>,
 }
 
-impl Aggregator<i64, f64> for MinAggI64 {
+impl Aggregator<i64, i64> for MinAggI64 {
     fn init() -> Self {
         Self::default()
     }
@@ -262,18 +262,18 @@ impl Aggregator<i64, f64> for MinAggI64 {
         };
     }
 
-    fn finalize(&self) -> f64 {
-        self.min.map(|v| v as f64).unwrap_or(f64::NAN)
+    fn finalize(&self) -> i64 {
+        self.min.expect("MinAggI64 finalized without values")
     }
 }
 
-/// Max aggregator for i64. Returns NaN for empty groups.
+/// Max aggregator for i64.
 #[derive(Clone, Default)]
 pub struct MaxAggI64 {
     pub max: Option<i64>,
 }
 
-impl Aggregator<i64, f64> for MaxAggI64 {
+impl Aggregator<i64, i64> for MaxAggI64 {
     fn init() -> Self {
         Self::default()
     }
@@ -294,8 +294,8 @@ impl Aggregator<i64, f64> for MaxAggI64 {
         };
     }
 
-    fn finalize(&self) -> f64 {
-        self.max.map(|v| v as f64).unwrap_or(f64::NAN)
+    fn finalize(&self) -> i64 {
+        self.max.expect("MaxAggI64 finalized without values")
     }
 }
 
@@ -444,8 +444,8 @@ mod tests {
         agg.update(i64::MAX);
         agg.update(i64::MAX);
         let result = agg.finalize();
-        let expected = (i64::MAX as i128 * 2) as f64;
-        assert!((result - expected).abs() < 1e6);
+        let expected = (i64::MAX as i128 * 2) as i64;
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -455,15 +455,17 @@ mod tests {
     }
 
     #[test]
-    fn test_min_i64_empty_returns_nan() {
+    #[should_panic(expected = "MinAggI64 finalized without values")]
+    fn test_min_i64_empty_panics() {
         let agg = MinAggI64::init();
-        assert!(agg.finalize().is_nan());
+        let _ = agg.finalize();
     }
 
     #[test]
-    fn test_max_i64_empty_returns_nan() {
+    #[should_panic(expected = "MaxAggI64 finalized without values")]
+    fn test_max_i64_empty_panics() {
         let agg = MaxAggI64::init();
-        assert!(agg.finalize().is_nan());
+        let _ = agg.finalize();
     }
 
     #[test]
@@ -489,7 +491,7 @@ mod tests {
         agg2.update(2);
 
         agg1.merge(agg2);
-        assert!((agg1.finalize() - 2.0).abs() < 1e-10);
+        assert_eq!(agg1.finalize(), 2);
     }
 
     #[test]
@@ -500,7 +502,7 @@ mod tests {
         let agg2 = MaxAggI64::init();
 
         agg1.merge(agg2);
-        assert!((agg1.finalize() - 10.0).abs() < 1e-10);
+        assert_eq!(agg1.finalize(), 10);
     }
 
     #[test]

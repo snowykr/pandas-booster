@@ -183,14 +183,12 @@ class TestAcceleratedAggregations:
         booster_sorted = booster_result.sort_index()
         pandas_sorted = pandas_result.sort_index()
 
-        if agg in ("sum", "min", "max"):
-            pandas_sorted = pandas_sorted.astype(float)
-
         pd.testing.assert_series_equal(
             booster_sorted,
             pandas_sorted,
-            check_exact=False,
-            rtol=1e-10,
+            check_exact=(agg != "mean"),
+            check_dtype=True,
+            rtol=(1e-10 if agg == "mean" else 0.0),
         )
 
 
@@ -380,6 +378,27 @@ class TestNaNHandling:
 
 
 class TestEdgeCases:
+    def test_force_pandas_float_groupby_env_applies_to_proxy_single_key_sum(
+        self, large_df, monkeypatch: pytest.MonkeyPatch
+    ):
+        import pandas_booster
+        import pandas_booster._rust as rust
+
+        monkeypatch.setenv("PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY", "1")
+
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("Rust float sum kernel should not be called when env is enabled")
+
+        monkeypatch.setattr(rust, "groupby_sum_f64", _boom)
+        monkeypatch.setattr(rust, "groupby_sum_f64_sorted", _boom)
+
+        pandas_result = large_df.groupby("key", sort=True)["val_float"].sum()
+
+        pandas_booster.activate()
+        proxy_result = large_df.groupby("key", sort=True)["val_float"].sum()
+
+        pd.testing.assert_series_equal(proxy_result.sort_index(), pandas_result.sort_index())
+
     def test_multicolumn_selection_not_proxied(self, large_df):
         import pandas_booster
         from pandas.core.groupby import DataFrameGroupBy

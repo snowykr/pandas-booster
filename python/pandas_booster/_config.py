@@ -32,6 +32,20 @@ def strict_abi_enabled() -> bool:
     return value.strip().lower() in _TRUTHY
 
 
+def force_pandas_float_groupby_enabled() -> bool:
+    """Return True if single-key float sum/mean should force pandas fallback.
+
+    Emergency toggle:
+    - unset / 0: OFF (default)
+    - 1: ON
+    - also accepts: true/yes/on (case-insensitive)
+    """
+    value = os.getenv("PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY")
+    if value is None:
+        return False
+    return value.strip().lower() in _TRUTHY
+
+
 def abi_skew_notice_enabled() -> bool:
     """Return True if ABI-skew notices should be emitted.
 

@@ -113,6 +113,26 @@ PRESETS: dict[str, dict] = {
         "value_dtype": "float64",
         "seed": 42,
     },
+    # Threshold-neighborhood cases for sort=False multi-key path.
+    # Target total output elements ~= n_groups * n_keys around 200k.
+    "threshold_180k": {
+        "n_rows": 5_000_000,
+        "key_configs": [("k1", 1000), ("k2", 90)],
+        "value_dtype": "float64",
+        "seed": 42,
+    },
+    "threshold_200k": {
+        "n_rows": 5_000_000,
+        "key_configs": [("k1", 1000), ("k2", 100)],
+        "value_dtype": "float64",
+        "seed": 42,
+    },
+    "threshold_220k": {
+        "n_rows": 5_000_000,
+        "key_configs": [("k1", 1000), ("k2", 110)],
+        "value_dtype": "float64",
+        "seed": 42,
+    },
 }
 
 

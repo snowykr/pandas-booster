@@ -7,7 +7,11 @@ import numpy as np
 import pandas as pd
 
 from ._abi_compat import PandasBoosterKeyShapeSkewError, normalize_multi_keys_cols, raise_abi_skew
-from ._config import force_pandas_sort_enabled, strict_abi_enabled
+from ._config import (
+    force_pandas_float_groupby_enabled,
+    force_pandas_sort_enabled,
+    strict_abi_enabled,
+)
 from ._groupby_accel import (
     build_series_from_multi_result,
     build_series_from_single_result,
@@ -125,6 +129,10 @@ class BoosterSeriesGroupBy:
             key_col = self._df[by_cols[0]]
             if not isinstance(key_col, pd.Series):
                 return cast("Series", getattr(self._obj, agg)())
+
+            if not is_val_int and agg in {"sum", "mean"} and force_pandas_float_groupby_enabled():
+                return cast("Series", getattr(self._obj, agg)())
+
             key_dtype = capture_key_numpy_dtype(key_col)
 
             keys = to_i64_contiguous(key_col.to_numpy(copy=False))
@@ -152,6 +160,7 @@ class BoosterSeriesGroupBy:
                 index_name=key_col.name,
                 index_dtype=key_dtype,
                 agg=agg,
+                is_val_int=is_val_int,
                 sort=sort,
                 needs_python_sort=needs_python_sort,
             )
@@ -221,6 +230,7 @@ class BoosterSeriesGroupBy:
                     key_dtypes=key_dtypes,
                     name=val_col.name,
                     agg=agg,
+                    is_val_int=is_val_int,
                     sort=sort,
                     needs_python_sort=needs_python_sort,
                 )
