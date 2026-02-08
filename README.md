@@ -240,8 +240,11 @@ To reproduce the benchmark results shown above:
 pip install -e ".[bench,dev]"
 maturin develop --release
 
-# Run all benchmarks
+# Run default benchmarks (standard + high)
 python benches/benchmark.py --samples 20 --output results.md
+
+# Include threshold diagnostics as well
+python benches/benchmark.py --cardinality all --diagnostic threshold --sort-mode unsorted --samples 20 --output results.md
 ```
 
 #### Environment & Configuration
@@ -303,15 +306,21 @@ This installs:
 
 #### Running Benchmarks
 ```bash
-# Run all benchmarks (standard + high cardinality, sorted + sort=False)
+# Run default benchmarks (cardinality=all, diagnostic=none)
 source .venv/bin/activate
 python benches/benchmark.py
+
+# Run full suite (core + diagnostics)
+python benches/benchmark.py --cardinality all --diagnostic threshold --sort-mode unsorted
 
 # Run only standard cardinality benchmarks
 python benches/benchmark.py --cardinality standard
 
 # Run only high cardinality benchmarks
 python benches/benchmark.py --cardinality high
+
+# Add threshold-neighborhood diagnostics (opt-in)
+python benches/benchmark.py --diagnostic threshold --sort-mode unsorted
 
 # Run only sorted or sort=False benchmarks
 python benches/benchmark.py --sort-mode sorted
@@ -326,6 +335,15 @@ python benches/benchmark.py --output results.md
 # Adjust sample count (applies to both cold and warm; default: 5)
 python benches/benchmark.py --samples 20
 ```
+
+Note: `--cardinality` is for workload classes (`standard`, `high`, `all`), while
+`--diagnostic` is for internal boundary checks (`none`, `threshold`).
+
+Note: `--diagnostic threshold` is only valid with `--sort-mode unsorted` because it targets
+`sort=False` multi-key boundary behavior around `n_groups * n_keys ~= 200k`.
+
+Breaking change (no compatibility mode): `--cardinality default` and
+`--cardinality threshold` were removed in this version.
 
 ## Architecture Overview
 

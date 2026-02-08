@@ -9,7 +9,7 @@ Cold/Warm Definitions:
 - Warm: Steady-state performance after cold + 1 warmup run (discarded), 5 samples
 
 Usage:
-    # Run all benchmarks (standard + high cardinality, sorted + sort=False)
+    # Run core benchmarks (standard + high cardinality, sorted + sort=False)
     python benches/benchmark.py
 
     # Run only standard cardinality benchmarks
@@ -18,8 +18,11 @@ Usage:
     # Run only high cardinality benchmarks
     python benches/benchmark.py --cardinality high
 
-    # Run only threshold-neighborhood benchmarks
-    python benches/benchmark.py --cardinality threshold --sort-mode unsorted
+    # Run threshold-neighborhood diagnostics (sort=False boundary checks)
+    python benches/benchmark.py --diagnostic threshold --sort-mode unsorted
+
+    # Run full suite (core + diagnostics)
+    python benches/benchmark.py --cardinality all --diagnostic threshold --sort-mode unsorted
 
     # Run only sorted benchmarks
     python benches/benchmark.py --sort-mode sorted
@@ -739,13 +742,15 @@ def format_performance_section(
     results: list[dict],
     sort_mode: str,
     cardinality: str,
+    diagnostic: str,
 ) -> str:
     """Format benchmark results as README Performance section with cold/warm stats.
 
     Args:
         results: List of all benchmark result dictionaries.
         sort_mode: "all", "sorted", or "unsorted".
-        cardinality: "all", "standard", "high", or "threshold".
+        cardinality: "all", "standard", or "high".
+        diagnostic: "none" or "threshold".
 
     Returns:
         Markdown string with Performance section structure.
@@ -785,8 +790,10 @@ def format_performance_section(
         sections.append(render_high_table(high_results))
         sections.append("")
 
-    if cardinality in ["all", "threshold"] and threshold_results:
-        sections.append("### Threshold Neighborhood (2-key, n_groups * n_keys near 200k)")
+    if diagnostic == "threshold" and threshold_results:
+        sections.append("### Diagnostics")
+        sections.append("")
+        sections.append("#### Threshold Neighborhood (2-key, n_groups * n_keys near 200k)")
         sections.append("")
         sections.append(render_threshold_table(threshold_results))
         sections.append("")
@@ -794,29 +801,37 @@ def format_performance_section(
     return "\n".join(sections)
 
 
-def resolve_presets(cardinality: str) -> list[str]:
-    """Resolve cardinality option to list of preset names.
+def resolve_core_presets(cardinality: str) -> list[str]:
+    """Resolve core cardinality option to list of preset names.
 
     Args:
-        cardinality: "all", "standard", "high", or "threshold".
+        cardinality: "all", "standard", or "high".
 
     Returns:
         List of preset names.
     """
     standard = ["1key", "2key", "3key", "4key", "5key"]
     high = ["high_cardinality_1key", "high_cardinality_2key", "high_cardinality_3key"]
-    threshold = ["threshold_180k", "threshold_200k", "threshold_220k"]
-
     if cardinality == "standard":
         return standard
     elif cardinality == "high":
         return high
-    elif cardinality == "threshold":
-        return threshold
     elif cardinality == "all":
-        return standard + high + threshold
+        return standard + high
     else:
         raise ValueError(f"Unknown cardinality: {cardinality}")
+
+
+def resolve_diagnostic_presets(diagnostic: str) -> list[str]:
+    """Resolve diagnostic option to list of preset names."""
+    threshold = ["threshold_180k", "threshold_200k", "threshold_220k"]
+
+    if diagnostic == "none":
+        return []
+    elif diagnostic == "threshold":
+        return threshold
+    else:
+        raise ValueError(f"Unknown diagnostic: {diagnostic}")
 
 
 def resolve_sorts(sort_mode: str) -> list[bool]:
@@ -840,31 +855,42 @@ def resolve_sorts(sort_mode: str) -> list[bool]:
 
 def run_benchmarks(
     cardinality: str,
+    diagnostic: str,
     sort_mode: str,
     n_samples: int = 5,
 ) -> list[dict]:
     """Run benchmark suite based on cardinality and sort-mode.
 
     Args:
-        cardinality: "all", "standard", "high", or "threshold".
+        cardinality: "all", "standard", or "high".
+        diagnostic: "none" or "threshold".
         sort_mode: "all", "sorted", or "unsorted".
         n_samples: Number of samples per benchmark (applies to both cold and warm).
 
     Returns:
         List of benchmark result dictionaries.
     """
-    presets = resolve_presets(cardinality)
+    core_presets = resolve_core_presets(cardinality)
+    diagnostic_presets = resolve_diagnostic_presets(diagnostic)
     sorts = resolve_sorts(sort_mode)
+
+    if diagnostic == "threshold" and sort_mode != "unsorted":
+        raise ValueError(
+            "--diagnostic threshold requires --sort-mode unsorted "
+            "(threshold diagnostics are sort=False boundary checks)"
+        )
+
+    presets = core_presets + diagnostic_presets
 
     cardinality_label = cardinality.capitalize()
     if cardinality == "all":
-        cardinality_label = "Standard + High + Threshold"
-    elif cardinality == "threshold":
-        cardinality_label = "Threshold Neighborhood"
+        cardinality_label = "Standard + High"
+    diagnostics_label = "None" if diagnostic == "none" else "Threshold Neighborhood"
 
     print("=" * 90)
     print(f"Pandas-Booster Benchmarks: {cardinality_label} Cardinality")
     print("=" * 90)
+    print(f"Diagnostics: {diagnostics_label}")
     print(f"Samples per benchmark: {n_samples} (fresh processes for both cold and warm)")
     print()
 
@@ -910,7 +936,7 @@ def run_benchmarks(
     print("\n" + "=" * 90)
     print("Performance Tables")
     print("=" * 90)
-    print(format_performance_section(results, sort_mode, cardinality))
+    print(format_performance_section(results, sort_mode, cardinality, diagnostic))
     print()
 
     return results
@@ -921,6 +947,7 @@ def save_results_md(
     output_path: str,
     sort_mode: str,
     cardinality: str,
+    diagnostic: str,
 ) -> None:
     """Save benchmark results to Markdown file.
 
@@ -929,6 +956,7 @@ def save_results_md(
         output_path: Output file path (should end with .md).
         sort_mode: Sort mode used in benchmark.
         cardinality: Cardinality mode used in benchmark.
+        diagnostic: Diagnostic mode used in benchmark.
     """
     path = Path(output_path)
 
@@ -939,7 +967,7 @@ def save_results_md(
 
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    performance_section = format_performance_section(results, sort_mode, cardinality)
+    performance_section = format_performance_section(results, sort_mode, cardinality, diagnostic)
 
     def correctness_section() -> str:
         lines: list[str] = []
@@ -1002,10 +1030,12 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python benches/benchmark.py                                    # Run all benchmarks
+  python benches/benchmark.py                                    # Run default benchmarks (cardinality=all, diagnostic=none)
+  python benches/benchmark.py --cardinality all                  # Run core benchmarks only (standard + high)
   python benches/benchmark.py --cardinality standard             # Standard only
   python benches/benchmark.py --cardinality high                 # High only
-  python benches/benchmark.py --cardinality threshold --sort-mode unsorted  # Threshold only
+  python benches/benchmark.py --diagnostic threshold --sort-mode unsorted  # Add threshold diagnostics
+  python benches/benchmark.py --cardinality all --diagnostic threshold --sort-mode unsorted  # Core + diagnostics
   python benches/benchmark.py --sort-mode sorted                 # Sorted only
   python benches/benchmark.py --cardinality high --sort-mode unsorted  # Combine
   python benches/benchmark.py --output results.md                # Save results
@@ -1018,9 +1048,15 @@ Environment:
     )
     parser.add_argument(
         "--cardinality",
-        choices=["all", "standard", "high", "threshold"],
+        choices=["all", "standard", "high"],
         default="all",
-        help="Which cardinality benchmarks to run (default: all)",
+        help="Workload cardinality suite to run (default: all = standard + high)",
+    )
+    parser.add_argument(
+        "--diagnostic",
+        choices=["none", "threshold"],
+        default="none",
+        help="Internal diagnostic suite to add (default: none)",
     )
     parser.add_argument(
         "--sort-mode",
@@ -1047,6 +1083,12 @@ Environment:
     )
 
     args = parser.parse_args()
+
+    if args.diagnostic == "threshold" and args.sort_mode != "unsorted":
+        parser.error(
+            "--diagnostic threshold requires --sort-mode unsorted "
+            "(threshold diagnostics are sort=False boundary checks)"
+        )
 
     # Default to Rust-side sorting for sort=True benchmarks unless explicitly forced off.
     if not args.worker:
@@ -1080,12 +1122,19 @@ Environment:
 
     all_results = run_benchmarks(
         cardinality=args.cardinality,
+        diagnostic=args.diagnostic,
         sort_mode=args.sort_mode,
         n_samples=args.samples,
     )
 
     if args.output:
-        save_results_md(all_results, args.output, args.sort_mode, args.cardinality)
+        save_results_md(
+            all_results,
+            args.output,
+            args.sort_mode,
+            args.cardinality,
+            args.diagnostic,
+        )
 
     print("\n" + "=" * 90)
     print("Summary")
