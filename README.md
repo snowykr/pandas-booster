@@ -18,10 +18,10 @@ This project is an independent third-party package and is not affiliated with, e
 
 ## Installation
 
-### From Wheel
-If you have a pre-built wheel:
+### From PyPI
+Install the latest published release from PyPI:
 ```bash
-pip install pandas_booster-0.1.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+pip install pandas-booster
 ```
 
 ### Development Setup

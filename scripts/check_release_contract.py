@@ -10,7 +10,7 @@ REPO_URL = "https://github.com/snowykr/pandas-booster"
 README_REQUIRED_TOKENS = (
     "# pandas-booster",
     "https://github.com/snowykr/pandas-booster/actions/workflows/ci.yml",
-    'pip install "maturin>=1.4,<2.0"',
+    "pip install pandas-booster",
     "PyPI project exists.",
     "Trusted Publisher",
     "publish.yml",

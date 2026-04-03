@@ -6,7 +6,8 @@ import sys
 from pathlib import Path
 
 import pytest
-import tomllib
+
+tomllib = pytest.importorskip("tomllib")
 
 
 def _load_release_contract_module():
@@ -121,7 +122,7 @@ repository = \"https://github.com/snowykr/pandas-booster\"
 # pandas-booster
 
 https://github.com/snowykr/pandas-booster/actions/workflows/ci.yml
-pip install "maturin>=1.4,<2.0"
+pip install pandas-booster
 Trusted Publisher
 publish.yml
 """.strip()
@@ -182,7 +183,7 @@ repository = \"https://github.com/snowykr/pandas-booster\"
 # pandas-booster
 
 https://github.com/snowykr/pandas-booster/actions/workflows/ci.yml
-pip install "maturin>=1.4,<2.0"
+pip install pandas-booster
 PyPI project exists.
 Trusted Publisher
 publish.yml
