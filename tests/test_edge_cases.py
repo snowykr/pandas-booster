@@ -157,7 +157,7 @@ class TestInfiniteValues:
 class TestIntegerOverflow:
     """Tests for integer overflow behavior parity with pandas."""
 
-    def test_large_i64_sum_no_overflow(self):
+    def test_large_i64_sum_wraps_like_pandas(self):
         """Large i64 sums should match pandas overflow/wrap semantics."""
         import pandas_booster  # noqa: F401
 
