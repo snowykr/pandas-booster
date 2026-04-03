@@ -37,6 +37,7 @@ WORKFLOW_REQUIRED_TOKENS = (
     "name: pypi",
     "https://pypi.org/p/pandas-booster",
     "inputs.publish",
+    "startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || inputs.publish)",
     'python scripts/check_release_contract.py tag --tag "$GITHUB_REF_NAME"',
     (
         "python scripts/check_release_contract.py artifacts --dist dist "

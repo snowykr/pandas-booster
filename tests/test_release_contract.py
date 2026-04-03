@@ -239,6 +239,39 @@ def test_validate_workflow_accepts_current_publish_workflow():
     assert contract.validate_workflow(argparse.Namespace(file=".github/workflows/publish.yml")) == 0
 
 
+def test_validate_workflow_requires_tag_gated_publish_condition(tmp_path: Path):
+    contract = _load_release_contract_module()
+    required_publish_gate = (
+        "startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || inputs.publish)"
+    )
+    workflow_path = tmp_path / "publish.yml"
+    workflow_path.write_text(
+        "\n".join(
+            token for token in contract.WORKFLOW_REQUIRED_TOKENS if token != required_publish_gate
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(contract.ContractError, match="startsWith"):
+        contract.validate_workflow(argparse.Namespace(file=str(workflow_path)))
+
+
+def test_ci_keeps_non_tag_release_readiness_paths():
+    repo_root = Path(__file__).resolve().parents[1]
+    ci_text = (repo_root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+    assert (
+        "python scripts/check_release_contract.py workflow --file .github/workflows/publish.yml"
+        in ci_text
+    )
+    assert "name: Build Wheel Smoke" in ci_text
+    assert "github.event_name == 'pull_request'" in ci_text
+    assert "name: Release Matrix" in ci_text
+    assert "github.ref == 'refs/heads/main'" in ci_text
+    assert "github.event_name == 'workflow_dispatch'" in ci_text
+
+
 def test_validate_artifacts_requires_expected_counts(tmp_path: Path):
     contract = _load_release_contract_module()
     dist_path = tmp_path / "dist"
