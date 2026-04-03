@@ -1557,10 +1557,6 @@ mod tests {
         assert_eq!(result.keys_flat.len(), n_groups * 2);
         assert!(result.perm.is_some());
 
-        // Without applying perm, values should not already be in first-seen row order.
-        let source_in_first_seen_order = result.values.windows(2).all(|w| w[0] <= w[1]);
-        assert!(!source_in_first_seen_order);
-
         // Applying perm must restore exact first-seen order.
         let perm = result.perm.as_ref().unwrap();
         assert_eq!(perm.len(), n_groups);

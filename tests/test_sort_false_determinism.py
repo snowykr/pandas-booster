@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import sys
@@ -42,9 +43,8 @@ def series_fingerprint(series: pd.Series) -> str:
 
 
 rng = np.random.default_rng(20260207)
-n = __N_ROWS__
-if n < _rust.get_fallback_threshold():
-    raise RuntimeError("determinism test must run above rust fallback threshold")
+threshold = _rust.get_fallback_threshold()
+n = max(__N_ROWS__, threshold + 1)
 df = pd.DataFrame(
     {
         "k1": rng.integers(0, 40_000, size=n, dtype=np.int64),
@@ -90,9 +90,8 @@ def series_fingerprint(series: pd.Series) -> str:
     return h.hexdigest()
 
 
-n = __N_ROWS__
-if n < _rust.get_fallback_threshold():
-    raise RuntimeError("determinism test must run above rust fallback threshold")
+threshold = _rust.get_fallback_threshold()
+n = max(__N_ROWS__, threshold + 1)
 idx = np.arange(n, dtype=np.int64)
 k = idx % 257
 
@@ -142,6 +141,20 @@ def _run_multi_key_once(ray_threads: int, n_rows: int) -> str:
 def _run_single_key_once(ray_threads: int, n_rows: int) -> str:
     script = _SINGLE_KEY_SCRIPT_TEMPLATE.replace("__N_ROWS__", str(n_rows))
     return _run_script_once(ray_threads, script)
+
+
+def test_multi_key_template_uses_threshold_relative_row_count() -> None:
+    payload = json.loads(_run_multi_key_once(1, 1))
+
+    assert set(payload) == {"float_sum", "int_sum"}
+    assert all(isinstance(value, str) and value for value in payload.values())
+
+
+def test_single_key_template_uses_threshold_relative_row_count() -> None:
+    payload = json.loads(_run_single_key_once(1, 1))
+
+    assert set(payload) == {"sum_sorted", "sum_firstseen", "mean_sorted", "mean_firstseen"}
+    assert all(isinstance(value, str) and value for value in payload.values())
 
 
 def test_sort_false_fingerprint_deterministic_across_threads_and_repeats() -> None:
