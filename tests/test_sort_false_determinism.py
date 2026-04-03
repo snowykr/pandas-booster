@@ -12,6 +12,7 @@ FAST_MULTI_ROWS = 120_000
 STRESS_MULTI_ROWS = 160_000
 FAST_SINGLE_ROWS = 120_000
 STRESS_SINGLE_ROWS = 180_000
+SUBPROCESS_TIMEOUT_SECONDS = 120
 
 _MULTI_KEY_SCRIPT_TEMPLATE = r"""
 import hashlib
@@ -117,19 +118,37 @@ print(json.dumps(res, sort_keys=True))
 
 
 def _run_script_once(ray_threads: int, script: str) -> str:
+    def _format_timeout_stream(value: bytes | str | None) -> str:
+        if value is None:
+            return "<none>"
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", errors="replace")
+        stripped = value.strip()
+        return stripped or "<empty>"
+
     env = os.environ.copy()
     env["RAYON_NUM_THREADS"] = str(ray_threads)
     env["PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY"] = "0"
     env["PANDAS_BOOSTER_FORCE_PANDAS_SORT"] = "0"
     root = Path(__file__).resolve().parents[1]
-    proc = subprocess.run(
-        [sys.executable, "-c", script],
-        cwd=root,
-        env=env,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=root,
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=SUBPROCESS_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise AssertionError(
+            "Determinism helper subprocess timed out "
+            f"after {exc.timeout} seconds with RAYON_NUM_THREADS={ray_threads}.\n"
+            f"stdout: {_format_timeout_stream(exc.output)}\n"
+            f"stderr: {_format_timeout_stream(exc.stderr)}"
+        ) from exc
+
     return proc.stdout.strip()
 
 
@@ -141,6 +160,47 @@ def _run_multi_key_once(ray_threads: int, n_rows: int) -> str:
 def _run_single_key_once(ray_threads: int, n_rows: int) -> str:
     script = _SINGLE_KEY_SCRIPT_TEMPLATE.replace("__N_ROWS__", str(n_rows))
     return _run_script_once(ray_threads, script)
+
+
+def test_run_script_once_passes_timeout_to_subprocess(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_kwargs: dict[str, object] = {}
+
+    def fake_run(*_args, **kwargs):
+        captured_kwargs.update(kwargs)
+
+        class Proc:
+            stdout = "payload\n"
+
+        return Proc()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert _run_script_once(1, "print('ok')") == "payload"
+    assert captured_kwargs["timeout"] == SUBPROCESS_TIMEOUT_SECONDS
+
+
+def test_run_script_once_surfaces_timeout_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*args, **_kwargs):
+        raise subprocess.TimeoutExpired(
+            cmd=args[0],
+            timeout=12,
+            output=b"partial stdout\n",
+            stderr=b"partial stderr\n",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(AssertionError) as exc_info:
+        _run_script_once(8, "print('ok')")
+
+    message = str(exc_info.value)
+    assert "timed out" in message
+    assert "partial stdout" in message
+    assert "partial stderr" in message
 
 
 def test_multi_key_template_uses_threshold_relative_row_count() -> None:
