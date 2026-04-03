@@ -119,16 +119,13 @@ def normalize_result_values(
             ),
         )
 
-    if (
-        is_val_int
-        and agg in {"sum", "min", "max"}
-        and not np.issubdtype(result_values_arr.dtype, np.integer)
-    ):
+    expects_integer_results = agg == "count" or (is_val_int and agg in {"sum", "min", "max"})
+
+    if expects_integer_results and not np.issubdtype(result_values_arr.dtype, np.integer):
         raise_abi_skew(
             context=context,
             detail=(
-                f"expected integer result dtype for agg={agg} with integer values; "
-                f"got dtype={result_values_arr.dtype}."
+                f"expected integer result dtype for agg={agg}; got dtype={result_values_arr.dtype}."
             ),
         )
 
