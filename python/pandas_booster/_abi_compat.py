@@ -106,6 +106,32 @@ def raise_abi_skew(*, context: str, detail: str) -> NoReturn:
     raise PandasBoosterKeyShapeSkewError(msg)
 
 
+def normalize_result_values(
+    result_values: Any, *, agg: str, is_val_int: bool, context: str
+) -> np.ndarray:
+    result_values_arr = np.asarray(result_values)
+    if result_values_arr.ndim != 1:
+        raise_abi_skew(
+            context=context,
+            detail=(
+                f"result_values must be 1D, got ndim={result_values_arr.ndim} "
+                f"shape={result_values_arr.shape}."
+            ),
+        )
+
+    expects_integer_results = agg == "count" or (is_val_int and agg in {"sum", "min", "max"})
+
+    if expects_integer_results and not np.issubdtype(result_values_arr.dtype, np.integer):
+        raise_abi_skew(
+            context=context,
+            detail=(
+                f"expected integer result dtype for agg={agg}; got dtype={result_values_arr.dtype}."
+            ),
+        )
+
+    return result_values_arr
+
+
 def normalize_multi_keys_cols(
     keys_cols: Any,
     *,

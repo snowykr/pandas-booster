@@ -27,6 +27,93 @@ def _project_version() -> str:
         return tomllib.load(handle)["project"]["version"]
 
 
+def _job_block(workflow_text: str, job_name: str) -> str:
+    marker = f"  {job_name}:"
+    lines = workflow_text.splitlines()
+
+    try:
+        start = lines.index(marker)
+    except ValueError as exc:
+        jobs_start = next((idx for idx, line in enumerate(lines) if line == "jobs:"), None)
+        available_jobs = [
+            line.strip().removesuffix(":")
+            for line in (lines[jobs_start + 1 :] if jobs_start is not None else [])
+            if line.startswith("  ") and not line.startswith("    ") and line.endswith(":")
+        ]
+        context = f" Available jobs: {', '.join(available_jobs)}." if available_jobs else ""
+        raise AssertionError(f"Workflow is missing expected job {job_name!r}.{context}") from exc
+
+    block = [lines[start]]
+
+    for line in lines[start + 1 :]:
+        if line.startswith("  ") and not line.startswith("    "):
+            break
+        block.append(line)
+
+    return "\n".join(block)
+
+
+def _job_if_expression(workflow_text: str, job_name: str) -> str:
+    block_lines = _job_block(workflow_text, job_name).splitlines()
+
+    for idx, line in enumerate(block_lines):
+        if line == "    if: >":
+            expr_lines: list[str] = []
+            for cont in block_lines[idx + 1 :]:
+                if not cont.startswith("      "):
+                    break
+                expr_lines.append(cont.strip())
+            return " ".join(expr_lines)
+
+        if line.startswith("    if: "):
+            return line.removeprefix("    if: ").strip()
+
+    raise AssertionError(f"Job {job_name!r} is missing an if expression")
+
+
+def test_job_block_reports_missing_job_with_available_jobs() -> None:
+    workflow_text = """
+jobs:
+  build-wheel-smoke:
+    runs-on: ubuntu-latest
+  test-wheel-smoke:
+    runs-on: ubuntu-latest
+""".strip()
+
+    with pytest.raises(AssertionError) as exc_info:
+        _job_block(workflow_text, "build-and-test-quick")
+
+    message = str(exc_info.value)
+    assert "build-and-test-quick" in message
+    assert "build-wheel-smoke" in message
+    assert "test-wheel-smoke" in message
+
+
+def test_job_block_available_jobs_only_lists_job_entries() -> None:
+    workflow_text = """
+name: CI
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build-wheel-smoke:
+    runs-on: ubuntu-latest
+  stress-tests:
+    runs-on: ubuntu-latest
+permissions:
+  contents: read
+""".strip()
+
+    with pytest.raises(AssertionError) as exc_info:
+        _job_block(workflow_text, "missing-job")
+
+    message = str(exc_info.value)
+    assert "build-wheel-smoke" in message
+    assert "stress-tests" in message
+    assert "workflow_dispatch" not in message
+    assert "permissions" not in message
+
+
 def test_validate_metadata_requires_release_readme_tokens(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -132,10 +219,12 @@ publish.yml
 
     monkeypatch.setattr(contract, "project_root", lambda: tmp_path)
 
-    with pytest.raises(
-        contract.ContractError, match="PyPI project exists.|GitHub environment `pypi`"
-    ):
+    with pytest.raises(contract.ContractError) as exc_info:
         contract.validate_metadata(argparse.Namespace())
+
+    message = str(exc_info.value)
+    assert "README.md must contain 'PyPI project exists.'" in message
+    assert "README.md must contain 'GitHub environment `pypi` is configured'" in message
 
 
 def test_validate_metadata_requires_supported_python_classifier_set(
@@ -260,14 +349,30 @@ def test_validate_workflow_requires_tag_gated_publish_condition(tmp_path: Path):
 def test_ci_keeps_non_tag_release_readiness_paths():
     repo_root = Path(__file__).resolve().parents[1]
     ci_text = (repo_root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    main_pr_smoke_gate = (
+        "github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main'"
+    )
+    non_main_pr_quick_gate = (
+        "(github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'main')"
+    )
+    stress_gate = (
+        "(github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main' "
+        "&& contains(github.event.pull_request.labels.*.name, 'run-stress')) || "
+        "(github.event_name == 'push' && github.ref == 'refs/heads/main') || "
+        "github.event_name == 'workflow_dispatch'"
+    )
 
     assert (
         "python scripts/check_release_contract.py workflow --file .github/workflows/publish.yml"
         in ci_text
     )
     assert "name: Build Wheel Smoke" in ci_text
-    assert "github.event_name == 'pull_request'" in ci_text
+    assert _job_if_expression(ci_text, "build-wheel-smoke") == main_pr_smoke_gate
+    assert _job_if_expression(ci_text, "test-wheel-smoke") == main_pr_smoke_gate
+    assert _job_if_expression(ci_text, "build-and-test-quick") == non_main_pr_quick_gate
+    assert _job_if_expression(ci_text, "stress-tests") == stress_gate
     assert "name: Release Matrix" in ci_text
+    assert "name: Stress Tests (Determinism)" in ci_text
     assert "github.ref == 'refs/heads/main'" in ci_text
     assert "github.event_name == 'workflow_dispatch'" in ci_text
 

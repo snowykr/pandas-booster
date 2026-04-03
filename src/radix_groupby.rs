@@ -21,7 +21,6 @@ use rayon::prelude::*;
 use smallvec::SmallVec;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::aggregation::{
     Aggregator, CountAggF64, CountAggI64, MaxAggF64, MaxAggI64, MeanAggF64, MeanAggI64, MinAggF64,
@@ -33,6 +32,7 @@ use crate::radix_sort::{
 };
 
 const RADIX_SORT_THRESHOLD: usize = 2048;
+pub(crate) const SMALL_DIRECT_THRESHOLD_ELEMS: usize = 200_000;
 
 // CompositeKey is a fallback path. For the supported Python API (<= 10 key columns),
 // we specialize on FixedKey<N> for N=1..=10.
@@ -119,7 +119,8 @@ pub struct GroupByMultiResult<V> {
     /// Output ordering permutation.
     ///
     /// If present, output group at position `out_g` is sourced from group `perm[out_g]`.
-    /// If None, identity mapping is implied.
+    /// If None, `keys_flat`/`values` are already materialized in output order,
+    /// so identity mapping is implied and consumers must not apply any additional permutation.
     pub perm: Option<Vec<usize>>,
 }
 
@@ -144,6 +145,12 @@ fn reorder_result_by_first_seen_u32<V: Copy>(
 
     let keys_flat = &result.keys_flat;
     let values = &result.values;
+
+    if n_groups.saturating_mul(n_keys) > SMALL_DIRECT_THRESHOLD_ELEMS {
+        result.perm = Some(perm);
+        return;
+    }
+
     let mut sorted_keys = Vec::with_capacity(keys_flat.len());
     let mut sorted_values = Vec::with_capacity(values.len());
 
@@ -174,6 +181,12 @@ fn reorder_result_by_first_seen_u64<V: Copy>(
 
     let keys_flat = &result.keys_flat;
     let values = &result.values;
+
+    if n_groups.saturating_mul(n_keys) > SMALL_DIRECT_THRESHOLD_ELEMS {
+        result.perm = Some(perm);
+        return;
+    }
+
     let mut sorted_keys = Vec::with_capacity(keys_flat.len());
     let mut sorted_values = Vec::with_capacity(values.len());
 
@@ -200,6 +213,75 @@ fn compute_hash(key_slices: &[&[i64]], row: usize) -> u64 {
 #[inline]
 fn hash_to_partition(hash: u64) -> usize {
     (hash as usize) & (NUM_PARTITIONS - 1)
+}
+
+fn stable_scatter_by_partition(hashes: &[u64]) -> (Vec<usize>, Vec<usize>) {
+    let n_rows = hashes.len();
+    let n_threads = rayon::current_num_threads().max(1);
+    let chunk_size = (n_rows / n_threads).max(1024);
+
+    let counts: Vec<[usize; NUM_PARTITIONS]> = hashes
+        .par_chunks(chunk_size)
+        .map(|chunk| {
+            let mut local = [0usize; NUM_PARTITIONS];
+            for &h in chunk {
+                local[hash_to_partition(h)] += 1;
+            }
+            local
+        })
+        .collect();
+
+    let mut offsets = vec![0usize; NUM_PARTITIONS + 1];
+    for local in &counts {
+        for p in 0..NUM_PARTITIONS {
+            offsets[p + 1] += local[p];
+        }
+    }
+    for p in 0..NUM_PARTITIONS {
+        offsets[p + 1] += offsets[p];
+    }
+
+    let mut thread_offsets: Vec<[usize; NUM_PARTITIONS]> =
+        vec![[0usize; NUM_PARTITIONS]; counts.len()];
+    let mut running = [0usize; NUM_PARTITIONS];
+    running[..NUM_PARTITIONS].copy_from_slice(&offsets[..NUM_PARTITIONS]);
+    for (chunk_idx, local) in counts.iter().enumerate() {
+        thread_offsets[chunk_idx] = running;
+        for p in 0..NUM_PARTITIONS {
+            running[p] += local[p];
+        }
+    }
+
+    let mut perm = vec![0usize; n_rows];
+    #[cfg(debug_assertions)]
+    perm.fill(usize::MAX);
+    let perm_ptr = PermPtr(perm.as_mut_ptr());
+
+    hashes
+        .par_chunks(chunk_size)
+        .enumerate()
+        .zip(thread_offsets.into_par_iter())
+        .for_each(|((chunk_idx, chunk), mut write)| {
+            let base = chunk_idx * chunk_size;
+            for (i, &h) in chunk.iter().enumerate() {
+                let row = base + i;
+                let p = hash_to_partition(h);
+                let pos = write[p];
+                write[p] = pos + 1;
+                // SAFETY:
+                // - `pos` is unique within this chunk due to local `write[p]` increments.
+                // - Chunk starting offsets are disjoint across chunks.
+                unsafe { perm_ptr.write(pos, row) };
+            }
+        });
+
+    #[cfg(debug_assertions)]
+    {
+        debug_assert!(perm.iter().all(|&r| r != usize::MAX));
+        debug_assert!(perm.iter().all(|&r| r < n_rows));
+    }
+
+    (perm, offsets)
 }
 
 #[inline]
@@ -349,56 +431,15 @@ where
         });
     }
 
-    // Phase 1: Parallel histogram with hash caching
-    let histogram: Vec<AtomicUsize> = (0..NUM_PARTITIONS).map(|_| AtomicUsize::new(0)).collect();
-
-    // Allocate vector to store computed hashes
+    // Phase 1: compute and cache hashes
     let mut hashes = vec![0u64; n_rows];
-
-    // Phase 1: Parallel histogram with hash caching
     hashes.par_iter_mut().enumerate().for_each(|(row, h_out)| {
         let h = ops.compute_hash(key_slices, row);
         *h_out = h;
-
-        let p = hash_to_partition(h);
-        histogram[p].fetch_add(1, Ordering::Relaxed);
     });
 
-    // Phase 2: Prefix sum for write offsets
-    let mut offsets = vec![0usize; NUM_PARTITIONS + 1];
-    for i in 0..NUM_PARTITIONS {
-        offsets[i + 1] = offsets[i] + histogram[i].load(Ordering::Relaxed);
-    }
-
-    // Phase 3: Scatter - reorder rows by partition using cached hashes
-    let write_heads: Vec<AtomicUsize> = offsets[..NUM_PARTITIONS]
-        .iter()
-        .map(|&o| AtomicUsize::new(o))
-        .collect();
-
-    let mut perm = vec![0usize; n_rows];
-    #[cfg(debug_assertions)]
-    perm.fill(usize::MAX);
-    let perm_ptr = PermPtr(perm.as_mut_ptr());
-
-    (0..n_rows).into_par_iter().for_each(|row| {
-        // Use cached hash
-        let h = hashes[row];
-
-        let p = hash_to_partition(h);
-        let pos = write_heads[p].fetch_add(1, Ordering::Relaxed);
-        // SAFETY:
-        // - `pos` is a unique write index produced by `fetch_add` on a per-partition
-        //   atomic that is initialized to the partition's offset range.
-        // - The prefix-sum offsets ensure `pos < n_rows`.
-        unsafe { perm_ptr.write(pos, row) };
-    });
-
-    #[cfg(debug_assertions)]
-    {
-        debug_assert!(perm.iter().all(|&r| r != usize::MAX));
-        debug_assert!(perm.iter().all(|&r| r < n_rows));
-    }
+    // Phase 2/3: deterministic stable scatter by partition.
+    let (perm, offsets) = stable_scatter_by_partition(&hashes);
 
     // Phase 4: Per-partition aggregation (no merge!)
     let partition_results: Vec<Vec<(Ops::Key, O)>> = (0..NUM_PARTITIONS)
@@ -487,51 +528,16 @@ where
         return Err("idx32 kernel requires n_rows <= u32::MAX".to_string());
     }
 
-    // Phase 1: Parallel histogram with hash caching
-    let histogram: Vec<AtomicUsize> = (0..NUM_PARTITIONS).map(|_| AtomicUsize::new(0)).collect();
+    // Phase 1: compute and cache hashes
     let mut hashes = vec![0u64; n_rows];
 
     hashes.par_iter_mut().enumerate().for_each(|(row, h_out)| {
         let h = ops.compute_hash(key_slices, row);
         *h_out = h;
-
-        let p = hash_to_partition(h);
-        histogram[p].fetch_add(1, Ordering::Relaxed);
     });
 
-    // Phase 2: Prefix sum
-    let mut offsets = vec![0usize; NUM_PARTITIONS + 1];
-    for i in 0..NUM_PARTITIONS {
-        offsets[i + 1] = offsets[i] + histogram[i].load(Ordering::Relaxed);
-    }
-
-    // Phase 3: Scatter rows by partition
-    let write_heads: Vec<AtomicUsize> = offsets[..NUM_PARTITIONS]
-        .iter()
-        .map(|&o| AtomicUsize::new(o))
-        .collect();
-
-    let mut perm = vec![0usize; n_rows];
-    #[cfg(debug_assertions)]
-    perm.fill(usize::MAX);
-    let perm_ptr = PermPtr(perm.as_mut_ptr());
-
-    (0..n_rows).into_par_iter().for_each(|row| {
-        let h = hashes[row];
-        let p = hash_to_partition(h);
-        let pos = write_heads[p].fetch_add(1, Ordering::Relaxed);
-        // SAFETY:
-        // - `pos` is a unique write index produced by `fetch_add` on a per-partition
-        //   atomic that is initialized to the partition's offset range.
-        // - The prefix-sum offsets ensure `pos < n_rows`.
-        unsafe { perm_ptr.write(pos, row) };
-    });
-
-    #[cfg(debug_assertions)]
-    {
-        debug_assert!(perm.iter().all(|&r| r != usize::MAX));
-        debug_assert!(perm.iter().all(|&r| r < n_rows));
-    }
+    // Phase 2/3: deterministic stable scatter by partition.
+    let (perm, offsets) = stable_scatter_by_partition(&hashes);
 
     // Phase 4: Per-partition aggregation (gid map + SoA state)
     let partition_results: PartitionResults<Ops::Key, u32, O> = (0..NUM_PARTITIONS)
@@ -639,51 +645,16 @@ where
         });
     }
 
-    // Phase 1: Parallel histogram with hash caching
-    let histogram: Vec<AtomicUsize> = (0..NUM_PARTITIONS).map(|_| AtomicUsize::new(0)).collect();
+    // Phase 1: compute and cache hashes
     let mut hashes = vec![0u64; n_rows];
 
     hashes.par_iter_mut().enumerate().for_each(|(row, h_out)| {
         let h = ops.compute_hash(key_slices, row);
         *h_out = h;
-
-        let p = hash_to_partition(h);
-        histogram[p].fetch_add(1, Ordering::Relaxed);
     });
 
-    // Phase 2: Prefix sum
-    let mut offsets = vec![0usize; NUM_PARTITIONS + 1];
-    for i in 0..NUM_PARTITIONS {
-        offsets[i + 1] = offsets[i] + histogram[i].load(Ordering::Relaxed);
-    }
-
-    // Phase 3: Scatter rows by partition
-    let write_heads: Vec<AtomicUsize> = offsets[..NUM_PARTITIONS]
-        .iter()
-        .map(|&o| AtomicUsize::new(o))
-        .collect();
-
-    let mut perm = vec![0usize; n_rows];
-    #[cfg(debug_assertions)]
-    perm.fill(usize::MAX);
-    let perm_ptr = PermPtr(perm.as_mut_ptr());
-
-    (0..n_rows).into_par_iter().for_each(|row| {
-        let h = hashes[row];
-        let p = hash_to_partition(h);
-        let pos = write_heads[p].fetch_add(1, Ordering::Relaxed);
-        // SAFETY:
-        // - `pos` is a unique write index produced by `fetch_add` on a per-partition
-        //   atomic that is initialized to the partition's offset range.
-        // - The prefix-sum offsets ensure `pos < n_rows`.
-        unsafe { perm_ptr.write(pos, row) };
-    });
-
-    #[cfg(debug_assertions)]
-    {
-        debug_assert!(perm.iter().all(|&r| r != usize::MAX));
-        debug_assert!(perm.iter().all(|&r| r < n_rows));
-    }
+    // Phase 2/3: deterministic stable scatter by partition.
+    let (perm, offsets) = stable_scatter_by_partition(&hashes);
 
     // Phase 4: Per-partition aggregation (gid map + SoA state)
     let partition_results: PartitionResults<Ops::Key, u64, O> = (0..NUM_PARTITIONS)
@@ -1048,10 +1019,10 @@ impl_radix_dispatch!(radix_groupby_mean_f64, f64, MeanAggF64, f64);
 impl_radix_dispatch!(radix_groupby_min_f64, f64, MinAggF64, f64);
 impl_radix_dispatch!(radix_groupby_max_f64, f64, MaxAggF64, f64);
 
-impl_radix_dispatch!(radix_groupby_sum_i64, i64, SumAggI64, f64);
+impl_radix_dispatch!(radix_groupby_sum_i64, i64, SumAggI64, i64);
 impl_radix_dispatch!(radix_groupby_mean_i64, i64, MeanAggI64, f64);
-impl_radix_dispatch!(radix_groupby_min_i64, i64, MinAggI64, f64);
-impl_radix_dispatch!(radix_groupby_max_i64, i64, MaxAggI64, f64);
+impl_radix_dispatch!(radix_groupby_min_i64, i64, MinAggI64, i64);
+impl_radix_dispatch!(radix_groupby_max_i64, i64, MaxAggI64, i64);
 
 impl_radix_dispatch!(radix_groupby_count_f64, f64, CountAggF64, i64);
 impl_radix_dispatch!(radix_groupby_count_i64, i64, CountAggI64, i64);
@@ -1086,10 +1057,10 @@ impl_radix_firstseen_u32!(radix_groupby_min_f64_firstseen_u32, f64, MinAggF64, f
 impl_radix_firstseen_u32!(radix_groupby_max_f64_firstseen_u32, f64, MaxAggF64, f64);
 impl_radix_firstseen_u32!(radix_groupby_count_f64_firstseen_u32, f64, CountAggF64, i64);
 
-impl_radix_firstseen_u32!(radix_groupby_sum_i64_firstseen_u32, i64, SumAggI64, f64);
+impl_radix_firstseen_u32!(radix_groupby_sum_i64_firstseen_u32, i64, SumAggI64, i64);
 impl_radix_firstseen_u32!(radix_groupby_mean_i64_firstseen_u32, i64, MeanAggI64, f64);
-impl_radix_firstseen_u32!(radix_groupby_min_i64_firstseen_u32, i64, MinAggI64, f64);
-impl_radix_firstseen_u32!(radix_groupby_max_i64_firstseen_u32, i64, MaxAggI64, f64);
+impl_radix_firstseen_u32!(radix_groupby_min_i64_firstseen_u32, i64, MinAggI64, i64);
+impl_radix_firstseen_u32!(radix_groupby_max_i64_firstseen_u32, i64, MaxAggI64, i64);
 impl_radix_firstseen_u32!(radix_groupby_count_i64_firstseen_u32, i64, CountAggI64, i64);
 
 impl_radix_firstseen_u64!(radix_groupby_sum_f64_firstseen_u64, f64, SumAggF64, f64);
@@ -1098,10 +1069,10 @@ impl_radix_firstseen_u64!(radix_groupby_min_f64_firstseen_u64, f64, MinAggF64, f
 impl_radix_firstseen_u64!(radix_groupby_max_f64_firstseen_u64, f64, MaxAggF64, f64);
 impl_radix_firstseen_u64!(radix_groupby_count_f64_firstseen_u64, f64, CountAggF64, i64);
 
-impl_radix_firstseen_u64!(radix_groupby_sum_i64_firstseen_u64, i64, SumAggI64, f64);
+impl_radix_firstseen_u64!(radix_groupby_sum_i64_firstseen_u64, i64, SumAggI64, i64);
 impl_radix_firstseen_u64!(radix_groupby_mean_i64_firstseen_u64, i64, MeanAggI64, f64);
-impl_radix_firstseen_u64!(radix_groupby_min_i64_firstseen_u64, i64, MinAggI64, f64);
-impl_radix_firstseen_u64!(radix_groupby_max_i64_firstseen_u64, i64, MaxAggI64, f64);
+impl_radix_firstseen_u64!(radix_groupby_min_i64_firstseen_u64, i64, MinAggI64, i64);
+impl_radix_firstseen_u64!(radix_groupby_max_i64_firstseen_u64, i64, MaxAggI64, i64);
 impl_radix_firstseen_u64!(radix_groupby_count_i64_firstseen_u64, i64, CountAggI64, i64);
 
 // Public API - sorted (for sort=True)
@@ -1137,8 +1108,8 @@ pub fn radix_groupby_max_f64_sorted(
 pub fn radix_groupby_sum_i64_sorted(
     key_slices: &[&[i64]],
     values: &[i64],
-) -> Result<GroupByMultiResult<f64>, String> {
-    radix_groupby_sorted::<i64, SumAggI64, f64>(key_slices, values)
+) -> Result<GroupByMultiResult<i64>, String> {
+    radix_groupby_sorted::<i64, SumAggI64, i64>(key_slices, values)
 }
 
 pub fn radix_groupby_mean_i64_sorted(
@@ -1151,15 +1122,15 @@ pub fn radix_groupby_mean_i64_sorted(
 pub fn radix_groupby_min_i64_sorted(
     key_slices: &[&[i64]],
     values: &[i64],
-) -> Result<GroupByMultiResult<f64>, String> {
-    radix_groupby_sorted::<i64, MinAggI64, f64>(key_slices, values)
+) -> Result<GroupByMultiResult<i64>, String> {
+    radix_groupby_sorted::<i64, MinAggI64, i64>(key_slices, values)
 }
 
 pub fn radix_groupby_max_i64_sorted(
     key_slices: &[&[i64]],
     values: &[i64],
-) -> Result<GroupByMultiResult<f64>, String> {
-    radix_groupby_sorted::<i64, MaxAggI64, f64>(key_slices, values)
+) -> Result<GroupByMultiResult<i64>, String> {
+    radix_groupby_sorted::<i64, MaxAggI64, i64>(key_slices, values)
 }
 
 pub fn radix_groupby_count_f64_sorted(
@@ -1370,15 +1341,15 @@ mod tests {
         let key_slices: Vec<&[i64]> = vec![&col1, &col2];
         let result = radix_groupby_sum_i64(&key_slices, &values).unwrap();
 
-        let mut groups: AHashMap<(i64, i64), f64> = AHashMap::new();
+        let mut groups: AHashMap<(i64, i64), i64> = AHashMap::new();
         for i in 0..result.values.len() {
             let k0 = result.keys_flat[i * 2];
             let k1 = result.keys_flat[i * 2 + 1];
             groups.insert((k0, k1), result.values[i]);
         }
 
-        assert!((groups[&(1, 10)] - 400.0).abs() < 1e-10);
-        assert!((groups[&(2, 20)] - 200.0).abs() < 1e-10);
+        assert_eq!(groups[&(1, 10)], 400);
+        assert_eq!(groups[&(2, 20)], 200);
     }
 
     #[test]
@@ -1543,5 +1514,54 @@ mod tests {
         assert_eq!(key_at_out(&result, 1, 0), 2);
         assert_eq!(key_at_out(&result, 1, 1), 20);
         assert_eq!(value_at_out(&result, 1), 2);
+    }
+
+    #[test]
+    fn test_stable_scatter_by_partition_preserves_row_order_within_partition() {
+        let n_rows = 180_000;
+        let hashes: Vec<u64> = (0..n_rows)
+            .map(|row| (row as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
+            .collect();
+
+        let (perm, offsets) = stable_scatter_by_partition(&hashes);
+        assert_eq!(perm.len(), n_rows);
+        assert_eq!(offsets.len(), NUM_PARTITIONS + 1);
+        assert_eq!(offsets[0], 0);
+        assert_eq!(offsets[NUM_PARTITIONS], n_rows);
+
+        for p in 0..NUM_PARTITIONS {
+            let start = offsets[p];
+            let end = offsets[p + 1];
+            if end.saturating_sub(start) <= 1 {
+                continue;
+            }
+            let slice = &perm[start..end];
+            assert!(slice.windows(2).all(|w| w[0] < w[1]));
+        }
+    }
+
+    #[test]
+    fn test_firstseen_large_output_returns_perm_without_materialized_reorder() {
+        let n_groups = 120_000usize; // n_groups * n_keys (2) > SMALL_DIRECT_THRESHOLD_ELEMS
+        let k1: Vec<i64> = (0..n_groups as i64).collect();
+        let k2: Vec<i64> = (0..n_groups as i64)
+            .map(|i| i.wrapping_mul(0x9E37_79B9_i64))
+            .collect();
+        let values: Vec<f64> = (0..n_groups).map(|i| i as f64).collect();
+
+        let key_slices: Vec<&[i64]> = vec![&k1, &k2];
+        let result = radix_groupby_sum_f64_firstseen_u32(&key_slices, &values).unwrap();
+
+        assert_eq!(result.n_keys, 2);
+        assert_eq!(result.values.len(), n_groups);
+        assert_eq!(result.keys_flat.len(), n_groups * 2);
+        assert!(result.perm.is_some());
+
+        // Applying perm must restore exact first-seen order.
+        let perm = result.perm.as_ref().unwrap();
+        assert_eq!(perm.len(), n_groups);
+        for (out_g, &src_g) in perm.iter().enumerate().take(n_groups) {
+            assert_eq!(result.values[src_g], out_g as f64);
+        }
     }
 }

@@ -60,6 +60,9 @@ include = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "stress: long-running determinism stress tests",
+]
 
 [tool.ruff]
 line-length = 100

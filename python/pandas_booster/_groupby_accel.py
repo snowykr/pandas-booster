@@ -85,6 +85,7 @@ def build_series_from_single_result(
     index_name: Hashable | None,
     index_dtype: np.dtype,
     agg: str,
+    is_val_int: bool,
     sort: bool,
     needs_python_sort: bool = False,
 ) -> pd.Series:
@@ -99,14 +100,18 @@ def build_series_from_single_result(
 
     if keys_1d.shape[0] == 0:
         idx = pd.Index([], dtype=index_dtype, name=index_name)
-        out_dtype = np.int64 if agg == "count" else np.float64
+        out_dtype = (
+            np.int64
+            if agg == "count" or (is_val_int and agg in {"sum", "min", "max"})
+            else np.float64
+        )
         return pd.Series([], index=idx, name=name, dtype=out_dtype)
 
     keys_arr = np.asarray(keys_1d).astype(index_dtype, copy=False)
     idx = pd.Index(keys_arr, dtype=index_dtype, name=index_name, copy=False)
 
     values_arr = np.asarray(result_values)
-    if agg == "count":
+    if agg == "count" or (is_val_int and agg in {"sum", "min", "max"}):
         values_arr = values_arr.astype(np.int64, copy=False)
     else:
         values_arr = values_arr.astype(np.float64, copy=False)
@@ -126,6 +131,7 @@ def build_series_from_multi_result(
     key_dtypes: list[np.dtype],
     name: Hashable | None,
     agg: str,
+    is_val_int: bool,
     sort: bool,
     needs_python_sort: bool = False,
 ) -> pd.Series:
@@ -145,7 +151,11 @@ def build_series_from_multi_result(
         empty_arrays = [np.array([], dtype=key_dtypes[i]) for i in range(n_keys)]
         idx = pd.MultiIndex.from_arrays(empty_arrays, names=by_cols)
 
-        out_dtype = np.int64 if agg == "count" else np.float64
+        out_dtype = (
+            np.int64
+            if agg == "count" or (is_val_int and agg in {"sum", "min", "max"})
+            else np.float64
+        )
         return pd.Series([], index=idx, name=name, dtype=out_dtype)
 
     # Cast each level array BEFORE MultiIndex construction to ensure level dtype preservation.
@@ -163,7 +173,7 @@ def build_series_from_multi_result(
     idx = pd.MultiIndex.from_arrays(index_arrays, names=by_cols)
 
     values_arr = np.asarray(result_values)
-    if agg == "count":
+    if agg == "count" or (is_val_int and agg in {"sum", "min", "max"}):
         values_arr = values_arr.astype(np.int64, copy=False)
     else:
         values_arr = values_arr.astype(np.float64, copy=False)

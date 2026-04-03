@@ -6,8 +6,17 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 import numpy as np
 import pandas as pd
 
-from ._abi_compat import PandasBoosterKeyShapeSkewError, normalize_multi_keys_cols, raise_abi_skew
-from ._config import force_pandas_sort_enabled, strict_abi_enabled
+from ._abi_compat import (
+    PandasBoosterKeyShapeSkewError,
+    normalize_multi_keys_cols,
+    normalize_result_values,
+    raise_abi_skew,
+)
+from ._config import (
+    force_pandas_float_groupby_enabled,
+    force_pandas_sort_enabled,
+    strict_abi_enabled,
+)
 from ._groupby_accel import (
     build_series_from_multi_result,
     build_series_from_single_result,
@@ -125,6 +134,10 @@ class BoosterSeriesGroupBy:
             key_col = self._df[by_cols[0]]
             if not isinstance(key_col, pd.Series):
                 return cast("Series", getattr(self._obj, agg)())
+
+            if not is_val_int and agg in {"sum", "mean"} and force_pandas_float_groupby_enabled():
+                return cast("Series", getattr(self._obj, agg)())
+
             key_dtype = capture_key_numpy_dtype(key_col)
 
             keys = to_i64_contiguous(key_col.to_numpy(copy=False))
@@ -143,18 +156,30 @@ class BoosterSeriesGroupBy:
                 force_pandas_sort=force_pandas_sort,
             )
 
-            result_keys, result_values = rust_func(keys, values)
+            try:
+                result_keys, result_values = rust_func(keys, values)
+                result_values_arr = normalize_result_values(
+                    result_values,
+                    agg=agg,
+                    is_val_int=is_val_int,
+                    context="proxy",
+                )
 
-            return build_series_from_single_result(
-                np.asarray(result_keys),
-                np.asarray(result_values),
-                name=val_col.name,
-                index_name=key_col.name,
-                index_dtype=key_dtype,
-                agg=agg,
-                sort=sort,
-                needs_python_sort=needs_python_sort,
-            )
+                return build_series_from_single_result(
+                    np.asarray(result_keys),
+                    result_values_arr,
+                    name=val_col.name,
+                    index_name=key_col.name,
+                    index_dtype=key_dtype,
+                    agg=agg,
+                    is_val_int=is_val_int,
+                    sort=sort,
+                    needs_python_sort=needs_python_sort,
+                )
+            except PandasBoosterKeyShapeSkewError:
+                if strict:
+                    raise
+                return cast("Series", getattr(self._obj, agg)())
         else:
             key_cols: list[pd.Series] = []
             for col_name in by_cols:
@@ -198,15 +223,12 @@ class BoosterSeriesGroupBy:
                         ),
                     )
                 keys_cols, result_values = rust_result
-                result_values_arr = np.asarray(result_values)
-                if result_values_arr.ndim != 1:
-                    raise_abi_skew(
-                        context="proxy",
-                        detail=(
-                            f"result_values must be 1D, got ndim={result_values_arr.ndim} "
-                            f"shape={result_values_arr.shape}."
-                        ),
-                    )
+                result_values_arr = normalize_result_values(
+                    result_values,
+                    agg=agg,
+                    is_val_int=is_val_int,
+                    context="proxy",
+                )
                 keys_cols_arr = normalize_multi_keys_cols(
                     keys_cols,
                     n_groups=result_values_arr.shape[0],
@@ -221,6 +243,7 @@ class BoosterSeriesGroupBy:
                     key_dtypes=key_dtypes,
                     name=val_col.name,
                     agg=agg,
+                    is_val_int=is_val_int,
                     sort=sort,
                     needs_python_sort=needs_python_sort,
                 )

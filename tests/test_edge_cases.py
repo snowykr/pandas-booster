@@ -155,15 +155,10 @@ class TestInfiniteValues:
 
 
 class TestIntegerOverflow:
-    """Tests for integer overflow handling via i128 accumulator."""
+    """Tests for integer overflow behavior parity with pandas."""
 
-    def test_large_i64_sum_no_overflow(self):
-        """Sum of large i64 values should not overflow (uses i128 internally).
-
-        Note: pandas-booster uses i128 accumulator, so it computes the correct
-        mathematical sum even when Pandas would overflow. This test verifies
-        our implementation is mathematically correct.
-        """
+    def test_large_i64_sum_wraps_like_pandas(self):
+        """Large i64 sums should match pandas overflow/wrap semantics."""
         import pandas_booster  # noqa: F401
 
         n = 200_000
@@ -177,12 +172,13 @@ class TestIntegerOverflow:
         )
 
         result = df.booster.groupby("key", "val", "sum")
+        expected = df.groupby("key")["val"].sum()
 
-        # Verify our result is mathematically correct (n * large_val)
-        expected_value = float(n) * float(large_val)
-        assert len(result) == 1
-        # Allow some float precision loss for very large numbers
-        assert abs(result.iloc[0] - expected_value) / expected_value < 1e-6
+        pd.testing.assert_series_equal(
+            result.sort_index(),
+            expected.sort_index(),
+            check_exact=True,
+        )
 
     def test_mixed_sign_large_values(self):
         """Large positive and negative values should cancel correctly."""
@@ -203,10 +199,9 @@ class TestIntegerOverflow:
         expected = df.groupby("key")["val"].sum()
 
         pd.testing.assert_series_equal(
-            result.sort_index().astype(float),
-            expected.sort_index().astype(float),
-            check_exact=False,
-            rtol=1e-10,
+            result.sort_index(),
+            expected.sort_index(),
+            check_exact=True,
         )
 
 

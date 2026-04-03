@@ -10,7 +10,11 @@ import pandas as pd
 
 from . import _abi_compat as _abi_compat
 from . import _groupby_accel as _groupby_accel_mod
-from ._config import force_pandas_sort_enabled, strict_abi_enabled
+from ._config import (
+    force_pandas_float_groupby_enabled,
+    force_pandas_sort_enabled,
+    strict_abi_enabled,
+)
 
 if TYPE_CHECKING:
     from pandas import DataFrame, Series
@@ -128,7 +132,14 @@ class BoosterAccessor:
         if self._has_nullable_na(key_col) or self._has_nullable_na(val_col):
             return self._pandas_fallback([by], target, agg, sort=sort)
 
-        return self._rust_groupby_single(key_col, val_col, agg, sort=sort)
+        if (
+            pd.api.types.is_float_dtype(val_col)
+            and agg in {"sum", "mean"}
+            and force_pandas_float_groupby_enabled()
+        ):
+            return self._pandas_fallback([by], target, agg, sort=sort)
+
+        return self._rust_groupby_single(by, target, key_col, val_col, agg, sort=sort)
 
     def _groupby_multi(
         self, by_cols: list[str], target: str, agg: AggFunc, *, sort: bool
@@ -185,9 +196,10 @@ class BoosterAccessor:
         return getattr(grouped, agg)()
 
     def _rust_groupby_single(
-        self, key_col: Series, val_col: Series, agg: AggFunc, *, sort: bool
+        self, by: str, target: str, key_col: Series, val_col: Series, agg: AggFunc, *, sort: bool
     ) -> Series:
         rust = self._get_rust_module()
+        strict = strict_abi_enabled()
 
         force_pandas_sort = bool(sort) and force_pandas_sort_enabled()
 
@@ -211,18 +223,30 @@ class BoosterAccessor:
             force_pandas_sort=force_pandas_sort,
         )
 
-        result_keys, result_values = rust_func(keys, values)
+        try:
+            result_keys, result_values = rust_func(keys, values)
+            result_values_arr = _abi_compat.normalize_result_values(
+                result_values,
+                agg=agg,
+                is_val_int=is_val_int,
+                context="accessor",
+            )
 
-        return _groupby_accel_mod.build_series_from_single_result(
-            np.asarray(result_keys),
-            np.asarray(result_values),
-            name=val_col.name,
-            index_name=key_col.name,
-            index_dtype=key_dtype,
-            agg=agg,
-            sort=sort,
-            needs_python_sort=needs_python_sort,
-        )
+            return _groupby_accel_mod.build_series_from_single_result(
+                np.asarray(result_keys),
+                result_values_arr,
+                name=val_col.name,
+                index_name=key_col.name,
+                index_dtype=key_dtype,
+                agg=agg,
+                is_val_int=is_val_int,
+                sort=sort,
+                needs_python_sort=needs_python_sort,
+            )
+        except _abi_compat.PandasBoosterKeyShapeSkewError:
+            if strict:
+                raise
+            return self._pandas_fallback([by], target, agg, sort=sort)
 
     def _rust_groupby_multi(
         self,
@@ -280,15 +304,12 @@ class BoosterAccessor:
                     ),
                 )
             keys_cols, result_values = rust_result
-            result_values_arr = np.asarray(result_values)
-            if result_values_arr.ndim != 1:
-                _abi_compat.raise_abi_skew(
-                    context="accessor",
-                    detail=(
-                        f"result_values must be 1D, got ndim={result_values_arr.ndim} "
-                        f"shape={result_values_arr.shape}."
-                    ),
-                )
+            result_values_arr = _abi_compat.normalize_result_values(
+                result_values,
+                agg=agg,
+                is_val_int=is_val_int,
+                context="accessor",
+            )
             keys_cols_arr = _abi_compat.normalize_multi_keys_cols(
                 keys_cols,
                 n_groups=result_values_arr.shape[0],
@@ -303,6 +324,7 @@ class BoosterAccessor:
                 key_dtypes=key_dtypes,
                 name=val_col.name,
                 agg=agg,
+                is_val_int=is_val_int,
                 sort=sort,
                 needs_python_sort=needs_python_sort,
             )
