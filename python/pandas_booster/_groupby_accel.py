@@ -72,6 +72,11 @@ def capture_key_numpy_dtype(key_col: pd.Series) -> np.dtype:
     return arr.dtype
 
 
+def capture_value_numpy_dtype(value_col: pd.Series) -> np.dtype:
+    arr = np.asarray(value_col.to_numpy(copy=False))
+    return arr.dtype
+
+
 def to_i64_contiguous(arr: np.ndarray) -> np.ndarray:
     """Convert to contiguous int64 ndarray for Rust."""
     return np.ascontiguousarray(arr.astype(np.int64, copy=False))
@@ -84,6 +89,7 @@ def build_series_from_single_result(
     name: Hashable | None,
     index_name: Hashable | None,
     index_dtype: np.dtype,
+    value_dtype: np.dtype,
     agg: str,
     is_val_int: bool,
     sort: bool,
@@ -102,7 +108,9 @@ def build_series_from_single_result(
         idx = pd.Index([], dtype=index_dtype, name=index_name)
         out_dtype = (
             np.int64
-            if agg == "count" or (is_val_int and agg in {"sum", "min", "max"})
+            if agg == "count"
+            else value_dtype
+            if is_val_int and agg in {"sum", "min", "max"}
             else np.float64
         )
         return pd.Series([], index=idx, name=name, dtype=out_dtype)
@@ -111,8 +119,10 @@ def build_series_from_single_result(
     idx = pd.Index(keys_arr, dtype=index_dtype, name=index_name, copy=False)
 
     values_arr = np.asarray(result_values)
-    if agg == "count" or (is_val_int and agg in {"sum", "min", "max"}):
+    if agg == "count":
         values_arr = values_arr.astype(np.int64, copy=False)
+    elif is_val_int and agg in {"sum", "min", "max"}:
+        values_arr = values_arr.astype(value_dtype, copy=False)
     else:
         values_arr = values_arr.astype(np.float64, copy=False)
 
@@ -130,6 +140,7 @@ def build_series_from_multi_result(
     by_cols: list[str],
     key_dtypes: list[np.dtype],
     name: Hashable | None,
+    value_dtype: np.dtype,
     agg: str,
     is_val_int: bool,
     sort: bool,
@@ -153,7 +164,9 @@ def build_series_from_multi_result(
 
         out_dtype = (
             np.int64
-            if agg == "count" or (is_val_int and agg in {"sum", "min", "max"})
+            if agg == "count"
+            else value_dtype
+            if is_val_int and agg in {"sum", "min", "max"}
             else np.float64
         )
         return pd.Series([], index=idx, name=name, dtype=out_dtype)
@@ -173,8 +186,10 @@ def build_series_from_multi_result(
     idx = pd.MultiIndex.from_arrays(index_arrays, names=by_cols)
 
     values_arr = np.asarray(result_values)
-    if agg == "count" or (is_val_int and agg in {"sum", "min", "max"}):
+    if agg == "count":
         values_arr = values_arr.astype(np.int64, copy=False)
+    elif is_val_int and agg in {"sum", "min", "max"}:
+        values_arr = values_arr.astype(value_dtype, copy=False)
     else:
         values_arr = values_arr.astype(np.float64, copy=False)
 

@@ -139,6 +139,7 @@ class BoosterSeriesGroupBy:
                 return cast("Series", getattr(self._obj, agg)())
 
             key_dtype = capture_key_numpy_dtype(key_col)
+            value_dtype = np.asarray(val_col.to_numpy(copy=False)).dtype
 
             keys = to_i64_contiguous(key_col.to_numpy(copy=False))
             if is_val_int:
@@ -171,6 +172,7 @@ class BoosterSeriesGroupBy:
                     name=val_col.name,
                     index_name=key_col.name,
                     index_dtype=key_dtype,
+                    value_dtype=value_dtype,
                     agg=agg,
                     is_val_int=is_val_int,
                     sort=sort,
@@ -189,6 +191,7 @@ class BoosterSeriesGroupBy:
                 key_cols.append(col)
 
             key_dtypes = [capture_key_numpy_dtype(col) for col in key_cols]
+            value_dtype = np.asarray(val_col.to_numpy(copy=False)).dtype
             key_arrays = [to_i64_contiguous(col.to_numpy(copy=False)) for col in key_cols]
 
             if is_val_int:
@@ -242,6 +245,7 @@ class BoosterSeriesGroupBy:
                     by_cols=by_cols,
                     key_dtypes=key_dtypes,
                     name=val_col.name,
+                    value_dtype=value_dtype,
                     agg=agg,
                     is_val_int=is_val_int,
                     sort=sort,

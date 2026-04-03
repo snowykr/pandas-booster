@@ -204,6 +204,7 @@ class BoosterAccessor:
         force_pandas_sort = bool(sort) and force_pandas_sort_enabled()
 
         key_dtype = _groupby_accel_mod.capture_key_numpy_dtype(key_col)
+        value_dtype = _groupby_accel_mod.capture_value_numpy_dtype(val_col)
 
         keys = _groupby_accel_mod.to_i64_contiguous(key_col.to_numpy(copy=False))
         is_val_int = pd.api.types.is_integer_dtype(val_col)
@@ -238,6 +239,7 @@ class BoosterAccessor:
                 name=val_col.name,
                 index_name=key_col.name,
                 index_dtype=key_dtype,
+                value_dtype=value_dtype,
                 agg=agg,
                 is_val_int=is_val_int,
                 sort=sort,
@@ -265,6 +267,7 @@ class BoosterAccessor:
         force_pandas_sort = bool(sort) and force_pandas_sort_enabled()
 
         key_dtypes = [_groupby_accel_mod.capture_key_numpy_dtype(key_cols[col]) for col in by_cols]
+        value_dtype = _groupby_accel_mod.capture_value_numpy_dtype(val_col)
 
         key_arrays = [
             _groupby_accel_mod.to_i64_contiguous(key_cols[col].to_numpy(copy=False))
@@ -323,6 +326,7 @@ class BoosterAccessor:
                 by_cols=by_cols,
                 key_dtypes=key_dtypes,
                 name=val_col.name,
+                value_dtype=value_dtype,
                 agg=agg,
                 is_val_int=is_val_int,
                 sort=sort,
