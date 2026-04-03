@@ -27,6 +27,38 @@ def _project_version() -> str:
         return tomllib.load(handle)["project"]["version"]
 
 
+def _job_block(workflow_text: str, job_name: str) -> str:
+    marker = f"  {job_name}:"
+    lines = workflow_text.splitlines()
+    start = lines.index(marker)
+    block = [lines[start]]
+
+    for line in lines[start + 1 :]:
+        if line.startswith("  ") and not line.startswith("    "):
+            break
+        block.append(line)
+
+    return "\n".join(block)
+
+
+def _job_if_expression(workflow_text: str, job_name: str) -> str:
+    block_lines = _job_block(workflow_text, job_name).splitlines()
+
+    for idx, line in enumerate(block_lines):
+        if line == "    if: >":
+            expr_lines: list[str] = []
+            for cont in block_lines[idx + 1 :]:
+                if not cont.startswith("      "):
+                    break
+                expr_lines.append(cont.strip())
+            return " ".join(expr_lines)
+
+        if line.startswith("    if: "):
+            return line.removeprefix("    if: ").strip()
+
+    raise AssertionError(f"Job {job_name!r} is missing an if expression")
+
+
 def test_validate_metadata_requires_release_readme_tokens(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -260,13 +292,21 @@ def test_validate_workflow_requires_tag_gated_publish_condition(tmp_path: Path):
 def test_ci_keeps_non_tag_release_readiness_paths():
     repo_root = Path(__file__).resolve().parents[1]
     ci_text = (repo_root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    main_pr_smoke_gate = (
+        "github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main'"
+    )
+    non_main_pr_quick_gate = (
+        "(github.event_name == 'pull_request' && github.event.pull_request.base.ref != 'main')"
+    )
 
     assert (
         "python scripts/check_release_contract.py workflow --file .github/workflows/publish.yml"
         in ci_text
     )
     assert "name: Build Wheel Smoke" in ci_text
-    assert "github.event_name == 'pull_request'" in ci_text
+    assert _job_if_expression(ci_text, "build-wheel-smoke") == main_pr_smoke_gate
+    assert _job_if_expression(ci_text, "test-wheel-smoke") == main_pr_smoke_gate
+    assert _job_if_expression(ci_text, "build-and-test-quick") == non_main_pr_quick_gate
     assert "name: Release Matrix" in ci_text
     assert "github.ref == 'refs/heads/main'" in ci_text
     assert "github.event_name == 'workflow_dispatch'" in ci_text

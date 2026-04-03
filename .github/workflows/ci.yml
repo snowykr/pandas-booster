@@ -75,7 +75,7 @@ jobs:
       - rust-checks
       - python-quality
     if: >
-      github.event_name == 'pull_request'
+      github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -110,7 +110,7 @@ jobs:
     needs:
       - build-wheel-smoke
     if: >
-      github.event_name == 'pull_request'
+      github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
