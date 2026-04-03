@@ -16,6 +16,7 @@ build/
 .pytest_cache/
 .hypothesis/
 .venv/
+.venv-*/
 venv/
 ENV/
 env/
