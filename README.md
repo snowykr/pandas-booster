@@ -1,10 +1,12 @@
 # pandas-booster
 
-[![CI](https://github.com/your-org/pandas-booster/actions/workflows/ci.yml/badge.svg)](https://github.com/your-org/pandas-booster/actions)
+[![CI](https://github.com/snowykr/pandas-booster/actions/workflows/ci.yml/badge.svg)](https://github.com/snowykr/pandas-booster/actions)
 [![Python Versions](https://img.shields.io/pypi/pyversions/pandas-booster.svg)](https://pypi.org/project/pandas-booster/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 pandas-booster is a high-performance numerical acceleration library for Pandas that offloads heavy computations to Rust. It leverages multi-core parallelism and zero-copy data access to provide significant speedups for large-scale data processing tasks.
+
+This project is an independent third-party package and is not affiliated with, endorsed by, or sponsored by the pandas project or NumFOCUS.
 
 ## Features
 
@@ -16,10 +18,10 @@ pandas-booster is a high-performance numerical acceleration library for Pandas t
 
 ## Installation
 
-### From Wheel
-If you have a pre-built wheel:
+### From PyPI
+Install the latest published release from PyPI:
 ```bash
-pip install pandas_booster-0.1.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+pip install pandas-booster
 ```
 
 ### Development Setup
@@ -276,6 +278,26 @@ For release builds with optimizations:
 source .venv/bin/activate
 maturin develop --release
 ```
+
+### Release
+
+The release process is automated via the `publish.yml` workflow triggered by version tags.
+
+1. **Preconditions**:
+   - PyPI project exists.
+   - [Trusted Publisher](https://docs.pypi.org/trusted-publishers/) is configured for `publish.yml`.
+   - GitHub environment `pypi` is configured (if repository is protected).
+
+2. **Operator Flow**:
+   Ensure the environment is ready and push a new tag:
+   ```bash
+   python -m pip install --upgrade pip
+   pip install "maturin>=1.4,<2.0"
+   git tag vX.Y.Z
+   git push origin vX.Y.Z
+   ```
+
+The workflow builds cross-platform wheels and handles the PyPI upload automatically.
 
 ### Testing
 Run the test suite using `pytest`:

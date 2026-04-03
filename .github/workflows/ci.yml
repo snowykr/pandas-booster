@@ -11,7 +11,7 @@ env:
 
 jobs:
   rust-checks:
-    name: Rust Quality (fmt, clippy, test)
+    name: Rust Static Validation (fmt, clippy, test)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,8 +40,8 @@ jobs:
       - name: Run Rust tests
         run: cargo test
 
-  python-typecheck:
-    name: Python Typecheck (basedpyright, ruff)
+  python-quality:
+    name: Python Quality Validation (basedpyright, ruff, metadata)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -61,19 +61,92 @@ jobs:
         run: basedpyright --project pyrightconfig.json
 
       - name: Run ruff
-        run: ruff check python tests
+        run: ruff check python tests scripts
 
-  build-and-test-full:
-    name: Build & Test (Full Matrix)
+      - name: Validate release metadata contract
+        run: python scripts/check_release_contract.py metadata
+
+      - name: Validate publish workflow contract
+        run: python scripts/check_release_contract.py workflow --file .github/workflows/publish.yml
+
+  build-wheel-smoke:
+    name: Build Wheel Smoke
+    needs:
+      - rust-checks
+      - python-quality
     if: >
-      (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main') ||
+      github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Set PYO3_PYTHON
+        run: |
+          python -c "import sys, os; open(os.environ['GITHUB_ENV'], 'a').write(f'PYO3_PYTHON={sys.executable}\n')"
+
+      - name: Install build dependencies
+        run: pip install "maturin>=1.4,<2.0"
+
+      - name: Build wheel
+        run: maturin build --release --out dist
+
+      - name: Upload smoke wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-wheel-py311-ubuntu
+          path: dist/*.whl
+
+  test-wheel-smoke:
+    name: Test Wheel Smoke
+    needs:
+      - build-wheel-smoke
+    if: >
+      github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+
+      - name: Download smoke wheel artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: smoke-wheel-py311-ubuntu
+          path: dist/
+
+      - name: Install wheel and test dependencies
+        run: |
+          python -c "import glob, subprocess, sys; wheels = glob.glob('dist/*.whl'); (print(f'Error: Found {len(wheels)} wheels: {wheels}') or sys.exit(1)) if len(wheels) != 1 else None; w = wheels[0]; print(f'Installing {w}'); subprocess.check_call([sys.executable, '-m', 'pip', 'install', w])"
+          pip install pytest numpy pandas
+
+      - name: Run tests
+        run: pytest tests/ -v
+
+  release-matrix:
+    name: Release Matrix
+    needs:
+      - rust-checks
+      - python-quality
+    if: >
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.9", "3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4

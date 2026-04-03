@@ -7,6 +7,7 @@ name = "pandas-booster"
 version = "0.1.0"
 description = "High-performance numerical acceleration library for Pandas using Rust"
 license = { text = "MIT" }
+readme = "README.md"
 requires-python = ">=3.9"
 keywords = ["pandas", "numpy", "performance", "rust", "data-science", "acceleration"]
 classifiers = [
@@ -19,7 +20,6 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
     "Programming Language :: Rust",
     "Topic :: Scientific/Engineering",
     "Topic :: Software Development :: Libraries :: Python Modules",
@@ -45,9 +45,9 @@ bench = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/your-org/pandas-booster"
-Repository = "https://github.com/your-org/pandas-booster"
-Issues = "https://github.com/your-org/pandas-booster/issues"
+Homepage = "https://github.com/snowykr/pandas-booster"
+Repository = "https://github.com/snowykr/pandas-booster"
+Issues = "https://github.com/snowykr/pandas-booster/issues"
 
 [tool.maturin]
 python-source = "python"
@@ -77,3 +77,4 @@ convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*.py" = ["D"]
+"scripts/*.py" = ["D"]

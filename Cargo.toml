@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["pandas-booster contributors"]
 description = "High-performance numerical acceleration library for Pandas using Rust"
 license = "MIT"
-repository = "https://github.com/your-org/pandas-booster"
+repository = "https://github.com/snowykr/pandas-booster"
 keywords = ["pandas", "numpy", "performance", "rust", "data-science"]
 categories = ["science", "mathematics"]
 

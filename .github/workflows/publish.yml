@@ -1,0 +1,130 @@
+name: Publish
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish artifacts to PyPI
+        type: boolean
+        required: false
+        default: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-wheels:
+    name: Build wheels (${{ matrix.platform.name }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.platform.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.9', '3.10', '3.11', '3.12']
+        platform:
+          - name: linux
+            os: ubuntu-latest
+            artifact-name: manylinux2014-x86_64
+          - name: windows
+            os: windows-latest
+            artifact-name: windows-x86_64
+          - name: macos
+            os: macos-latest
+            artifact-name: universal2-apple-darwin
+            target: universal2-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Build Linux wheels
+        if: matrix.platform.name == 'linux'
+        uses: PyO3/maturin-action@v1
+        with:
+          manylinux: 2014
+          args: --release --out dist --compatibility pypi --interpreter ${{ matrix.python-version }}
+
+      - name: Build Windows wheels
+        if: matrix.platform.name == 'windows'
+        uses: PyO3/maturin-action@v1
+        with:
+          args: --release --out dist --compatibility pypi --interpreter ${{ matrix.python-version }}
+
+      - name: Build macOS wheels
+        if: matrix.platform.name == 'macos'
+        uses: PyO3/maturin-action@v1
+        with:
+          target: universal2-apple-darwin
+          args: --release --out dist --compatibility pypi --interpreter ${{ matrix.python-version }}
+
+      - name: Upload wheels artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.platform.artifact-name }}-py${{ matrix.python-version }}
+          path: dist/*.whl
+
+  build-sdist:
+    name: Build sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install sdist dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "maturin>=1.4,<2.0"
+
+      - name: Build sdist
+        run: maturin sdist --out dist
+
+      - name: Upload sdist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  publish:
+    name: Publish to PyPI
+    if: startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || inputs.publish)
+    needs:
+      - build-wheels
+      - build-sdist
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    environment:
+      name: pypi
+      url: https://pypi.org/p/pandas-booster
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Download distribution artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: '*'
+          merge-multiple: true
+
+      - name: Check release tag contract
+        run: python scripts/check_release_contract.py tag --tag "$GITHUB_REF_NAME"
+
+      - name: Check release artifact contract
+        run: python scripts/check_release_contract.py artifacts --dist dist --expected-wheel-count 12 --require-sdist
+
+      - name: Publish package distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
