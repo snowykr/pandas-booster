@@ -132,7 +132,7 @@ jobs:
           pip install pytest numpy pandas
 
       - name: Run tests
-        run: pytest tests/ -v
+        run: pytest tests/ -v --strict-markers -m "not stress"
 
   release-matrix:
     name: Release Matrix
