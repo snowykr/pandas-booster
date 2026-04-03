@@ -30,7 +30,7 @@ jobs:
             os: windows-latest
             artifact-name: windows-x86_64
           - name: macos
-            os: macos-13
+            os: macos-latest
             artifact-name: universal2-apple-darwin
             target: universal2-apple-darwin
     steps:
