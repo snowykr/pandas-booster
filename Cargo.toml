@@ -1,6 +1,6 @@
 [package]
 name = "pandas_booster"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["pandas-booster contributors"]
 description = "High-performance numerical acceleration library for Pandas using Rust"
