@@ -34,7 +34,9 @@ class BoosterAccessor:
 
     Note: std and var use pandas-default semantics (ddof=1) and always return float64.
     Unlike legacy aggs, supported std and var are Rust-first by default regardless of
-    dataset size.
+    dataset size. The `PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY` environment toggle
+    can be used to force a pandas fallback specifically for single-key float-input
+    sum/mean/std/var operations; it does not broaden to multi-key or int-backed paths.
 
     Examples:
         Single key:
@@ -198,15 +200,15 @@ class BoosterAccessor:
             values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
             func_base = f"groupby_{agg}_f64"
 
-        rust_func, needs_python_sort = _groupby_accel_mod.select_rust_groupby_func(
-            rust,
-            func_base,
-            sort=sort,
-            n_rows=len(self._df),
-            force_pandas_sort=force_pandas_sort,
-        )
-
         try:
+            rust_func, needs_python_sort = _groupby_accel_mod.select_rust_groupby_func(
+                rust,
+                func_base,
+                sort=sort,
+                n_rows=len(self._df),
+                force_pandas_sort=force_pandas_sort,
+                context="accessor",
+            )
             result_keys, result_values = rust_func(keys, values)
             result_values_arr = _abi_compat.normalize_result_values(
                 result_values,
@@ -265,15 +267,15 @@ class BoosterAccessor:
             values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
             func_base = f"groupby_multi_{agg}_f64"
 
-        rust_func, needs_python_sort = _groupby_accel_mod.select_rust_groupby_func(
-            rust,
-            func_base,
-            sort=sort,
-            n_rows=len(self._df),
-            force_pandas_sort=force_pandas_sort,
-        )
-
         try:
+            rust_func, needs_python_sort = _groupby_accel_mod.select_rust_groupby_func(
+                rust,
+                func_base,
+                sort=sort,
+                n_rows=len(self._df),
+                force_pandas_sort=force_pandas_sort,
+                context="accessor",
+            )
             rust_result = rust_func(key_arrays, values)
             if not isinstance(rust_result, tuple) or len(rust_result) != 2:
                 _abi_compat.raise_abi_skew(

@@ -36,6 +36,9 @@ Usage:
     # Save results to markdown file
     python benches/benchmark.py --output results.md
 
+    # Run only selected aggregation functions
+    python benches/benchmark.py --agg std --agg var
+
     # Adjust sample count (applies to both cold and warm)
     python benches/benchmark.py --samples 10
 """
@@ -50,6 +53,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, cast
 
+import numpy as np
 import pandas as pd
 
 try:
@@ -65,17 +69,324 @@ except ImportError:
 BACKEND_DISPLAY_ORDER: tuple[str, ...] = ("pandas", "polars", "booster")
 
 sys.path.insert(0, str(Path(__file__).parent))
-from bench_utils import BenchmarkStats, run_cold_warm_benchmark  # noqa: E402
+from bench_utils import BenchmarkStats, compute_stats, run_cold_warm_benchmark  # noqa: E402
 from datasets import PRESETS, generate_multi_key_dataset, get_dataset_info  # noqa: E402
 
 if TYPE_CHECKING:
     from typing import Literal
 
 
+SUPPORTED_AGGS: tuple[str, ...] = ("sum", "mean", "std", "var", "min", "max", "count")
+CORE_BENCHMARK_AGG = "sum"
+STATS_EVIDENCE_AGGS: tuple[str, str] = ("std", "var")
+STATS_EVIDENCE_SORTS: tuple[bool, bool] = (True, False)
+
+
+def build_polars_agg_expr(value_col: str, agg: str) -> Any:
+    assert pl is not None
+
+    agg_map = {
+        "sum": pl.col(value_col).sum().alias(value_col),
+        "mean": pl.col(value_col).mean().alias(value_col),
+        "std": pl.col(value_col).std().alias(value_col),
+        "var": pl.col(value_col).var().alias(value_col),
+        "min": pl.col(value_col).min().alias(value_col),
+        "max": pl.col(value_col).max().alias(value_col),
+        "count": pl.col(value_col).count().alias(value_col),
+    }
+    return agg_map[agg]
+
+
+def describe_booster_execution(
+    df: pd.DataFrame,
+    key_cols: list[str],
+    value_col: str,
+    agg: str,
+    sort: bool,
+) -> str:
+    import pandas_booster._rust as rust
+    from pandas_booster import _groupby_accel as groupby_accel
+    from pandas_booster._config import (
+        force_pandas_float_groupby_enabled,
+        force_pandas_sort_enabled,
+    )
+
+    val_col = cast(pd.Series, df[value_col])
+    key_series = [cast(pd.Series, df[col]) for col in key_cols]
+
+    if agg not in {"std", "var"} and len(df) < rust.get_fallback_threshold():
+        return f"booster->pandas.groupby.{agg}"
+
+    compatibility = groupby_accel.classify_groupby_compatibility(
+        key_cols=key_series,
+        val_col=val_col,
+        agg=cast(Any, agg),
+        force_pandas_float_groupby=force_pandas_float_groupby_enabled(),
+    )
+    if not compatibility.supported or compatibility.force_pandas:
+        return f"booster->pandas.groupby.{agg}"
+
+    is_val_int = pd.api.types.is_integer_dtype(val_col)
+    prefix = "groupby_multi" if len(key_cols) > 1 else "groupby"
+    suffix = "i64" if is_val_int else "f64"
+    rust_func, needs_python_sort = groupby_accel.select_rust_groupby_func(
+        rust,
+        f"{prefix}_{agg}_{suffix}",
+        sort=sort,
+        n_rows=len(df),
+        force_pandas_sort=bool(sort) and force_pandas_sort_enabled(),
+    )
+    execution = f"booster->rust.{rust_func.__name__}"
+    if needs_python_sort and sort:
+        execution += "+python_sort"
+    return execution
+
+
+def measure_booster_single_key_breakdown(
+    preset_name: str,
+    agg: str,
+    sort: bool,
+    n_samples: int,
+) -> dict[str, Any]:
+    import pandas_booster._abi_compat as abi_compat
+    import pandas_booster._rust as rust
+    from pandas_booster import _groupby_accel as groupby_accel
+    from pandas_booster._config import force_pandas_sort_enabled
+
+    config = PRESETS[preset_name]
+    df = generate_multi_key_dataset(**config)
+    key_cols = [col for col, _ in config["key_configs"]]
+    if len(key_cols) != 1:
+        raise ValueError("Breakdown evidence only supports single-key presets")
+
+    key_col = cast(pd.Series, df[key_cols[0]])
+    val_col = cast(pd.Series, df["value"])
+    key_dtype = groupby_accel.capture_key_numpy_dtype(key_col)
+    value_dtype = groupby_accel.capture_value_numpy_dtype(val_col)
+    is_val_int = pd.api.types.is_integer_dtype(val_col)
+    func_base = f"groupby_{agg}_{'i64' if is_val_int else 'f64'}"
+    rust_func, needs_python_sort = groupby_accel.select_rust_groupby_func(
+        rust,
+        func_base,
+        sort=sort,
+        n_rows=len(df),
+        force_pandas_sort=bool(sort) and force_pandas_sort_enabled(),
+    )
+
+    phase_samples: dict[str, list[float]] = {
+        "prepare_inputs_s": [],
+        "rust_kernel_s": [],
+        "normalize_result_s": [],
+        "build_series_s": [],
+        "total_pipeline_s": [],
+    }
+
+    for _ in range(n_samples):
+        total_start = time.perf_counter()
+
+        prepare_start = time.perf_counter()
+        keys = groupby_accel.to_i64_contiguous(key_col.to_numpy(copy=False))
+        if is_val_int:
+            values = np.ascontiguousarray(val_col.to_numpy(dtype=np.int64))
+        else:
+            values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
+        phase_samples["prepare_inputs_s"].append(time.perf_counter() - prepare_start)
+
+        kernel_start = time.perf_counter()
+        result_keys, result_values = rust_func(keys, values)
+        phase_samples["rust_kernel_s"].append(time.perf_counter() - kernel_start)
+
+        normalize_start = time.perf_counter()
+        result_values_arr = abi_compat.normalize_result_values(
+            result_values,
+            agg=agg,
+            is_val_int=is_val_int,
+            context="benchmark",
+        )
+        phase_samples["normalize_result_s"].append(time.perf_counter() - normalize_start)
+
+        build_start = time.perf_counter()
+        _ = groupby_accel.build_series_from_single_result(
+            np.asarray(result_keys),
+            result_values_arr,
+            name=val_col.name,
+            index_name=key_col.name,
+            index_dtype=key_dtype,
+            value_dtype=value_dtype,
+            agg=agg,
+            is_val_int=is_val_int,
+            sort=sort,
+            needs_python_sort=needs_python_sort,
+        )
+        phase_samples["build_series_s"].append(time.perf_counter() - build_start)
+        phase_samples["total_pipeline_s"].append(time.perf_counter() - total_start)
+
+    stats = {name: compute_stats(samples) for name, samples in phase_samples.items()}
+    overhead_mean = (
+        stats["prepare_inputs_s"].mean
+        + stats["normalize_result_s"].mean
+        + stats["build_series_s"].mean
+    )
+    total_mean = stats["total_pipeline_s"].mean
+    return {
+        "execution": f"booster->rust.{rust_func.__name__}"
+        + ("+python_sort" if needs_python_sort and sort else ""),
+        "phases": stats,
+        "overhead_share": 0.0 if total_mean <= 0 else overhead_mean / total_mean,
+    }
+
+
+def resolve_selected_aggs(selected_aggs: list[str] | None) -> list[str] | None:
+    if selected_aggs is None:
+        return None
+
+    deduped: list[str] = []
+    for agg in selected_aggs:
+        if agg not in deduped:
+            deduped.append(agg)
+    return deduped
+
+
+def resolve_core_aggs(selected_aggs: list[str] | None) -> list[str]:
+    aggs = resolve_selected_aggs(selected_aggs)
+    if aggs is None:
+        return [CORE_BENCHMARK_AGG]
+    return aggs
+
+
+def resolve_stats_evidence_aggs(selected_aggs: list[str] | None) -> list[str]:
+    aggs = resolve_selected_aggs(selected_aggs)
+    if aggs is None:
+        return list(STATS_EVIDENCE_AGGS)
+    return [agg for agg in STATS_EVIDENCE_AGGS if agg in aggs]
+
+
+def collect_stats_evidence(
+    n_samples: int, selected_aggs: list[str] | None = None
+) -> list[dict[str, Any]]:
+    evidence: list[dict[str, Any]] = []
+    preset_name = "1key"
+    config = PRESETS[preset_name]
+    key_cols = [col for col, _ in config["key_configs"]]
+    evidence_aggs = resolve_stats_evidence_aggs(selected_aggs)
+    if not evidence_aggs:
+        return evidence
+
+    for agg in evidence_aggs:
+        for sort in STATS_EVIDENCE_SORTS:
+            result = benchmark_single(
+                preset_name,
+                agg=agg,
+                sort=sort,
+                n_samples=n_samples,
+                verify_correctness=True,
+            )
+            df = generate_multi_key_dataset(**config)
+            execution = {
+                "pandas": f"pandas.groupby.{agg}",
+                "booster": describe_booster_execution(df, key_cols, "value", agg, sort),
+            }
+            if HAS_POLARS:
+                execution["polars"] = f"polars.group_by.agg({agg})"
+            evidence.append(
+                {
+                    "agg": agg,
+                    "sort": sort,
+                    "result": result,
+                    "execution": execution,
+                    "breakdown": measure_booster_single_key_breakdown(
+                        preset_name,
+                        agg,
+                        sort,
+                        n_samples,
+                    ),
+                }
+            )
+    return evidence
+
+
+def render_stats_evidence_section(evidence: list[dict[str, Any]]) -> str:
+    if not evidence:
+        return ""
+
+    evidence_aggs = sorted({item["agg"] for item in evidence})
+    if evidence_aggs == ["std", "var"]:
+        heading = "## Single-Key `std`/`var` Evidence"
+    elif len(evidence_aggs) == 1:
+        heading = f"## Single-Key `{evidence_aggs[0]}` Evidence"
+    else:
+        agg_list = "/".join(f"`{agg}`" for agg in evidence_aggs)
+        heading = f"## Single-Key {agg_list} Evidence"
+
+    lines: list[str] = []
+    lines.append(heading)
+    lines.append("")
+    agg_phrase = "`std` and `var`" if evidence_aggs == ["std", "var"] else ", ".join(
+        f"`{agg}`" for agg in evidence_aggs
+    )
+    lines.append(
+        f"{agg_phrase} scale on the Rust-first path because each worker accumulates "
+        "mergeable `(count, mean, m2)` state and Rayon only merges those partial states at the end."
+    )
+    lines.append(
+        "When the dataset is smaller or the group count is low, the fixed overhead from NumPy "
+        "contiguity/copy work, the Python↔Rust boundary, and Series materialization eats into that gain "
+        "even though the kernel itself remains parallel."
+    )
+    lines.append("")
+    lines.append("| Agg | Sort | Backend | Execution | Cold | Warm |")
+    lines.append("|-----|------|---------|-----------|------|------|")
+
+    for item in evidence:
+        agg = item["agg"]
+        sort = "True" if item["sort"] else "False"
+        result = item["result"]
+        execution = item["execution"]
+        for backend_name in BACKEND_DISPLAY_ORDER:
+            backend_data = result["backends"].get(backend_name)
+            if backend_data is None:
+                continue
+            cold_stats: BenchmarkStats = backend_data["cold_stats"]
+            warm_stats: BenchmarkStats = backend_data["warm_stats"]
+            lines.append(
+                f"| `{agg}` | {sort} | {backend_name} | `{execution[backend_name]}` | "
+                f"{cold_stats.format_ms(2)} | {warm_stats.format_ms(2)} |"
+            )
+
+    lines.append("")
+    lines.append("### Booster conversion vs compute breakdown")
+    lines.append("")
+    lines.append(
+        "The table below isolates the Rust-first Booster path for the same single-key datasets. "
+        "`prepare_inputs` covers NumPy extraction/contiguity work, `rust_kernel` is the direct PyO3 "
+        "call into the Rust aggregation kernel, and the remaining phases capture result normalization "
+        "plus pandas Series materialization."
+    )
+    lines.append("")
+    lines.append(
+        "| Agg | Sort | Execution | Prepare inputs | Rust kernel | Normalize result | Build Series | Total pipeline | Overhead share |"
+    )
+    lines.append(
+        "|-----|------|-----------|----------------|-------------|------------------|--------------|----------------|----------------|"
+    )
+    for item in evidence:
+        breakdown = item["breakdown"]
+        phases = breakdown["phases"]
+        lines.append(
+            f"| `{item['agg']}` | {'True' if item['sort'] else 'False'} | `{breakdown['execution']}` | "
+            f"{phases['prepare_inputs_s'].format_ms(2)} | {phases['rust_kernel_s'].format_ms(2)} | "
+            f"{phases['normalize_result_s'].format_ms(2)} | {phases['build_series_s'].format_ms(2)} | "
+            f"{phases['total_pipeline_s'].format_ms(2)} | {breakdown['overhead_share']:.1%} |"
+        )
+
+    lines.append("")
+    return "\n".join(lines)
+
+
 def benchmark_worker(
     preset_name: str,
     backend: Literal["pandas", "booster", "polars"],
-    agg: Literal["sum", "mean", "min", "max", "count"] = "sum",
+    agg: Literal["sum", "mean", "std", "var", "min", "max", "count"] = "sum",
     sort: bool = True,
     verify_correctness: bool = False,
     mode: Literal["cold", "warm"] = "cold",
@@ -100,6 +411,7 @@ def benchmark_worker(
         Dictionary with cold_time_s OR warm_time_s.
     """
     run_once: Callable[[], Any]
+    execution = ""
 
     config = PRESETS[preset_name]
     df = generate_multi_key_dataset(**config)
@@ -130,6 +442,7 @@ def benchmark_worker(
         # invariant above (no NaNs in value) already enforces alignment.
 
     if backend == "pandas":
+        execution = f"pandas.groupby.{agg}"
 
         def run_once_pandas() -> Any:
             return getattr(df.groupby(key_cols, sort=sort)[value_col], agg)()
@@ -137,6 +450,8 @@ def benchmark_worker(
         run_once = run_once_pandas
     elif backend == "booster":
         from pandas_booster.accessor import BoosterAccessor
+
+        execution = describe_booster_execution(df, key_cols, value_col, agg, sort)
 
         def run_once_booster() -> Any:
             return cast(BoosterAccessor, df.booster).groupby(key_cols, value_col, agg, sort=sort)
@@ -147,30 +462,22 @@ def benchmark_worker(
             raise ImportError("Polars is not installed")
 
         assert pl is not None
+        execution = f"polars.group_by.agg({agg})"
 
         df_polars = pl.DataFrame(
             {**{col: df[col].values for col in key_cols}, value_col: df[value_col].values}
         )
-        agg_map = {
-            "sum": pl.col(value_col).sum().alias(value_col),
-            "mean": pl.col(value_col).mean().alias(value_col),
-            "min": pl.col(value_col).min().alias(value_col),
-            "max": pl.col(value_col).max().alias(value_col),
-            "count": pl.col(value_col).count().alias(value_col),
-        }
+        agg_expr = build_polars_agg_expr(value_col, agg)
 
         def run_once_polars() -> Any:
             # When sort=False, align semantics with Pandas/Booster by preserving
             # appearance order (first-seen group order).
-            result = df_polars.group_by(key_cols, maintain_order=not sort).agg(agg_map[agg])
+            result = df_polars.group_by(key_cols, maintain_order=not sort).agg(agg_expr)
             if sort:
                 result = result.sort(key_cols)
             return result
 
         run_once = run_once_polars
-    else:
-        raise ValueError(f"Unknown backend: {backend}")
-
     def pandas_baseline() -> pd.Series:
         # Note: we keep Pandas defaults (e.g., dropna=True) to match Pandas semantics.
         # Our benchmark datasets use integer keys without nulls.
@@ -219,7 +526,6 @@ def benchmark_worker(
             return s
         if backend == "polars":
             return polars_to_pandas_series(result_obj)
-        raise ValueError(f"Unknown backend: {backend}")
 
     def assert_matches_baseline(actual: pd.Series, expected: pd.Series) -> None:
         # Ordering semantics:
@@ -278,6 +584,7 @@ def benchmark_worker(
         return {
             "cold_time_s": cold_time,
             "correctness": correctness,
+            "execution": execution,
         }
 
     elif mode == "warm":
@@ -303,10 +610,8 @@ def benchmark_worker(
         return {
             "warm_time_s": warm_time,
             "correctness": correctness,
+            "execution": execution,
         }
-
-    return {}
-
 
 def benchmark_single(
     preset_name: str,
@@ -319,7 +624,7 @@ def benchmark_single(
 
     Args:
         preset_name: Name of the dataset preset from PRESETS.
-        agg: Aggregation function ("sum", "mean", "min", "max", "count").
+        agg: Aggregation function ("sum", "mean", "std", "var", "min", "max", "count").
         sort: Whether to sort the result.
         n_samples: Number of samples (= number of fresh processes).
         verify_correctness: Whether to verify results match.
@@ -759,7 +1064,6 @@ def format_performance_section(
     high_presets = {"high_cardinality_1key", "high_cardinality_2key", "high_cardinality_3key"}
     threshold_presets = {"threshold_180k", "threshold_200k", "threshold_220k"}
 
-    # Filter results by sort_mode
     filtered_results = []
     for r in results:
         if (
@@ -769,34 +1073,56 @@ def format_performance_section(
         ):
             filtered_results.append(r)
 
-    # Separate by cardinality
-    standard_results = [r for r in filtered_results if r["preset"] in standard_presets]
-    high_results = [r for r in filtered_results if r["preset"] in high_presets]
-    threshold_results = [r for r in filtered_results if r["preset"] in threshold_presets]
+    sections = ["## Performance", ""]
+    aggs = []
+    for result in filtered_results:
+        agg = result["agg"]
+        if agg not in aggs:
+            aggs.append(agg)
 
-    sections = []
-    sections.append("## Performance")
-    sections.append("")
+    multiple_aggs = len(aggs) > 1
 
-    if cardinality in ["all", "standard"] and standard_results:
-        sections.append("### Standard Cardinality (5M rows)")
-        sections.append("")
-        sections.append(render_standard_table(standard_results))
-        sections.append("")
+    for agg in aggs:
+        agg_results = [r for r in filtered_results if r["agg"] == agg]
+        standard_results = [r for r in agg_results if r["preset"] in standard_presets]
+        high_results = [r for r in agg_results if r["preset"] in high_presets]
+        threshold_results = [r for r in agg_results if r["preset"] in threshold_presets]
 
-    if cardinality in ["all", "high"] and high_results:
-        sections.append("### High Cardinality (5M rows, ~5M unique groups)")
-        sections.append("")
-        sections.append(render_high_table(high_results))
-        sections.append("")
+        if multiple_aggs:
+            sections.append(f"### Aggregation: `{agg}`")
+            sections.append("")
 
-    if diagnostic == "threshold" and threshold_results:
-        sections.append("### Diagnostics")
-        sections.append("")
-        sections.append("#### Threshold Neighborhood (2-key, n_groups * n_keys near 200k)")
-        sections.append("")
-        sections.append(render_threshold_table(threshold_results))
-        sections.append("")
+        if cardinality in ["all", "standard"] and standard_results:
+            heading = "### Standard Cardinality (5M rows)" if not multiple_aggs else "#### Standard Cardinality (5M rows)"
+            sections.append(heading)
+            sections.append("")
+            sections.append(render_standard_table(standard_results))
+            sections.append("")
+
+        if cardinality in ["all", "high"] and high_results:
+            heading = (
+                "### High Cardinality (5M rows, ~5M unique groups)"
+                if not multiple_aggs
+                else "#### High Cardinality (5M rows, ~5M unique groups)"
+            )
+            sections.append(heading)
+            sections.append("")
+            sections.append(render_high_table(high_results))
+            sections.append("")
+
+        if diagnostic == "threshold" and threshold_results:
+            diag_heading = "### Diagnostics" if not multiple_aggs else "#### Diagnostics"
+            threshold_heading = (
+                "#### Threshold Neighborhood (2-key, n_groups * n_keys near 200k)"
+                if not multiple_aggs
+                else "##### Threshold Neighborhood (2-key, n_groups * n_keys near 200k)"
+            )
+            sections.append(diag_heading)
+            sections.append("")
+            sections.append(threshold_heading)
+            sections.append("")
+            sections.append(render_threshold_table(threshold_results))
+            sections.append("")
 
     return "\n".join(sections)
 
@@ -858,6 +1184,7 @@ def run_benchmarks(
     diagnostic: str,
     sort_mode: str,
     n_samples: int = 5,
+    aggs: list[str] | None = None,
 ) -> list[dict]:
     """Run benchmark suite based on cardinality and sort-mode.
 
@@ -881,6 +1208,7 @@ def run_benchmarks(
         )
 
     presets = core_presets + diagnostic_presets
+    selected_aggs = resolve_core_aggs(aggs)
 
     cardinality_label = cardinality.capitalize()
     if cardinality == "all":
@@ -892,6 +1220,7 @@ def run_benchmarks(
     print("=" * 90)
     print(f"Diagnostics: {diagnostics_label}")
     print(f"Samples per benchmark: {n_samples} (fresh processes for both cold and warm)")
+    print(f"Aggregations: {', '.join(selected_aggs)}")
     print()
 
     results = []
@@ -901,37 +1230,42 @@ def run_benchmarks(
         print(f"\n--- Running {sort_str} Benchmarks ---")
 
         for preset in presets:
-            print(f"\n[{preset}] Running {sort_str} cold/warm benchmark...")
+            for agg in selected_aggs:
+                print(f"\n[{preset}] Running {sort_str} cold/warm benchmark for agg={agg}...")
 
-            result = benchmark_single(
-                preset,
-                agg="sum",
-                sort=sort_val,
-                n_samples=n_samples,
-                verify_correctness=True,
-            )
-            results.append(result)
+                result = benchmark_single(
+                    preset,
+                    agg=agg,
+                    sort=sort_val,
+                    n_samples=n_samples,
+                    verify_correctness=True,
+                )
+                results.append(result)
 
-            backends = result["backends"]
-            print(f"  Groups: {result['combo_cardinality']:,}")
+                backends = result["backends"]
+                print(f"  Groups: {result['combo_cardinality']:,}")
 
-            for backend_name in BACKEND_DISPLAY_ORDER:
-                if backend_name not in backends:
-                    continue
-                backend_data = backends[backend_name]
-                cold_stats = backend_data.get("cold_stats")
-                warm_stats = backend_data.get("warm_stats")
-                cold_str = "n/a" if cold_stats is None else cold_stats.format_ms(2)
-                warm_str = "n/a" if warm_stats is None else warm_stats.format_ms(2)
+                for backend_name in BACKEND_DISPLAY_ORDER:
+                    if backend_name not in backends:
+                        continue
+                    backend_data = backends[backend_name]
+                    cold_stats = backend_data.get("cold_stats")
+                    warm_stats = backend_data.get("warm_stats")
+                    cold_str = "n/a" if cold_stats is None else cold_stats.format_ms(2)
+                    warm_str = "n/a" if warm_stats is None else warm_stats.format_ms(2)
 
-                correctness_str = ""
-                if backend_name != "pandas":
-                    cold_corr = backend_data.get("cold_correctness", "not_checked")
-                    warm_corr = backend_data.get("warm_correctness", "not_checked")
-                    if cold_corr != "not_checked" or warm_corr != "not_checked":
-                        correctness_str = f" | Correctness: cold={cold_corr}, warm={warm_corr}"
+                    correctness_str = ""
+                    if backend_name != "pandas":
+                        cold_corr = backend_data.get("cold_correctness", "not_checked")
+                        warm_corr = backend_data.get("warm_correctness", "not_checked")
+                        if cold_corr != "not_checked" or warm_corr != "not_checked":
+                            correctness_str = (
+                                f" | Correctness: cold={cold_corr}, warm={warm_corr}"
+                            )
 
-                print(f"  {backend_name:8s} | Cold: {cold_str} | Warm: {warm_str}{correctness_str}")
+                    print(
+                        f"  {backend_name:8s} | Cold: {cold_str} | Warm: {warm_str}{correctness_str}"
+                    )
 
     print("\n" + "=" * 90)
     print("Performance Tables")
@@ -948,6 +1282,8 @@ def save_results_md(
     sort_mode: str,
     cardinality: str,
     diagnostic: str,
+    n_samples: int,
+    selected_aggs: list[str] | None = None,
 ) -> None:
     """Save benchmark results to Markdown file.
 
@@ -968,6 +1304,8 @@ def save_results_md(
     path.parent.mkdir(parents=True, exist_ok=True)
 
     performance_section = format_performance_section(results, sort_mode, cardinality, diagnostic)
+    stats_evidence = collect_stats_evidence(n_samples, selected_aggs)
+    stats_evidence_section = render_stats_evidence_section(stats_evidence)
 
     def correctness_section() -> str:
         lines: list[str] = []
@@ -1019,6 +1357,9 @@ def save_results_md(
         f.write("\n")
         f.write(correctness_section())
         f.write("\n")
+        f.write("\n")
+        f.write(stats_evidence_section)
+        f.write("\n")
 
     print(f"\nResults saved to: {path}")
 
@@ -1034,6 +1375,8 @@ Examples:
   python benches/benchmark.py --cardinality all                  # Run core benchmarks only (standard + high)
   python benches/benchmark.py --cardinality standard             # Standard only
   python benches/benchmark.py --cardinality high                 # High only
+  python benches/benchmark.py --agg std --agg var                # Run only std/var benchmarks
+  python benches/benchmark.py --agg min --agg max               # Run only min/max benchmarks
   python benches/benchmark.py --diagnostic threshold --sort-mode unsorted  # Add threshold diagnostics
   python benches/benchmark.py --cardinality all --diagnostic threshold --sort-mode unsorted  # Core + diagnostics
   python benches/benchmark.py --sort-mode sorted                 # Sorted only
@@ -1069,6 +1412,16 @@ Environment:
         type=int,
         default=5,
         help="Number of samples per benchmark (applies to both cold and warm, default: 5)",
+    )
+    parser.add_argument(
+        "--agg",
+        dest="aggs",
+        action="append",
+        choices=SUPPORTED_AGGS,
+        help=(
+            "Aggregation function to benchmark. Repeatable. "
+            "Defaults to current behavior: core=sum, evidence=std/var."
+        ),
     )
     parser.add_argument(
         "--output",
@@ -1125,6 +1478,7 @@ Environment:
         diagnostic=args.diagnostic,
         sort_mode=args.sort_mode,
         n_samples=args.samples,
+        aggs=args.aggs,
     )
 
     if args.output:
@@ -1134,6 +1488,8 @@ Environment:
             args.sort_mode,
             args.cardinality,
             args.diagnostic,
+            args.samples,
+            args.aggs,
         )
 
     print("\n" + "=" * 90)

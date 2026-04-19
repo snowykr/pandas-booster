@@ -266,6 +266,9 @@ maturin develop --release
 # Run default benchmarks (standard + high)
 python benches/benchmark.py --samples 20 --output results.md
 
+# Run only selected aggregation functions
+python benches/benchmark.py --agg std --agg var --samples 20 --output results.md
+
 # Include threshold diagnostics as well
 python benches/benchmark.py --cardinality all --diagnostic threshold --sort-mode unsorted --samples 20 --output results.md
 ```
@@ -362,6 +365,10 @@ python benches/benchmark.py --cardinality standard
 # Run only high cardinality benchmarks
 python benches/benchmark.py --cardinality high
 
+# Run only selected aggregation functions
+python benches/benchmark.py --agg std --agg var
+python benches/benchmark.py --agg min --agg max --cardinality high --sort-mode sorted
+
 # Add threshold-neighborhood diagnostics (opt-in)
 python benches/benchmark.py --diagnostic threshold --sort-mode unsorted
 
@@ -378,6 +385,10 @@ python benches/benchmark.py --output results.md
 # Adjust sample count (applies to both cold and warm; default: 5)
 python benches/benchmark.py --samples 20
 ```
+
+Note: `--agg` is repeatable and filters the benchmark to only the selected aggregation functions.
+If omitted, the current default behavior is preserved: the core performance tables benchmark `sum`,
+while the extra single-key evidence section benchmarks `std` and `var`.
 
 Note: `--cardinality` is for workload classes (`standard`, `high`, `all`), while
 `--diagnostic` is for internal boundary checks (`none`, `threshold`).

@@ -113,6 +113,10 @@ res = {
     "sum_firstseen": series_fingerprint(df.booster.groupby("k", "v", "sum", sort=False)),
     "mean_sorted": series_fingerprint(df.booster.groupby("k", "v", "mean", sort=True)),
     "mean_firstseen": series_fingerprint(df.booster.groupby("k", "v", "mean", sort=False)),
+    "std_sorted": series_fingerprint(df.booster.groupby("k", "v", "std", sort=True)),
+    "std_firstseen": series_fingerprint(df.booster.groupby("k", "v", "std", sort=False)),
+    "var_sorted": series_fingerprint(df.booster.groupby("k", "v", "var", sort=True)),
+    "var_firstseen": series_fingerprint(df.booster.groupby("k", "v", "var", sort=False)),
 }
 
 print(json.dumps(res, sort_keys=True))
@@ -215,7 +219,16 @@ def test_multi_key_template_uses_threshold_relative_row_count() -> None:
 def test_single_key_template_uses_threshold_relative_row_count() -> None:
     payload = json.loads(_run_single_key_once(1, 1))
 
-    assert set(payload) == {"sum_sorted", "sum_firstseen", "mean_sorted", "mean_firstseen"}
+    assert set(payload) == {
+        "sum_sorted",
+        "sum_firstseen",
+        "mean_sorted",
+        "mean_firstseen",
+        "std_sorted",
+        "std_firstseen",
+        "var_sorted",
+        "var_firstseen",
+    }
     assert all(isinstance(value, str) and value for value in payload.values())
 
 
@@ -228,7 +241,7 @@ def test_sort_false_fingerprint_deterministic_across_threads_and_repeats() -> No
         assert _run_multi_key_once(8, FAST_MULTI_ROWS) == baseline
 
 
-def test_single_key_float_sum_mean_bitwise_deterministic_across_threads() -> None:
+def test_single_key_float_sum_mean_std_var_bitwise_deterministic_across_threads() -> None:
     baseline = _run_single_key_once(1, FAST_SINGLE_ROWS)
 
     assert _run_single_key_once(1, FAST_SINGLE_ROWS) == baseline
@@ -248,7 +261,7 @@ def test_sort_false_fingerprint_deterministic_stress_across_threads_and_repeats(
 
 
 @pytest.mark.stress
-def test_single_key_float_sum_mean_bitwise_deterministic_stress_across_threads() -> None:
+def test_single_key_float_sum_mean_std_var_bitwise_deterministic_stress_across_threads() -> None:
     baseline = _run_single_key_once(1, STRESS_SINGLE_ROWS)
 
     assert _run_single_key_once(1, STRESS_SINGLE_ROWS) == baseline

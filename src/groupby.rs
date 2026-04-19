@@ -25,7 +25,7 @@ const DETERMINISTIC_MAX_CHUNKS: usize = 2048;
 
 use crate::aggregation::{
     Aggregator, CountAggF64, CountAggI64, MaxAggF64, MaxAggI64, MeanAggF64, MeanAggI64, MinAggF64,
-    MinAggI64, SumAggF64, SumAggI64,
+    MinAggI64, StdAggF64, StdAggI64, SumAggF64, SumAggI64, VarAggF64, VarAggI64,
 };
 
 /// Result container for groupby operations, holding key-value pairs.
@@ -671,6 +671,54 @@ pub fn parallel_groupby_mean_f64_firstseen_u64(
     parallel_groupby_firstseen_u64_deterministic::<f64, MeanAggF64, f64>(keys, values)
 }
 
+pub fn parallel_groupby_var_f64(keys: &[i64], values: &[f64]) -> PyResult<GroupByResultF64> {
+    parallel_groupby_deterministic::<f64, VarAggF64, f64>(keys, values)
+}
+
+pub fn parallel_groupby_var_f64_sorted(keys: &[i64], values: &[f64]) -> PyResult<GroupByResultF64> {
+    let mut result = parallel_groupby_var_f64(keys, values)?;
+    reorder_single_result_by_key(&mut result);
+    Ok(result)
+}
+
+pub fn parallel_groupby_var_f64_firstseen_u32(
+    keys: &[i64],
+    values: &[f64],
+) -> PyResult<GroupByResultF64> {
+    parallel_groupby_firstseen_u32_deterministic::<f64, VarAggF64, f64>(keys, values)
+}
+
+pub fn parallel_groupby_var_f64_firstseen_u64(
+    keys: &[i64],
+    values: &[f64],
+) -> PyResult<GroupByResultF64> {
+    parallel_groupby_firstseen_u64_deterministic::<f64, VarAggF64, f64>(keys, values)
+}
+
+pub fn parallel_groupby_std_f64(keys: &[i64], values: &[f64]) -> PyResult<GroupByResultF64> {
+    parallel_groupby_deterministic::<f64, StdAggF64, f64>(keys, values)
+}
+
+pub fn parallel_groupby_std_f64_sorted(keys: &[i64], values: &[f64]) -> PyResult<GroupByResultF64> {
+    let mut result = parallel_groupby_std_f64(keys, values)?;
+    reorder_single_result_by_key(&mut result);
+    Ok(result)
+}
+
+pub fn parallel_groupby_std_f64_firstseen_u32(
+    keys: &[i64],
+    values: &[f64],
+) -> PyResult<GroupByResultF64> {
+    parallel_groupby_firstseen_u32_deterministic::<f64, StdAggF64, f64>(keys, values)
+}
+
+pub fn parallel_groupby_std_f64_firstseen_u64(
+    keys: &[i64],
+    values: &[f64],
+) -> PyResult<GroupByResultF64> {
+    parallel_groupby_firstseen_u64_deterministic::<f64, StdAggF64, f64>(keys, values)
+}
+
 pub fn parallel_groupby_min_f64(keys: &[i64], values: &[f64]) -> PyResult<GroupByResultF64> {
     parallel_groupby::<f64, MinAggF64, f64>(keys, values)
 }
@@ -768,6 +816,54 @@ pub fn parallel_groupby_mean_i64_firstseen_u64(
     values: &[i64],
 ) -> PyResult<GroupByResultF64> {
     parallel_groupby_firstseen_u64::<i64, MeanAggI64, f64>(keys, values)
+}
+
+pub fn parallel_groupby_var_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultF64> {
+    parallel_groupby_deterministic::<i64, VarAggI64, f64>(keys, values)
+}
+
+pub fn parallel_groupby_var_i64_sorted(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultF64> {
+    let mut result = parallel_groupby_var_i64(keys, values)?;
+    reorder_single_result_by_key(&mut result);
+    Ok(result)
+}
+
+pub fn parallel_groupby_var_i64_firstseen_u32(
+    keys: &[i64],
+    values: &[i64],
+) -> PyResult<GroupByResultF64> {
+    parallel_groupby_firstseen_u32_deterministic::<i64, VarAggI64, f64>(keys, values)
+}
+
+pub fn parallel_groupby_var_i64_firstseen_u64(
+    keys: &[i64],
+    values: &[i64],
+) -> PyResult<GroupByResultF64> {
+    parallel_groupby_firstseen_u64_deterministic::<i64, VarAggI64, f64>(keys, values)
+}
+
+pub fn parallel_groupby_std_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultF64> {
+    parallel_groupby_deterministic::<i64, StdAggI64, f64>(keys, values)
+}
+
+pub fn parallel_groupby_std_i64_sorted(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultF64> {
+    let mut result = parallel_groupby_std_i64(keys, values)?;
+    reorder_single_result_by_key(&mut result);
+    Ok(result)
+}
+
+pub fn parallel_groupby_std_i64_firstseen_u32(
+    keys: &[i64],
+    values: &[i64],
+) -> PyResult<GroupByResultF64> {
+    parallel_groupby_firstseen_u32_deterministic::<i64, StdAggI64, f64>(keys, values)
+}
+
+pub fn parallel_groupby_std_i64_firstseen_u64(
+    keys: &[i64],
+    values: &[i64],
+) -> PyResult<GroupByResultF64> {
+    parallel_groupby_firstseen_u64_deterministic::<i64, StdAggI64, f64>(keys, values)
 }
 
 pub fn parallel_groupby_min_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultI64> {

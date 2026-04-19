@@ -1,12 +1,26 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Hashable
+from collections.abc import Callable, Hashable, Sequence
 from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 
-AggFunc = Literal["sum", "mean", "min", "max", "count"]
+from ._abi_compat import raise_abi_skew
+
+AggFunc = Literal["sum", "mean", "min", "max", "count", "std", "var"]
+
+
+class GroupByCompatibility(tuple[bool, bool]):
+    __slots__ = ()
+
+    @property
+    def supported(self) -> bool:
+        return self[0]
+
+    @property
+    def force_pandas(self) -> bool:
+        return self[1]
 
 
 def select_rust_groupby_func(
@@ -16,24 +30,38 @@ def select_rust_groupby_func(
     sort: bool,
     n_rows: int,
     force_pandas_sort: bool,
+    context: str | None = None,
 ) -> tuple[Callable[..., Any], bool]:
     """Resolve the Rust kernel for a groupby call.
 
     Returns (callable, needs_python_sort).
     """
+    def _lookup(symbol: str) -> Callable[..., Any]:
+        try:
+            return getattr(rust, symbol)
+        except AttributeError:
+            if context is None:
+                raise
+            raise_abi_skew(
+                context=context,
+                detail=(
+                    f"missing Rust kernel symbol {symbol!r} while resolving {func_base!r}."
+                ),
+            )
+
     if not sort:
         suffix = firstseen_suffix(sort=False, n_rows=n_rows)
-        return getattr(rust, f"{func_base}{suffix}"), False
+        return _lookup(f"{func_base}{suffix}"), False
 
     if force_pandas_sort:
-        return getattr(rust, func_base), True
+        return _lookup(func_base), True
 
     try:
         return getattr(rust, f"{func_base}_sorted"), False
     except AttributeError:
         # Python/Rust wheel mismatch (or older extension): fall back to the
         # legacy path and let Python sort_index() handle ordering.
-        return getattr(rust, func_base), True
+        return _lookup(func_base), True
 
 
 def firstseen_suffix(*, sort: bool, n_rows: int) -> str:
@@ -75,6 +103,58 @@ def capture_key_numpy_dtype(key_col: pd.Series) -> np.dtype:
 def capture_value_numpy_dtype(value_col: pd.Series) -> np.dtype:
     arr = np.asarray(value_col.to_numpy(copy=False))
     return arr.dtype
+
+
+def has_nullable_na(series: pd.Series) -> bool:
+    if pd.api.types.is_extension_array_dtype(series):
+        return bool(series.isna().any())
+    return False
+
+
+def is_supported_value_dtype(value_col: pd.Series, *, agg: AggFunc) -> bool:
+    if pd.api.types.is_extension_array_dtype(value_col):
+        return False
+    if has_nullable_na(value_col):
+        return False
+    if pd.api.types.is_bool_dtype(value_col):
+        return False
+    if not (pd.api.types.is_integer_dtype(value_col) or pd.api.types.is_float_dtype(value_col)):
+        return False
+
+    value_dtype = capture_value_numpy_dtype(value_col)
+    if agg in {"std", "var"} and value_dtype.kind == "u":
+        return False
+
+    return True
+
+
+def classify_groupby_compatibility(
+    *,
+    key_cols: Sequence[pd.Series],
+    val_col: pd.Series,
+    agg: AggFunc,
+    force_pandas_float_groupby: bool,
+) -> GroupByCompatibility:
+    for key_col in key_cols:
+        if not pd.api.types.is_integer_dtype(key_col):
+            return GroupByCompatibility((False, False))
+        if should_fallback_for_key_dtype(key_col):
+            return GroupByCompatibility((False, False))
+        if has_nullable_na(key_col):
+            return GroupByCompatibility((False, False))
+
+    if not is_supported_value_dtype(val_col, agg=agg):
+        return GroupByCompatibility((False, False))
+
+    if (
+        len(key_cols) == 1
+        and agg in {"std", "var"}
+        and pd.api.types.is_float_dtype(val_col)
+        and force_pandas_float_groupby
+    ):
+        return GroupByCompatibility((True, True))
+
+    return GroupByCompatibility((True, False))
 
 
 def to_i64_contiguous(arr: np.ndarray) -> np.ndarray:
