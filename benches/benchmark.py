@@ -80,6 +80,165 @@ SUPPORTED_AGGS: tuple[str, ...] = ("sum", "mean", "std", "var", "min", "max", "c
 CORE_BENCHMARK_AGG = "sum"
 STATS_EVIDENCE_AGGS: tuple[str, str] = ("std", "var")
 STATS_EVIDENCE_SORTS: tuple[bool, bool] = (True, False)
+STATS_EVIDENCE_PRESETS: dict[str, str] = {
+    "standard": "1key",
+    "high": "high_cardinality_1key",
+}
+
+
+def stats_evidence_workload_label(preset_name: str) -> str:
+    if preset_name == STATS_EVIDENCE_PRESETS["standard"]:
+        return "standard"
+    if preset_name == STATS_EVIDENCE_PRESETS["high"]:
+        return "high"
+    return preset_name
+
+
+def serialize_stats(stats: BenchmarkStats) -> dict[str, Any]:
+    return stats.to_dict()
+
+
+def serialize_phase_stats(phases: dict[str, BenchmarkStats]) -> dict[str, dict[str, Any]]:
+    return {name: serialize_stats(stats) for name, stats in phases.items()}
+
+
+def stats_mean_map(phases: dict[str, BenchmarkStats]) -> dict[str, float]:
+    return {name: stats.mean for name, stats in phases.items()}
+
+
+def summarize_profile_cases(cases: list[dict[str, Any]]) -> dict[str, Any] | None:
+    profiled_cases = [case for case in cases if case["breakdown"] is not None]
+    if not profiled_cases:
+        return None
+
+    phase_names = list(profiled_cases[0]["breakdown"]["phases"].keys())
+    phase_means = {
+        phase_name: sum(
+            case["breakdown"]["phases"][phase_name].mean for case in profiled_cases
+        )
+        / len(profiled_cases)
+        for phase_name in phase_names
+    }
+    first_breakdown = profiled_cases[0]["breakdown"]
+
+    return {
+        "preset": profiled_cases[0]["preset"],
+        "workload": profiled_cases[0]["workload"],
+        "sort": profiled_cases[0]["sort"],
+        "aggs": [case["agg"] for case in profiled_cases],
+        "phases": phase_means,
+        "rust_total_s": sum(case["breakdown"]["rust_total_s"] for case in profiled_cases)
+        / len(profiled_cases),
+        "python_total_s": sum(case["breakdown"]["python_total_s"] for case in profiled_cases)
+        / len(profiled_cases),
+        "total_pipeline_s": sum(
+            case["breakdown"]["total_pipeline_s"] for case in profiled_cases
+        )
+        / len(profiled_cases),
+        "partial_group_total": first_breakdown["partial_group_total"],
+        "final_group_count": first_breakdown["final_group_count"],
+        "partial_to_final_ratio": first_breakdown["partial_to_final_ratio"],
+        "per_agg": {
+            case["agg"]: {
+                "execution": case["breakdown"]["execution"],
+                "phases": stats_mean_map(case["breakdown"]["phases"]),
+                "rust_total_s": case["breakdown"]["rust_total_s"],
+                "python_total_s": case["breakdown"]["python_total_s"],
+                "total_pipeline_s": case["breakdown"]["total_pipeline_s"],
+                "partial_group_total": case["breakdown"]["partial_group_total"],
+                "final_group_count": case["breakdown"]["final_group_count"],
+                "partial_to_final_ratio": case["breakdown"]["partial_to_final_ratio"],
+            }
+            for case in profiled_cases
+        },
+    }
+
+
+def build_profile_json_payload(
+    evidence: list[dict[str, Any]],
+    *,
+    cardinality: str,
+    sort_mode: str,
+    n_samples: int,
+    selected_aggs: list[str] | None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "metadata": {
+            "cardinality": cardinality,
+            "sort_mode": sort_mode,
+            "samples": n_samples,
+            "selected_aggs": resolve_stats_evidence_aggs(selected_aggs),
+        },
+        "cases": [],
+    }
+
+    grouped: dict[tuple[str, bool], list[dict[str, Any]]] = {}
+    for item in evidence:
+        grouped.setdefault((item["workload"], item["sort"]), []).append(item)
+        breakdown = item["breakdown"]
+        payload["cases"].append(
+            {
+                "preset": item["preset"],
+                "workload": item["workload"],
+                "agg": item["agg"],
+                "sort": item["sort"],
+                "execution": item["execution"],
+                "result": {
+                    "preset": item["result"]["preset"],
+                    "n_rows": item["result"]["n_rows"],
+                    "n_keys": item["result"]["n_keys"],
+                    "key_cols": item["result"]["key_cols"],
+                    "combo_cardinality": item["result"]["combo_cardinality"],
+                    "group_ratio": item["result"]["group_ratio"],
+                    "agg": item["result"]["agg"],
+                    "sort": item["result"]["sort"],
+                    "backends": {
+                        backend_name: {
+                            "cold_stats": serialize_stats(backend_data["cold_stats"]),
+                            "warm_stats": serialize_stats(backend_data["warm_stats"]),
+                            "cold_correctness": backend_data["cold_correctness"],
+                            "warm_correctness": backend_data["warm_correctness"],
+                        }
+                        for backend_name, backend_data in item["result"]["backends"].items()
+                    },
+                },
+                "breakdown": None
+                if breakdown is None
+                else {
+                    "execution": breakdown["execution"],
+                    "phases": serialize_phase_stats(breakdown["phases"]),
+                    "phase_means": stats_mean_map(breakdown["phases"]),
+                    "rust_total_s": breakdown["rust_total_s"],
+                    "python_total_s": breakdown["python_total_s"],
+                    "total_pipeline_s": breakdown["total_pipeline_s"],
+                    "partial_group_total": breakdown["partial_group_total"],
+                    "final_group_count": breakdown["final_group_count"],
+                    "partial_to_final_ratio": breakdown["partial_to_final_ratio"],
+                },
+            }
+        )
+
+    for workload in ("standard", "high"):
+        for sort in (False, True):
+            cases = grouped.get((workload, sort), [])
+            if not cases:
+                continue
+            suffix = "unsorted" if not sort else "sorted"
+            summary = summarize_profile_cases(cases)
+            if summary is not None:
+                payload[f"single_key_{suffix}_{workload}"] = summary
+
+    if "single_key_unsorted_high" in payload:
+        payload["single_key_unsorted"] = payload["single_key_unsorted_high"]
+    elif "single_key_unsorted_standard" in payload:
+        payload["single_key_unsorted"] = payload["single_key_unsorted_standard"]
+
+    if "single_key_sorted_high" in payload:
+        payload["single_key_sorted"] = payload["single_key_sorted_high"]
+    elif "single_key_sorted_standard" in payload:
+        payload["single_key_sorted"] = payload["single_key_sorted_standard"]
+
+    return payload
 
 
 def build_polars_agg_expr(value_col: str, agg: str) -> Any:
@@ -103,7 +262,31 @@ def describe_booster_execution(
     value_col: str,
     agg: str,
     sort: bool,
+    *,
+    ignore_force_pandas_sort: bool = False,
 ) -> str:
+    return cast(
+        str,
+        resolve_booster_benchmark_dispatch(
+            df,
+            key_cols,
+            value_col,
+            agg,
+            sort,
+            ignore_force_pandas_sort=ignore_force_pandas_sort,
+        )["execution"],
+    )
+
+
+def resolve_booster_benchmark_dispatch(
+    df: pd.DataFrame,
+    key_cols: list[str],
+    value_col: str,
+    agg: str,
+    sort: bool,
+    *,
+    ignore_force_pandas_sort: bool = False,
+) -> dict[str, Any]:
     import pandas_booster._rust as rust
     from pandas_booster import _groupby_accel as groupby_accel
     from pandas_booster._config import (
@@ -115,7 +298,11 @@ def describe_booster_execution(
     key_series = [cast(pd.Series, df[col]) for col in key_cols]
 
     if agg not in {"std", "var"} and len(df) < rust.get_fallback_threshold():
-        return f"booster->pandas.groupby.{agg}"
+        return {
+            "execution": f"booster->pandas.groupby.{agg}",
+            "rust_func": None,
+            "needs_python_sort": False,
+        }
 
     compatibility = groupby_accel.classify_groupby_compatibility(
         key_cols=key_series,
@@ -124,7 +311,23 @@ def describe_booster_execution(
         force_pandas_float_groupby=force_pandas_float_groupby_enabled(),
     )
     if not compatibility.supported or compatibility.force_pandas:
-        return f"booster->pandas.groupby.{agg}"
+        return {
+            "execution": f"booster->pandas.groupby.{agg}",
+            "rust_func": None,
+            "needs_python_sort": False,
+        }
+
+    if (
+        len(key_cols) == 1
+        and pd.api.types.is_float_dtype(val_col)
+        and agg in {"sum", "mean"}
+        and force_pandas_float_groupby_enabled()
+    ):
+        return {
+            "execution": f"booster->pandas.groupby.{agg}",
+            "rust_func": None,
+            "needs_python_sort": False,
+        }
 
     is_val_int = pd.api.types.is_integer_dtype(val_col)
     prefix = "groupby_multi" if len(key_cols) > 1 else "groupby"
@@ -134,12 +337,20 @@ def describe_booster_execution(
         f"{prefix}_{agg}_{suffix}",
         sort=sort,
         n_rows=len(df),
-        force_pandas_sort=bool(sort) and force_pandas_sort_enabled(),
+        force_pandas_sort=(
+            False
+            if ignore_force_pandas_sort
+            else bool(sort) and force_pandas_sort_enabled()
+        ),
     )
     execution = f"booster->rust.{rust_func.__name__}"
     if needs_python_sort and sort:
         execution += "+python_sort"
-    return execution
+    return {
+        "execution": execution,
+        "rust_func": rust_func,
+        "needs_python_sort": needs_python_sort,
+    }
 
 
 def measure_booster_single_key_breakdown(
@@ -147,11 +358,12 @@ def measure_booster_single_key_breakdown(
     agg: str,
     sort: bool,
     n_samples: int,
-) -> dict[str, Any]:
+    *,
+    ignore_force_pandas_sort: bool = False,
+) -> dict[str, Any] | None:
     import pandas_booster._abi_compat as abi_compat
     import pandas_booster._rust as rust
     from pandas_booster import _groupby_accel as groupby_accel
-    from pandas_booster._config import force_pandas_sort_enabled
 
     config = PRESETS[preset_name]
     df = generate_multi_key_dataset(**config)
@@ -164,22 +376,42 @@ def measure_booster_single_key_breakdown(
     key_dtype = groupby_accel.capture_key_numpy_dtype(key_col)
     value_dtype = groupby_accel.capture_value_numpy_dtype(val_col)
     is_val_int = pd.api.types.is_integer_dtype(val_col)
-    func_base = f"groupby_{agg}_{'i64' if is_val_int else 'f64'}"
-    rust_func, needs_python_sort = groupby_accel.select_rust_groupby_func(
-        rust,
-        func_base,
-        sort=sort,
-        n_rows=len(df),
-        force_pandas_sort=bool(sort) and force_pandas_sort_enabled(),
+    dispatch = resolve_booster_benchmark_dispatch(
+        df,
+        key_cols,
+        "value",
+        agg,
+        sort,
+        ignore_force_pandas_sort=ignore_force_pandas_sort,
     )
+    rust_func = dispatch["rust_func"]
+    if rust_func is None:
+        return None
+
+    needs_python_sort = bool(dispatch["needs_python_sort"])
+    if needs_python_sort and sort:
+        return None
+
+    profile_func_name = f"profile_{rust_func.__name__}"
+    profile_func = getattr(rust, profile_func_name, None)
+    if profile_func is None:
+        return None
 
     phase_samples: dict[str, list[float]] = {
         "prepare_inputs_s": [],
-        "rust_kernel_s": [],
-        "normalize_result_s": [],
-        "build_series_s": [],
+        "local_build_s": [],
+        "merge_s": [],
+        "reorder_s": [],
+        "materialize_s": [],
+        "python_normalize_s": [],
+        "python_series_build_s": [],
+        "rust_total_s": [],
+        "python_total_s": [],
         "total_pipeline_s": [],
     }
+    partial_group_total = 0
+    final_group_count = 0
+    partial_to_final_ratio = 0.0
 
     for _ in range(n_samples):
         total_start = time.perf_counter()
@@ -192,9 +424,15 @@ def measure_booster_single_key_breakdown(
             values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
         phase_samples["prepare_inputs_s"].append(time.perf_counter() - prepare_start)
 
-        kernel_start = time.perf_counter()
-        result_keys, result_values = rust_func(keys, values)
-        phase_samples["rust_kernel_s"].append(time.perf_counter() - kernel_start)
+        result_keys, result_values, profile = profile_func(keys, values)
+        phase_samples["local_build_s"].append(float(profile["local_build_s"]))
+        phase_samples["merge_s"].append(float(profile["merge_s"]))
+        phase_samples["reorder_s"].append(float(profile["reorder_s"]))
+        phase_samples["materialize_s"].append(float(profile["materialize_s"]))
+        phase_samples["rust_total_s"].append(float(profile["rust_total_s"]))
+        partial_group_total = int(profile["partial_group_total"])
+        final_group_count = int(profile["final_group_count"])
+        partial_to_final_ratio = float(profile["partial_to_final_ratio"])
 
         normalize_start = time.perf_counter()
         result_values_arr = abi_compat.normalize_result_values(
@@ -203,7 +441,8 @@ def measure_booster_single_key_breakdown(
             is_val_int=is_val_int,
             context="benchmark",
         )
-        phase_samples["normalize_result_s"].append(time.perf_counter() - normalize_start)
+        normalize_duration = time.perf_counter() - normalize_start
+        phase_samples["python_normalize_s"].append(normalize_duration)
 
         build_start = time.perf_counter()
         _ = groupby_accel.build_series_from_single_result(
@@ -218,21 +457,21 @@ def measure_booster_single_key_breakdown(
             sort=sort,
             needs_python_sort=needs_python_sort,
         )
-        phase_samples["build_series_s"].append(time.perf_counter() - build_start)
+        build_duration = time.perf_counter() - build_start
+        phase_samples["python_series_build_s"].append(build_duration)
+        phase_samples["python_total_s"].append(normalize_duration + build_duration)
         phase_samples["total_pipeline_s"].append(time.perf_counter() - total_start)
 
     stats = {name: compute_stats(samples) for name, samples in phase_samples.items()}
-    overhead_mean = (
-        stats["prepare_inputs_s"].mean
-        + stats["normalize_result_s"].mean
-        + stats["build_series_s"].mean
-    )
-    total_mean = stats["total_pipeline_s"].mean
     return {
-        "execution": f"booster->rust.{rust_func.__name__}"
-        + ("+python_sort" if needs_python_sort and sort else ""),
+        "execution": dispatch["execution"],
         "phases": stats,
-        "overhead_share": 0.0 if total_mean <= 0 else overhead_mean / total_mean,
+        "rust_total_s": stats["rust_total_s"].mean,
+        "python_total_s": stats["python_total_s"].mean,
+        "total_pipeline_s": stats["total_pipeline_s"].mean,
+        "partial_group_total": partial_group_total,
+        "final_group_count": final_group_count,
+        "partial_to_final_ratio": partial_to_final_ratio,
     }
 
 
@@ -262,46 +501,60 @@ def resolve_stats_evidence_aggs(selected_aggs: list[str] | None) -> list[str]:
 
 
 def collect_stats_evidence(
-    n_samples: int, selected_aggs: list[str] | None = None
+    n_samples: int,
+    cardinality: str,
+    sort_mode: str,
+    selected_aggs: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     evidence: list[dict[str, Any]] = []
-    preset_name = "1key"
-    config = PRESETS[preset_name]
-    key_cols = [col for col, _ in config["key_configs"]]
     evidence_aggs = resolve_stats_evidence_aggs(selected_aggs)
     if not evidence_aggs:
         return evidence
 
-    for agg in evidence_aggs:
-        for sort in STATS_EVIDENCE_SORTS:
-            result = benchmark_single(
-                preset_name,
-                agg=agg,
-                sort=sort,
-                n_samples=n_samples,
-                verify_correctness=True,
-            )
-            df = generate_multi_key_dataset(**config)
-            execution = {
-                "pandas": f"pandas.groupby.{agg}",
-                "booster": describe_booster_execution(df, key_cols, "value", agg, sort),
-            }
-            if HAS_POLARS:
-                execution["polars"] = f"polars.group_by.agg({agg})"
-            evidence.append(
-                {
-                    "agg": agg,
-                    "sort": sort,
-                    "result": result,
-                    "execution": execution,
-                    "breakdown": measure_booster_single_key_breakdown(
-                        preset_name,
-                        agg,
-                        sort,
-                        n_samples,
-                    ),
+    preset_names: list[str] = []
+    if cardinality in {"all", "standard"}:
+        preset_names.append(STATS_EVIDENCE_PRESETS["standard"])
+    if cardinality in {"all", "high"}:
+        preset_names.append(STATS_EVIDENCE_PRESETS["high"])
+
+    sorts = resolve_sorts(sort_mode)
+
+    for preset_name in preset_names:
+        config = PRESETS[preset_name]
+        key_cols = [col for col, _ in config["key_configs"]]
+        workload = stats_evidence_workload_label(preset_name)
+        for agg in evidence_aggs:
+            for sort in sorts:
+                result = benchmark_single(
+                    preset_name,
+                    agg=agg,
+                    sort=sort,
+                    n_samples=n_samples,
+                    verify_correctness=True,
+                )
+                df = generate_multi_key_dataset(**config)
+                execution = {
+                    "pandas": f"pandas.groupby.{agg}",
+                    "booster": describe_booster_execution(df, key_cols, "value", agg, sort),
                 }
-            )
+                if HAS_POLARS:
+                    execution["polars"] = f"polars.group_by.agg({agg})"
+                evidence.append(
+                    {
+                        "preset": preset_name,
+                        "workload": workload,
+                        "agg": agg,
+                        "sort": sort,
+                        "result": result,
+                        "execution": execution,
+                        "breakdown": measure_booster_single_key_breakdown(
+                            preset_name,
+                            agg,
+                            sort,
+                            n_samples,
+                        ),
+                    }
+                )
     return evidence
 
 
@@ -334,8 +587,8 @@ def render_stats_evidence_section(evidence: list[dict[str, Any]]) -> str:
         "even though the kernel itself remains parallel."
     )
     lines.append("")
-    lines.append("| Agg | Sort | Backend | Execution | Cold | Warm |")
-    lines.append("|-----|------|---------|-----------|------|------|")
+    lines.append("| Workload | Agg | Sort | Backend | Execution | Cold | Warm |")
+    lines.append("|----------|-----|------|---------|-----------|------|------|")
 
     for item in evidence:
         agg = item["agg"]
@@ -349,7 +602,7 @@ def render_stats_evidence_section(evidence: list[dict[str, Any]]) -> str:
             cold_stats: BenchmarkStats = backend_data["cold_stats"]
             warm_stats: BenchmarkStats = backend_data["warm_stats"]
             lines.append(
-                f"| `{agg}` | {sort} | {backend_name} | `{execution[backend_name]}` | "
+                f"| {item['workload']} | `{agg}` | {sort} | {backend_name} | `{execution[backend_name]}` | "
                 f"{cold_stats.format_ms(2)} | {warm_stats.format_ms(2)} |"
             )
 
@@ -358,25 +611,35 @@ def render_stats_evidence_section(evidence: list[dict[str, Any]]) -> str:
     lines.append("")
     lines.append(
         "The table below isolates the Rust-first Booster path for the same single-key datasets. "
-        "`prepare_inputs` covers NumPy extraction/contiguity work, `rust_kernel` is the direct PyO3 "
-        "call into the Rust aggregation kernel, and the remaining phases capture result normalization "
-        "plus pandas Series materialization."
+        "`local_build`, `merge`, `reorder`, and `materialize` come from the internal Rust profiling "
+        "hook, while the Python-side phases measure post-kernel normalization and final pandas Series assembly."
     )
     lines.append("")
     lines.append(
-        "| Agg | Sort | Execution | Prepare inputs | Rust kernel | Normalize result | Build Series | Total pipeline | Overhead share |"
+        "| Workload | Agg | Sort | Execution | Prepare inputs | Local build | Merge | Reorder | Materialize | Python normalize | Series build | Rust total | Total pipeline | Partial groups | Final groups | Partial/final |"
     )
     lines.append(
-        "|-----|------|-----------|----------------|-------------|------------------|--------------|----------------|----------------|"
+        "|----------|-----|------|-----------|----------------|-------------|-------|---------|-------------|------------------|--------------|------------|----------------|----------------|--------------|---------------|"
     )
+    has_breakdown_rows = False
     for item in evidence:
         breakdown = item["breakdown"]
+        if breakdown is None:
+            continue
+        has_breakdown_rows = True
         phases = breakdown["phases"]
         lines.append(
-            f"| `{item['agg']}` | {'True' if item['sort'] else 'False'} | `{breakdown['execution']}` | "
-            f"{phases['prepare_inputs_s'].format_ms(2)} | {phases['rust_kernel_s'].format_ms(2)} | "
-            f"{phases['normalize_result_s'].format_ms(2)} | {phases['build_series_s'].format_ms(2)} | "
-            f"{phases['total_pipeline_s'].format_ms(2)} | {breakdown['overhead_share']:.1%} |"
+            f"| {item['workload']} | `{item['agg']}` | {'True' if item['sort'] else 'False'} | `{breakdown['execution']}` | "
+            f"{phases['prepare_inputs_s'].format_ms(2)} | {phases['local_build_s'].format_ms(2)} | "
+            f"{phases['merge_s'].format_ms(2)} | {phases['reorder_s'].format_ms(2)} | "
+            f"{phases['materialize_s'].format_ms(2)} | {phases['python_normalize_s'].format_ms(2)} | "
+            f"{phases['python_series_build_s'].format_ms(2)} | {phases['rust_total_s'].format_ms(2)} | "
+            f"{phases['total_pipeline_s'].format_ms(2)} | {breakdown['partial_group_total']:,} | "
+            f"{breakdown['final_group_count']:,} | {breakdown['partial_to_final_ratio']:.3f} |"
+        )
+    if not has_breakdown_rows:
+        lines.append(
+            "No Rust-only Booster breakdown rows were available for the selected evidence cases."
         )
 
     lines.append("")
@@ -1278,12 +1541,11 @@ def run_benchmarks(
 
 def save_results_md(
     results: list[dict],
+    stats_evidence: list[dict[str, Any]],
     output_path: str,
     sort_mode: str,
     cardinality: str,
     diagnostic: str,
-    n_samples: int,
-    selected_aggs: list[str] | None = None,
 ) -> None:
     """Save benchmark results to Markdown file.
 
@@ -1304,7 +1566,6 @@ def save_results_md(
     path.parent.mkdir(parents=True, exist_ok=True)
 
     performance_section = format_performance_section(results, sort_mode, cardinality, diagnostic)
-    stats_evidence = collect_stats_evidence(n_samples, selected_aggs)
     stats_evidence_section = render_stats_evidence_section(stats_evidence)
 
     def correctness_section() -> str:
@@ -1362,6 +1623,33 @@ def save_results_md(
         f.write("\n")
 
     print(f"\nResults saved to: {path}")
+
+
+def save_profile_json(
+    evidence: list[dict[str, Any]],
+    output_path: str,
+    *,
+    cardinality: str,
+    sort_mode: str,
+    n_samples: int,
+    selected_aggs: list[str] | None,
+) -> None:
+    path = Path(output_path)
+    if not path.suffix:
+        path = path.with_suffix(".json")
+    elif path.suffix != ".json":
+        print(f"Warning: Output path should have .json extension, got {path.suffix}")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = build_profile_json_payload(
+        evidence,
+        cardinality=cardinality,
+        sort_mode=sort_mode,
+        n_samples=n_samples,
+        selected_aggs=selected_aggs,
+    )
+    path.write_text(json.dumps(payload, indent=2) + "\n")
+    print(f"Profile JSON saved to: {path}")
 
 
 def main():
@@ -1430,6 +1718,11 @@ Environment:
         help="Output file path for Markdown results (e.g., results.md)",
     )
     parser.add_argument(
+        "--profile-json",
+        type=str,
+        help="Internal-use profile JSON output path for single-key std/var evidence",
+    )
+    parser.add_argument(
         "--worker",
         type=str,
         help="Worker mode (internal use): JSON args for single benchmark run",
@@ -1481,15 +1774,33 @@ Environment:
         aggs=args.aggs,
     )
 
+    stats_evidence: list[dict[str, Any]] = []
+    if args.output or args.profile_json:
+        stats_evidence = collect_stats_evidence(
+            args.samples,
+            args.cardinality,
+            args.sort_mode,
+            args.aggs,
+        )
+
     if args.output:
         save_results_md(
             all_results,
+            stats_evidence,
             args.output,
             args.sort_mode,
             args.cardinality,
             args.diagnostic,
-            args.samples,
-            args.aggs,
+        )
+
+    if args.profile_json:
+        save_profile_json(
+            stats_evidence,
+            args.profile_json,
+            cardinality=args.cardinality,
+            sort_mode=args.sort_mode,
+            n_samples=args.samples,
+            selected_aggs=args.aggs,
         )
 
     print("\n" + "=" * 90)
