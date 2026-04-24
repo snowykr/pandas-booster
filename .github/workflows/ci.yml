@@ -94,7 +94,7 @@ jobs:
           python -c "import sys, os; open(os.environ['GITHUB_ENV'], 'a').write(f'PYO3_PYTHON={sys.executable}\n')"
 
       - name: Install build dependencies
-        run: pip install "maturin>=1.4,<2.0"
+        run: pip install "maturin>=1.13,<2.0"
 
       - name: Build wheel
         run: maturin build --release --out dist
@@ -165,7 +165,7 @@ jobs:
           python -c "import sys, os; open(os.environ['GITHUB_ENV'], 'a').write(f'PYO3_PYTHON={sys.executable}\n')"
 
       - name: Install build dependencies
-        run: pip install "maturin>=1.4,<2.0"
+        run: pip install "maturin>=1.13,<2.0"
 
       - name: Build wheel
         run: maturin build --release --out dist
@@ -211,7 +211,7 @@ jobs:
           python -c "import sys, os; open(os.environ['GITHUB_ENV'], 'a').write(f'PYO3_PYTHON={sys.executable}\n')"
 
       - name: Install build dependencies
-        run: pip install "maturin>=1.4,<2.0"
+        run: pip install "maturin>=1.13,<2.0"
 
       - name: Build wheel
         run: maturin build --release --out dist
@@ -248,7 +248,7 @@ jobs:
           python -c "import sys, os; open(os.environ['GITHUB_ENV'], 'a').write(f'PYO3_PYTHON={sys.executable}\n')"
 
       - name: Install build dependencies
-        run: pip install "maturin>=1.4,<2.0"
+        run: pip install "maturin>=1.13,<2.0"
 
       - name: Build wheel
         run: maturin build --release --out dist

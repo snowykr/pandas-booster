@@ -91,8 +91,8 @@ def validate_metadata(_: argparse.Namespace) -> int:
     classifiers = project.get("classifiers", [])
 
     build_requires = build_system.get("requires", [])
-    if "maturin>=1.4,<2.0" not in build_requires:
-        errors.append("pyproject.toml build-system.requires must include 'maturin>=1.4,<2.0'")
+    if "maturin>=1.13,<2.0" not in build_requires:
+        errors.append("pyproject.toml build-system.requires must include 'maturin>=1.13,<2.0'")
 
     if project.get("readme") != "README.md":
         errors.append("pyproject.toml project.readme must equal 'README.md'")

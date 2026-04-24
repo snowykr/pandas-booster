@@ -123,7 +123,7 @@ def test_validate_metadata_requires_release_readme_tokens(
     (tmp_path / "pyproject.toml").write_text(
         """
 [build-system]
-requires = [\"maturin>=1.4,<2.0\"]
+requires = [\"maturin>=1.13,<2.0\"]
 
 [project]
 name = \"pandas-booster\"
@@ -172,7 +172,7 @@ def test_validate_metadata_requires_release_readme_preconditions(
     (tmp_path / "pyproject.toml").write_text(
         """
 [build-system]
-requires = [\"maturin>=1.4,<2.0\"]
+requires = [\"maturin>=1.13,<2.0\"]
 
 [project]
 name = \"pandas-booster\"
@@ -236,7 +236,7 @@ def test_validate_metadata_requires_supported_python_classifier_set(
     (tmp_path / "pyproject.toml").write_text(
         """
 [build-system]
-requires = [\"maturin>=1.4,<2.0\"]
+requires = [\"maturin>=1.13,<2.0\"]
 
 [project]
 name = \"pandas-booster\"
