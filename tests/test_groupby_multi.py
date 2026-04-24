@@ -396,7 +396,11 @@ class TestMultiKeyGroupByStdVar:
         pandas_result = getattr(df.groupby(["k1", "k2"], sort=True)[target], agg)()
 
         assert booster_result.index.tolist() == pandas_result.index.tolist()
-        self._assert_std_var_series_equal(booster_result, pandas_result, expected_names=["k1", "k2"])
+        self._assert_std_var_series_equal(
+            booster_result,
+            pandas_result,
+            expected_names=["k1", "k2"],
+        )
 
     @pytest.mark.parametrize("agg", ["std", "var"])
     @pytest.mark.parametrize("target", ["val_float", "val_int"])
@@ -412,7 +416,11 @@ class TestMultiKeyGroupByStdVar:
 
         expected_order = [(4, 40), (1, 10), (3, 30), (2, 20)]
         assert booster_result.index.tolist() == pandas_result.index.tolist() == expected_order
-        self._assert_std_var_series_equal(booster_result, pandas_result, expected_names=["k1", "k2"])
+        self._assert_std_var_series_equal(
+            booster_result,
+            pandas_result,
+            expected_names=["k1", "k2"],
+        )
 
     @pytest.mark.parametrize("agg", ["std", "var"])
     @pytest.mark.parametrize("target", ["val_float", "val_int"])

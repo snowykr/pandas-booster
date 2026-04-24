@@ -34,7 +34,9 @@ class BoosterAccessor:
 
     Note: std and var use pandas-default semantics (ddof=1) and always return float64.
     Unlike legacy aggs, supported std and var are Rust-first by default regardless of
-    dataset size. The `PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY` environment toggle
+    dataset size. This provides significant speedups (up to 1.5x) for high-cardinality
+    workloads, though standard-cardinality single-key cases may remain slower than
+    pandas. The `PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY` environment toggle
     can be used to force a pandas fallback specifically for single-key float-input
     sum/mean/std/var operations; it does not broaden to multi-key or int-backed paths.
 

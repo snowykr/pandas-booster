@@ -516,7 +516,12 @@ def _patch_multi_std_var_kernel(
         return keys_cols, np.asarray(expected.to_numpy(), dtype=result_dtype)
 
     for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
-        monkeypatch.setattr(rust, f"groupby_multi_{agg}_{kernel}{suffix}", fake_groupby, raising=False)
+        monkeypatch.setattr(
+            rust,
+            f"groupby_multi_{agg}_{kernel}{suffix}",
+            fake_groupby,
+            raising=False,
+        )
 
 
 def _patch_all_std_var_kernels_to_raise(
@@ -561,7 +566,90 @@ def _patch_pandas_series_groupby_agg_to_raise(
     monkeypatch.setattr(SeriesGroupBy, agg, _boom, raising=True)
 
 
+def _patch_single_std_var_firstseen_only_kernel(
+    monkeypatch: pytest.MonkeyPatch,
+    rust: object,
+    expected: pd.Series,
+    agg: str,
+    *,
+    kernel: str,
+    result_dtype: np.dtype,
+    calls: list[str],
+) -> None:
+    def fake_groupby(_keys_arr, _values_arr):
+        calls.append("firstseen")
+        return (
+            np.asarray(expected.index.to_numpy(), dtype=np.int64),
+            np.asarray(expected.to_numpy(), dtype=result_dtype),
+        )
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError(f"sort=False {agg} should route through first-seen kernels")
+
+    monkeypatch.setattr(rust, f"groupby_{agg}_{kernel}", _boom, raising=False)
+    monkeypatch.setattr(rust, f"groupby_{agg}_{kernel}_sorted", _boom, raising=False)
+    monkeypatch.setattr(rust, f"groupby_{agg}_{kernel}_firstseen_u32", fake_groupby, raising=False)
+    monkeypatch.setattr(rust, f"groupby_{agg}_{kernel}_firstseen_u64", fake_groupby, raising=False)
+
+
 class TestStdVarContracts:
+    @pytest.mark.parametrize(
+        ("kernel", "values", "expected_order"),
+        [
+            (
+                "f64",
+                np.array([1.0, np.nan, 3.0, np.nan, 5.0, 11.0, 2.0, 2.0, np.nan]),
+                [5, 2, 4, 7, 8, 1],
+            ),
+            (
+                "i64",
+                np.array([2, 6, 4, 10, 14, 12], dtype=np.int64),
+                [8, 3, 5, 4],
+            ),
+        ],
+    )
+    @pytest.mark.parametrize("agg", ["std", "var"])
+    def test_single_key_unsorted_std_var_supported_calls_route_to_firstseen_kernels(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        agg: str,
+        kernel: str,
+        values: np.ndarray,
+        expected_order: list[int],
+    ):
+        import pandas_booster._rust as rust
+
+        monkeypatch.delenv("PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY", raising=False)
+
+        key_values = [8, 3, 8, 5, 3, 4] if kernel == "i64" else [5, 2, 5, 4, 2, 7, 8, 8, 1]
+        df = pd.DataFrame({"key": key_values, "val": values})
+        expected = getattr(df.groupby("key", sort=False)["val"], agg)()
+        calls: list[str] = []
+
+        _patch_single_std_var_firstseen_only_kernel(
+            monkeypatch,
+            rust,
+            expected,
+            agg,
+            kernel=kernel,
+            result_dtype=np.dtype(np.float64),
+            calls=calls,
+        )
+        _patch_pandas_series_groupby_agg_to_raise(
+            monkeypatch,
+            agg,
+            "supported single-key unsorted std/var should not fall back to pandas",
+        )
+
+        accessor_result = _accessor_groupby_result(df, "key", "val", agg, sort=False)
+        proxy_result = _proxy_groupby_result(df, "key", "val", agg, sort=False)
+
+        assert calls == ["firstseen", "firstseen"]
+        assert accessor_result.index.tolist() == expected_order
+        assert proxy_result.index.tolist() == expected_order
+        pd.testing.assert_series_equal(accessor_result, expected, check_exact=False, rtol=1e-12)
+        pd.testing.assert_series_equal(proxy_result, expected, check_exact=False, rtol=1e-12)
+
     @pytest.mark.parametrize("agg", ["std", "var"])
     def test_small_single_key_float_std_var_uses_rust_without_env_rollback(
         self, monkeypatch: pytest.MonkeyPatch, agg: str
@@ -584,7 +672,10 @@ class TestStdVarContracts:
         _patch_pandas_series_groupby_agg_to_raise(
             monkeypatch,
             agg,
-            "supported single-key float std/var should not fall back to pandas when rollback is off",
+            (
+                "supported single-key float std/var should not fall back to pandas "
+                "when rollback is off"
+            ),
         )
 
         accessor_result = _accessor_groupby_result(df, "key", "val", agg)
@@ -622,6 +713,128 @@ class TestStdVarContracts:
 
         pd.testing.assert_series_equal(accessor_result, expected, check_exact=False, rtol=1e-12)
         pd.testing.assert_series_equal(proxy_result, expected, check_exact=False, rtol=1e-12)
+
+    @pytest.mark.parametrize("agg", ["std", "var"])
+    def test_single_key_unsorted_float_std_var_env_rollback_forces_fallback(
+        self, monkeypatch: pytest.MonkeyPatch, agg: str
+    ):
+        import pandas_booster._rust as rust
+
+        monkeypatch.setenv("PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY", "1")
+
+        df = pd.DataFrame(
+            {
+                "key": [5, 2, 5, 4, 2, 7, 8, 8, 1],
+                "val": [1.0, np.nan, 3.0, np.nan, 5.0, 11.0, 2.0, 2.0, np.nan],
+            }
+        )
+        expected = getattr(df.groupby("key", sort=False)["val"], agg)()
+
+        _patch_all_std_var_kernels_to_raise(
+            monkeypatch,
+            rust,
+            (
+                "single-key unsorted float std/var should use pandas fallback "
+                "when rollback env is enabled"
+            ),
+        )
+
+        accessor_result = _accessor_groupby_result(df, "key", "val", agg, sort=False)
+        proxy_result = _proxy_groupby_result(df, "key", "val", agg, sort=False)
+
+        assert accessor_result.index.tolist() == [5, 2, 4, 7, 8, 1]
+        assert proxy_result.index.tolist() == [5, 2, 4, 7, 8, 1]
+        pd.testing.assert_series_equal(accessor_result, expected, check_exact=False, rtol=1e-12)
+        pd.testing.assert_series_equal(proxy_result, expected, check_exact=False, rtol=1e-12)
+
+    @pytest.mark.parametrize("agg", ["std", "var"])
+    def test_single_key_unsorted_float_std_var_preserves_first_seen_order_and_nan_semantics(
+        self, agg: str
+    ):
+        df = pd.DataFrame(
+            {
+                "key": [5, 2, 5, 4, 2, 7, 8, 8, 1],
+                "val": [1.0, np.nan, 3.0, np.nan, 5.0, 11.0, 2.0, 2.0, np.nan],
+            }
+        )
+
+        result = _accessor_groupby_result(df, "key", "val", agg, sort=False)
+        expected = getattr(df.groupby("key", sort=False)["val"], agg)()
+
+        assert result.index.tolist() == [5, 2, 4, 7, 8, 1]
+        assert result.dtype == np.dtype(np.float64)
+        assert result.loc[8] == 0.0
+        assert np.isnan(result.loc[2])
+        assert np.isnan(result.loc[4])
+        assert np.isnan(result.loc[7])
+        assert np.isnan(result.loc[1])
+        pd.testing.assert_series_equal(result, expected, check_exact=False, rtol=1e-12)
+
+    @pytest.mark.parametrize("agg", ["std", "var"])
+    def test_single_key_unsorted_int_backed_std_var_preserves_first_seen_order_and_float64_dtype(
+        self, agg: str
+    ):
+        df = pd.DataFrame(
+            {
+                "key": [8, 3, 8, 5, 3, 4],
+                "val": np.array([2, 6, 4, 10, 14, 12], dtype=np.int64),
+            }
+        )
+
+        result = _accessor_groupby_result(df, "key", "val", agg, sort=False)
+        expected = getattr(df.groupby("key", sort=False)["val"], agg)()
+
+        assert result.index.tolist() == [8, 3, 5, 4]
+        assert result.dtype == np.dtype(np.float64)
+        assert np.isnan(result.loc[5])
+        assert np.isnan(result.loc[4])
+        pd.testing.assert_series_equal(result, expected, check_exact=False, rtol=1e-12)
+
+    @pytest.mark.parametrize("agg", ["std", "var"])
+    def test_single_key_high_cardinality_partitioned_std_var_preserves_first_seen_order(
+        self, agg: str
+    ):
+        group_count = 10_000
+        expected_order = np.concatenate(
+            (
+                np.arange(5_000, group_count, dtype=np.int64),
+                np.arange(0, 5_000, dtype=np.int64),
+            )
+        )
+        keys = np.repeat(expected_order, 2)
+        base = np.arange(group_count, dtype=np.float64)
+        values = np.empty(group_count * 2, dtype=np.float64)
+        values[0::2] = base
+        values[1::2] = base + 0.5
+
+        df = pd.DataFrame({"key": keys, "val": values})
+
+        accessor_result = _accessor_groupby_result(df, "key", "val", agg, sort=False)
+        proxy_result = _proxy_groupby_result(df, "key", "val", agg, sort=False)
+        expected = getattr(df.groupby("key", sort=False)["val"], agg)()
+
+        assert accessor_result.index.tolist() == expected_order.tolist()
+        assert proxy_result.index.tolist() == expected_order.tolist()
+        pd.testing.assert_series_equal(accessor_result, expected, check_exact=False, rtol=1e-12)
+        pd.testing.assert_series_equal(proxy_result, expected, check_exact=False, rtol=1e-12)
+
+    @pytest.mark.parametrize("agg", ["std", "var"])
+    def test_multi_key_unsorted_std_var_preserves_existing_first_seen_order(
+        self, agg: str
+    ):
+        df = pd.DataFrame(
+            {
+                "k1": [2, 1, 2, 1, 2, 3, 1],
+                "k2": [9, 8, 9, 7, 8, 7, 8],
+                "val": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+            }
+        )
+
+        result = _accessor_groupby_result(df, ["k1", "k2"], "val", agg, sort=False)
+        expected = getattr(df.groupby(["k1", "k2"], sort=False)["val"], agg)()
+
+        assert result.index.tolist() == [(2, 9), (1, 8), (1, 7), (2, 8), (3, 7)]
+        pd.testing.assert_series_equal(result, expected, check_exact=False, rtol=1e-12)
 
     @pytest.mark.parametrize("agg", ["std", "var"])
     def test_float_env_rollback_scope_does_not_broaden_to_multi_key_std_var(
@@ -831,7 +1044,10 @@ class TestStdVarContracts:
         abi_warnings = [w for w in rec if issubclass(w.category, abi.PandasBoosterAbiSkewWarning)]
         abi_warnings = [w for w in abi_warnings if abi.ABI_SKEW_PREFIX in str(w.message)]
         assert len(abi_warnings) == 1
-        assert f"missing Rust kernel symbol 'groupby_multi_{agg}_f64'" in str(abi_warnings[0].message)
+        assert (
+            f"missing Rust kernel symbol 'groupby_multi_{agg}_f64'"
+            in str(abi_warnings[0].message)
+        )
 
     @pytest.mark.parametrize("agg", ["std", "var"])
     def test_missing_single_key_std_var_symbols_hard_fail_in_strict_abi(
@@ -856,7 +1072,8 @@ class TestStdVarContracts:
         monkeypatch.setattr(abi, "_WARNED_ABI_SKEW", False)
 
         with pytest.raises(
-            abi.PandasBoosterKeyShapeSkewError, match=f"missing Rust kernel symbol 'groupby_{agg}_f64'"
+            abi.PandasBoosterKeyShapeSkewError,
+            match=f"missing Rust kernel symbol 'groupby_{agg}_f64'",
         ):
             _ = _accessor_groupby_result(df, "key", "val", agg)
 
