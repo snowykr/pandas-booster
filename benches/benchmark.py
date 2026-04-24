@@ -648,7 +648,7 @@ def render_stats_evidence_section(evidence: list[dict[str, Any]]) -> str:
 
 def benchmark_worker(
     preset_name: str,
-    backend: Literal["pandas", "booster", "polars"],
+    backend: str,
     agg: Literal["sum", "mean", "std", "var", "min", "max", "count"] = "sum",
     sort: bool = True,
     verify_correctness: bool = False,
@@ -673,6 +673,9 @@ def benchmark_worker(
     Returns:
         Dictionary with cold_time_s OR warm_time_s.
     """
+    if backend not in BACKEND_DISPLAY_ORDER:
+        raise ValueError(f"Unsupported benchmark backend: {backend!r}")
+
     run_once: Callable[[], Any]
     execution = ""
 
@@ -741,6 +744,10 @@ def benchmark_worker(
             return result
 
         run_once = run_once_polars
+
+    else:
+        raise ValueError(f"Unsupported benchmark backend: {backend!r}")
+
     def pandas_baseline() -> pd.Series:
         # Note: we keep Pandas defaults (e.g., dropna=True) to match Pandas semantics.
         # Our benchmark datasets use integer keys without nulls.
@@ -771,8 +778,8 @@ def benchmark_worker(
         s.name = value_col
         return cast(pd.Series, s)
 
-    def normalize_result_to_series(result_obj: Any) -> pd.Series:
-        if backend in ("pandas", "booster"):
+    def normalize_result_to_series(result_obj: Any, backend_name: str = backend) -> pd.Series:
+        if backend_name in ("pandas", "booster"):
             if not isinstance(result_obj, pd.Series):
                 raise TypeError(f"Expected pandas Series, got {type(result_obj)}")
             s = cast(pd.Series, result_obj)
@@ -787,8 +794,10 @@ def benchmark_worker(
                 if list(s.index.names) != key_cols:
                     s.index.names = key_cols
             return s
-        if backend == "polars":
+        if backend_name == "polars":
             return polars_to_pandas_series(result_obj)
+
+        raise ValueError(f"Unsupported benchmark backend: {backend_name!r}")
 
     def assert_matches_baseline(actual: pd.Series, expected: pd.Series) -> None:
         # Ordering semantics:

@@ -2,18 +2,41 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
+from collections.abc import Generator
+from contextlib import contextmanager
 from pathlib import Path
+from types import ModuleType
+
+import pytest
 
 _BENCHMARK_PATH = Path(__file__).resolve().parent.parent / "benches" / "benchmark.py"
-_SPEC = importlib.util.spec_from_file_location("benchmark_under_test", _BENCHMARK_PATH)
-assert _SPEC is not None
-assert _SPEC.loader is not None
-benchmark = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(benchmark)
 
 
-def _make_result(*, preset: str, agg: str, sort: bool) -> dict:
-    stats = benchmark.BenchmarkStats(mean=0.1, std=0.01, min=0.09, max=0.11, samples=[0.1])
+@contextmanager
+def _loaded_benchmark_module() -> Generator[ModuleType, None, None]:
+    sys_path_snapshot = list(sys.path)
+    try:
+        spec = importlib.util.spec_from_file_location("benchmark_under_test", _BENCHMARK_PATH)
+        assert spec is not None
+        assert spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        yield module
+    finally:
+        sys.path[:] = sys_path_snapshot
+
+
+@pytest.fixture(scope="module")
+def benchmark_module():
+    with _loaded_benchmark_module() as module:
+        yield module
+
+
+def _make_result(benchmark_module, *, preset: str, agg: str, sort: bool) -> dict:
+    stats = benchmark_module.BenchmarkStats(
+        mean=0.1, std=0.01, min=0.09, max=0.11, samples=[0.1]
+    )
     return {
         "preset": preset,
         "n_rows": 1_000,
@@ -40,8 +63,10 @@ def _make_result(*, preset: str, agg: str, sort: bool) -> dict:
     }
 
 
-def _make_breakdown(*, execution: str = "booster->rust.groupby_std_f64_sorted") -> dict:
-    stats = benchmark.compute_stats([0.1])
+def _make_breakdown(
+    benchmark_module, *, execution: str = "booster->rust.groupby_std_f64_sorted"
+) -> dict:
+    stats = benchmark_module.compute_stats([0.1])
     return {
         "execution": execution,
         "phases": {
@@ -65,27 +90,51 @@ def _make_breakdown(*, execution: str = "booster->rust.groupby_std_f64_sorted") 
     }
 
 
-def test_resolve_core_aggs_preserves_default_behavior():
-    assert benchmark.resolve_core_aggs(None) == ["sum"]
+def test_loading_benchmark_module_restores_sys_path():
+    before = list(sys.path)
+    benchmark_dir = str(_BENCHMARK_PATH.parent)
+
+    with _loaded_benchmark_module():
+        assert sys.path[0] == benchmark_dir
+
+    assert sys.path == before
 
 
-def test_resolve_selected_aggs_dedupes_and_preserves_order():
-    assert benchmark.resolve_selected_aggs(["std", "var", "std"]) == ["std", "var"]
+def test_benchmark_worker_rejects_unknown_backend_before_dataset_generation(
+    benchmark_module,
+    monkeypatch,
+):
+    def fail_generate_dataset(**kwargs):
+        _ = kwargs
+        raise AssertionError("generate_multi_key_dataset should not run for invalid backend")
+
+    monkeypatch.setattr(benchmark_module, "generate_multi_key_dataset", fail_generate_dataset)
+
+    with pytest.raises(ValueError, match="Unsupported benchmark backend: 'unknown'"):
+        benchmark_module.benchmark_worker("1key", "unknown")
 
 
-def test_resolve_stats_evidence_aggs_filters_to_std_var_only():
-    assert benchmark.resolve_stats_evidence_aggs(None) == ["std", "var"]
-    assert benchmark.resolve_stats_evidence_aggs(["std", "min", "var"]) == ["std", "var"]
-    assert benchmark.resolve_stats_evidence_aggs(["sum", "min"]) == []
+def test_resolve_core_aggs_preserves_default_behavior(benchmark_module):
+    assert benchmark_module.resolve_core_aggs(None) == ["sum"]
 
 
-def test_format_performance_section_separates_multiple_aggs():
+def test_resolve_selected_aggs_dedupes_and_preserves_order(benchmark_module):
+    assert benchmark_module.resolve_selected_aggs(["std", "var", "std"]) == ["std", "var"]
+
+
+def test_resolve_stats_evidence_aggs_filters_to_std_var_only(benchmark_module):
+    assert benchmark_module.resolve_stats_evidence_aggs(None) == ["std", "var"]
+    assert benchmark_module.resolve_stats_evidence_aggs(["std", "min", "var"]) == ["std", "var"]
+    assert benchmark_module.resolve_stats_evidence_aggs(["sum", "min"]) == []
+
+
+def test_format_performance_section_separates_multiple_aggs(benchmark_module):
     results = [
-        _make_result(preset="1key", agg="sum", sort=True),
-        _make_result(preset="1key", agg="std", sort=True),
+        _make_result(benchmark_module, preset="1key", agg="sum", sort=True),
+        _make_result(benchmark_module, preset="1key", agg="std", sort=True),
     ]
 
-    rendered = benchmark.format_performance_section(
+    rendered = benchmark_module.format_performance_section(
         results,
         sort_mode="sorted",
         cardinality="standard",
@@ -97,25 +146,28 @@ def test_format_performance_section_separates_multiple_aggs():
     assert rendered.count("| Single-key |") == 2
 
 
-def test_render_stats_evidence_section_is_empty_when_no_selected_stats_aggs():
-    assert benchmark.render_stats_evidence_section([]) == ""
+def test_render_stats_evidence_section_is_empty_when_no_selected_stats_aggs(benchmark_module):
+    assert benchmark_module.render_stats_evidence_section([]) == ""
 
 
 def test_collect_stats_evidence_uses_actual_force_pandas_sort_setting(
+    benchmark_module,
     monkeypatch,
 ):
     captured_execution_flags: list[bool] = []
     captured_breakdown_flags: list[bool] = []
 
     monkeypatch.setattr(
-        benchmark,
+        benchmark_module,
         "benchmark_single",
-        lambda *args, **kwargs: _make_result(preset="1key", agg="std", sort=True),
+        lambda *args, **kwargs: _make_result(
+            benchmark_module, preset="1key", agg="std", sort=True
+        ),
     )
     monkeypatch.setattr(
-        benchmark,
+        benchmark_module,
         "generate_multi_key_dataset",
-        lambda **kwargs: benchmark.pd.DataFrame({"key": [1, 2], "value": [1.0, 2.0]}),
+        lambda **kwargs: benchmark_module.pd.DataFrame({"key": [1, 2], "value": [1.0, 2.0]}),
     )
 
     def fake_describe_booster_execution(
@@ -128,12 +180,16 @@ def test_collect_stats_evidence_uses_actual_force_pandas_sort_setting(
         _preset_name, _agg, _sort, _n_samples, *, ignore_force_pandas_sort=False
     ):
         captured_breakdown_flags.append(ignore_force_pandas_sort)
-        return _make_breakdown()
+        return _make_breakdown(benchmark_module)
 
-    monkeypatch.setattr(benchmark, "describe_booster_execution", fake_describe_booster_execution)
-    monkeypatch.setattr(benchmark, "measure_booster_single_key_breakdown", fake_measure_breakdown)
+    monkeypatch.setattr(
+        benchmark_module, "describe_booster_execution", fake_describe_booster_execution
+    )
+    monkeypatch.setattr(
+        benchmark_module, "measure_booster_single_key_breakdown", fake_measure_breakdown
+    )
 
-    evidence = benchmark.collect_stats_evidence(
+    evidence = benchmark_module.collect_stats_evidence(
         n_samples=1,
         cardinality="standard",
         sort_mode="sorted",
@@ -146,15 +202,16 @@ def test_collect_stats_evidence_uses_actual_force_pandas_sort_setting(
 
 
 def test_measure_booster_single_key_breakdown_returns_none_when_float_rollback_forces_pandas(
+    benchmark_module,
     monkeypatch,
 ):
     import pandas_booster._groupby_accel as groupby_accel
 
     monkeypatch.setenv("PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY", "1")
     monkeypatch.setattr(
-        benchmark,
+        benchmark_module,
         "generate_multi_key_dataset",
-        lambda **kwargs: benchmark.pd.DataFrame(
+        lambda **kwargs: benchmark_module.pd.DataFrame(
             {"key": [1, 2, 1, 2], "value": [1.0, 2.0, 3.0, 4.0]}
         ),
     )
@@ -167,10 +224,11 @@ def test_measure_booster_single_key_breakdown_returns_none_when_float_rollback_f
 
     monkeypatch.setattr(groupby_accel, "select_rust_groupby_func", fail_select)
 
-    assert benchmark.measure_booster_single_key_breakdown("1key", "std", True, 1) is None
+    assert benchmark_module.measure_booster_single_key_breakdown("1key", "std", True, 1) is None
 
 
 def test_describe_booster_execution_uses_pandas_label_for_large_single_float_sum_mean_rollback(
+    benchmark_module,
     monkeypatch,
 ):
     import pandas_booster._groupby_accel as groupby_accel
@@ -185,22 +243,24 @@ def test_describe_booster_execution_uses_pandas_label_for_large_single_float_sum
 
     monkeypatch.setattr(groupby_accel, "select_rust_groupby_func", fail_select)
 
-    df = benchmark.pd.DataFrame(
+    df = benchmark_module.pd.DataFrame(
         {
-            "key": benchmark.np.tile([1, 2], 50_001),
-            "value": benchmark.np.linspace(0.0, 1.0, 100_002, dtype=benchmark.np.float64),
+            "key": benchmark_module.np.tile([1, 2], 50_001),
+            "value": benchmark_module.np.linspace(
+                0.0, 1.0, 100_002, dtype=benchmark_module.np.float64
+            ),
         }
     )
 
-    assert benchmark.describe_booster_execution(df, ["key"], "value", "sum", True) == (
+    assert benchmark_module.describe_booster_execution(df, ["key"], "value", "sum", True) == (
         "booster->pandas.groupby.sum"
     )
-    assert benchmark.describe_booster_execution(df, ["key"], "value", "mean", False) == (
+    assert benchmark_module.describe_booster_execution(df, ["key"], "value", "mean", False) == (
         "booster->pandas.groupby.mean"
     )
 
 
-def test_build_profile_json_payload_handles_unavailable_breakdowns():
+def test_build_profile_json_payload_handles_unavailable_breakdowns(benchmark_module):
     profiled_case = {
         "preset": "1key",
         "workload": "standard",
@@ -210,8 +270,8 @@ def test_build_profile_json_payload_handles_unavailable_breakdowns():
             "pandas": "pandas.groupby.std",
             "booster": "booster->rust.groupby_std_f64_sorted",
         },
-        "result": _make_result(preset="1key", agg="std", sort=True),
-        "breakdown": _make_breakdown(),
+        "result": _make_result(benchmark_module, preset="1key", agg="std", sort=True),
+        "breakdown": _make_breakdown(benchmark_module),
     }
     fallback_case = {
         "preset": "1key",
@@ -219,11 +279,11 @@ def test_build_profile_json_payload_handles_unavailable_breakdowns():
         "agg": "var",
         "sort": True,
         "execution": {"pandas": "pandas.groupby.var", "booster": "booster->pandas.groupby.var"},
-        "result": _make_result(preset="1key", agg="var", sort=True),
+        "result": _make_result(benchmark_module, preset="1key", agg="var", sort=True),
         "breakdown": None,
     }
 
-    payload = benchmark.build_profile_json_payload(
+    payload = benchmark_module.build_profile_json_payload(
         [profiled_case, fallback_case],
         cardinality="standard",
         sort_mode="sorted",
@@ -236,6 +296,7 @@ def test_build_profile_json_payload_handles_unavailable_breakdowns():
 
 
 def test_save_profile_json_adds_json_suffix_and_creates_parent_dir(
+    benchmark_module,
     monkeypatch,
     tmp_path,
 ):
@@ -263,10 +324,12 @@ def test_save_profile_json_adds_json_suffix_and_creates_parent_dir(
         )
         return payload
 
-    monkeypatch.setattr(benchmark, "build_profile_json_payload", fake_build_profile_json_payload)
+    monkeypatch.setattr(
+        benchmark_module, "build_profile_json_payload", fake_build_profile_json_payload
+    )
 
     output_path = tmp_path / "profiles" / "profile_output"
-    benchmark.save_profile_json(
+    benchmark_module.save_profile_json(
         [{"preset": "1key"}],
         str(output_path),
         cardinality="standard",
@@ -292,8 +355,10 @@ def test_save_profile_json_adds_json_suffix_and_creates_parent_dir(
     ]
 
 
-def test_main_profile_json_wires_evidence_collection_and_file_write(monkeypatch, tmp_path):
-    results = [_make_result(preset="1key", agg="std", sort=True)]
+def test_main_profile_json_wires_evidence_collection_and_file_write(
+    benchmark_module, monkeypatch, tmp_path
+):
+    results = [_make_result(benchmark_module, preset="1key", agg="std", sort=True)]
     evidence = [
         {
             "preset": "1key",
@@ -305,7 +370,7 @@ def test_main_profile_json_wires_evidence_collection_and_file_write(monkeypatch,
                 "booster": "booster->rust.groupby_std_f64_sorted",
             },
             "result": results[0],
-            "breakdown": _make_breakdown(),
+            "breakdown": _make_breakdown(benchmark_module),
         }
     ]
     captured_run_args: list[dict[str, object]] = []
@@ -328,10 +393,10 @@ def test_main_profile_json_wires_evidence_collection_and_file_write(monkeypatch,
         return evidence
 
     profile_path = tmp_path / "profiles" / "std_profile"
-    monkeypatch.setattr(benchmark, "run_benchmarks", fake_run_benchmarks)
-    monkeypatch.setattr(benchmark, "collect_stats_evidence", fake_collect_stats_evidence)
+    monkeypatch.setattr(benchmark_module, "run_benchmarks", fake_run_benchmarks)
+    monkeypatch.setattr(benchmark_module, "collect_stats_evidence", fake_collect_stats_evidence)
     monkeypatch.setattr(
-        benchmark.sys,
+        benchmark_module.sys,
         "argv",
         [
             "benchmark.py",
@@ -348,7 +413,7 @@ def test_main_profile_json_wires_evidence_collection_and_file_write(monkeypatch,
         ],
     )
 
-    assert benchmark.main() == results
+    assert benchmark_module.main() == results
 
     written_path = profile_path.with_suffix(".json")
     payload = json.loads(written_path.read_text())
@@ -373,8 +438,8 @@ def test_main_profile_json_wires_evidence_collection_and_file_write(monkeypatch,
     )
 
 
-def test_render_stats_evidence_section_skips_unavailable_breakdowns():
-    rendered = benchmark.render_stats_evidence_section(
+def test_render_stats_evidence_section_skips_unavailable_breakdowns(benchmark_module):
+    rendered = benchmark_module.render_stats_evidence_section(
         [
             {
                 "preset": "1key",
@@ -385,7 +450,7 @@ def test_render_stats_evidence_section_skips_unavailable_breakdowns():
                     "pandas": "pandas.groupby.std",
                     "booster": "booster->pandas.groupby.std",
                 },
-                "result": _make_result(preset="1key", agg="std", sort=True),
+                "result": _make_result(benchmark_module, preset="1key", agg="std", sort=True),
                 "breakdown": None,
             }
         ]
