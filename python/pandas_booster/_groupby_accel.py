@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Hashable, Sequence
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -11,16 +11,9 @@ from ._abi_compat import raise_abi_skew
 AggFunc = Literal["sum", "mean", "min", "max", "count", "std", "var"]
 
 
-class GroupByCompatibility(tuple[bool, bool]):
-    __slots__ = ()
-
-    @property
-    def supported(self) -> bool:
-        return self[0]
-
-    @property
-    def force_pandas(self) -> bool:
-        return self[1]
+class GroupByCompatibility(NamedTuple):
+    supported: bool
+    force_pandas: bool
 
 
 def select_rust_groupby_func(
@@ -134,14 +127,14 @@ def classify_groupby_compatibility(
 ) -> GroupByCompatibility:
     for key_col in key_cols:
         if not pd.api.types.is_integer_dtype(key_col):
-            return GroupByCompatibility((False, False))
+            return GroupByCompatibility(False, False)
         if should_fallback_for_key_dtype(key_col):
-            return GroupByCompatibility((False, False))
+            return GroupByCompatibility(False, False)
         if has_nullable_na(key_col):
-            return GroupByCompatibility((False, False))
+            return GroupByCompatibility(False, False)
 
     if not is_supported_value_dtype(val_col, agg=agg):
-        return GroupByCompatibility((False, False))
+        return GroupByCompatibility(False, False)
 
     if (
         len(key_cols) == 1
@@ -149,9 +142,9 @@ def classify_groupby_compatibility(
         and pd.api.types.is_float_dtype(val_col)
         and force_pandas_float_groupby
     ):
-        return GroupByCompatibility((True, True))
+        return GroupByCompatibility(True, True)
 
-    return GroupByCompatibility((True, False))
+    return GroupByCompatibility(True, False)
 
 
 def to_i64_contiguous(arr: np.ndarray) -> np.ndarray:
