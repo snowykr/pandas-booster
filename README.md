@@ -33,7 +33,7 @@ python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 # 2. Install build tools and dependencies
-pip install maturin
+pip install "maturin>=1.13,<2.0"
 pip install -e ".[bench,dev]"
 
 # 3. Build and install in development mode
@@ -191,6 +191,7 @@ The library is designed for large datasets where multi-core parallelism can be f
 - **Warm:** Average of 20 fresh process executions. Each process runs Cold once and a Warmup once (both discarded), then measures the next run (steady state).
 - **Correctness:** Booster and Polars outputs are validated against a Pandas baseline. For `sort=False`, benchmarks validate Pandas-compatible appearance order (first-seen group order).
 - **Polars sort handling:** Polars does not have a `sort` parameter in `group_by`. For fair comparison, I define `sort=True` as "groupby+agg followed by sorting the result by keys" (cost included in timing), and `sort=False` as "groupby+agg with Pandas-compatible appearance order (first-seen group order)". This ensures all three engines (Pandas, Polars, Booster) are measured under identical conditions.
+- **Profile evidence:** `--profile-json` writes internal single-key `std`/`var` phase timings for the Rust path (`local_build`, `merge`, `reorder`, `materialize`, and Python post-processing) so benchmark reports can separate kernel time from conversion and Series construction overhead.
 - **Speedup baseline:** All speedup values (`x`) use **Pandas** as the baseline (1.0x) within each sort mode.
 - **Optional Polars:** Polars is included in the benchmarks for comparison if installed. If not installed, the benchmark suite proceeds with Pandas vs Booster only.
 
@@ -269,6 +270,9 @@ python benches/benchmark.py --samples 20 --output results.md
 # Run only selected aggregation functions
 python benches/benchmark.py --agg std --agg var --samples 20 --output results.md
 
+# Save single-key std/var phase-profile evidence as JSON
+python benches/benchmark.py --agg std --agg var --samples 20 --profile-json profile.json
+
 # Include threshold diagnostics as well
 python benches/benchmark.py --cardinality all --diagnostic threshold --sort-mode unsorted --samples 20 --output results.md
 ```
@@ -316,7 +320,7 @@ The release process is automated via the `publish.yml` workflow triggered by ver
    Ensure the environment is ready and push a new tag:
    ```bash
    python -m pip install --upgrade pip
-   pip install "maturin>=1.4,<2.0"
+   pip install "maturin>=1.13,<2.0"
    git tag vX.Y.Z
    git push origin vX.Y.Z
    ```
@@ -324,10 +328,27 @@ The release process is automated via the `publish.yml` workflow triggered by ver
 The workflow builds cross-platform wheels and handles the PyPI upload automatically.
 
 ### Testing
-Run the test suite using `pytest`:
+Run the same local checks that CI runs:
 ```bash
 source .venv/bin/activate
-pytest tests/
+
+# Rust static validation
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+
+# Python quality and release contract checks
+basedpyright --project pyrightconfig.json
+ruff check python tests scripts
+python scripts/check_release_contract.py metadata
+python scripts/check_release_contract.py workflow --file .github/workflows/publish.yml
+
+# Build the extension and run the Python suite
+maturin develop --release
+pytest tests/ -v --strict-markers -m "not stress"
+
+# Optional longer determinism lane, matching the CI stress job
+pytest tests/test_sort_false_determinism.py -v --strict-markers -m stress
 ```
 
 ### Benchmarking
@@ -382,6 +403,9 @@ python benches/benchmark.py --cardinality high --sort-mode sorted
 # Save results to markdown file
 python benches/benchmark.py --output results.md
 
+# Save internal single-key std/var profile evidence to JSON
+python benches/benchmark.py --agg std --agg var --profile-json profile.json
+
 # Adjust sample count (applies to both cold and warm; default: 5)
 python benches/benchmark.py --samples 20
 ```
@@ -389,6 +413,11 @@ python benches/benchmark.py --samples 20
 Note: `--agg` is repeatable and filters the benchmark to only the selected aggregation functions.
 If omitted, the current default behavior is preserved: the core performance tables benchmark `sum`,
 while the extra single-key evidence section benchmarks `std` and `var`.
+
+Note: `--profile-json` is an internal benchmark diagnostics output. It includes the same
+single-key `std`/`var` evidence cases used by the Markdown report, plus phase breakdowns when a
+Rust-only Booster profile hook is available. Cases that fall back to pandas or require Python
+sorting remain in the JSON with `breakdown: null`.
 
 Note: `--cardinality` is for workload classes (`standard`, `high`, `all`), while
 `--diagnostic` is for internal boundary checks (`none`, `threshold`).
