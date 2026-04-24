@@ -215,7 +215,7 @@ fn hash_to_partition(hash: u64) -> usize {
     (hash as usize) & (NUM_PARTITIONS - 1)
 }
 
-fn stable_scatter_by_partition(hashes: &[u64]) -> (Vec<usize>, Vec<usize>) {
+pub(crate) fn stable_scatter_by_partition(hashes: &[u64]) -> (Vec<usize>, Vec<usize>) {
     let n_rows = hashes.len();
     let n_threads = rayon::current_num_threads().max(1);
     let chunk_size = (n_rows / n_threads).max(1024);
