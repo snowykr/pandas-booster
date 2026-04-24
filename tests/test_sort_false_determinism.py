@@ -122,6 +122,146 @@ res = {
 print(json.dumps(res, sort_keys=True))
 """
 
+_SINGLE_KEY_PARTITIONED_SCRIPT_TEMPLATE = r"""
+import hashlib
+import json
+
+import numpy as np
+import pandas as pd
+import pandas_booster._rust as _rust
+from pandas_booster.accessor import BoosterAccessor  # noqa: F401
+
+
+def series_fingerprint(series: pd.Series) -> str:
+    h = hashlib.sha256()
+    arr_idx = np.asarray(series.index)
+    h.update(arr_idx.dtype.str.encode("ascii"))
+    h.update(arr_idx.tobytes())
+
+    vals = np.asarray(series.to_numpy())
+    h.update(vals.dtype.str.encode("ascii"))
+    h.update(vals.tobytes())
+    return h.hexdigest()
+
+
+threshold = _rust.get_fallback_threshold()
+n = max(__N_ROWS__, threshold + 1, 20_000)
+if n % 2:
+    n += 1
+
+group_count = n // 2
+perm = np.arange(group_count, dtype=np.int64)
+perm = np.concatenate((perm[group_count // 2 :], perm[: group_count // 2]))
+k = np.repeat(perm, 2)
+
+base = np.arange(group_count, dtype=np.float64)
+v = np.empty(n, dtype=np.float64)
+v[0::2] = base
+v[1::2] = base + 0.5
+
+df = pd.DataFrame({"k": k, "v": v})
+
+res = {
+    "std_sorted": series_fingerprint(df.booster.groupby("k", "v", "std", sort=True)),
+    "std_firstseen": series_fingerprint(df.booster.groupby("k", "v", "std", sort=False)),
+    "var_sorted": series_fingerprint(df.booster.groupby("k", "v", "var", sort=True)),
+    "var_firstseen": series_fingerprint(df.booster.groupby("k", "v", "var", sort=False)),
+}
+
+print(json.dumps(res, sort_keys=True))
+"""
+
+_ORDER_CONTRACT_SCRIPT_TEMPLATE = r"""
+import json
+
+import numpy as np
+import pandas as pd
+from pandas_booster.accessor import BoosterAccessor  # noqa: F401
+
+
+def encode_scalar(value: float) -> str:
+    scalar = np.float64(value)
+    if np.isnan(scalar):
+        return "nan"
+    return scalar.hex()
+
+
+def encode_series(series: pd.Series) -> dict[str, list[object]]:
+    index = series.index
+    if isinstance(index, pd.MultiIndex):
+        encoded_index = [[int(part) for part in item] for item in index.tolist()]
+    else:
+        encoded_index = [int(item) for item in index.tolist()]
+
+    return {
+        "index": encoded_index,
+        "values": [encode_scalar(value) for value in series.to_numpy()],
+    }
+
+
+float_df = pd.DataFrame(
+    {
+        "key": [5, 2, 5, 4, 2, 7, 8, 8, 1],
+        "val": [1.0, np.nan, 3.0, np.nan, 5.0, 11.0, 2.0, 2.0, np.nan],
+    }
+)
+int_df = pd.DataFrame(
+    {
+        "key": [8, 3, 8, 5, 3, 4],
+        "val": np.array([2, 6, 4, 10, 14, 12], dtype=np.int64),
+    }
+)
+multi_df = pd.DataFrame(
+    {
+        "k1": [2, 1, 2, 1, 2, 3, 1],
+        "k2": [9, 8, 9, 7, 8, 7, 8],
+        "val": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+    }
+)
+
+payload = {}
+for agg in ("std", "var"):
+    payload[f"float_{agg}"] = encode_series(float_df.booster.groupby("key", "val", agg, sort=False))
+    payload[f"int_{agg}"] = encode_series(int_df.booster.groupby("key", "val", agg, sort=False))
+    payload[f"multi_{agg}"] = encode_series(
+        multi_df.booster.groupby(["k1", "k2"], "val", agg, sort=False)
+    )
+
+print(json.dumps(payload, sort_keys=True))
+"""
+
+EXPECTED_ORDER_CONTRACT_PAYLOAD = {
+    "float_std": {
+        "index": [5, 2, 4, 7, 8, 1],
+        "values": ["0x1.6a09e667f3bcdp+0", "nan", "nan", "nan", "0x0.0p+0", "nan"],
+    },
+    "float_var": {
+        "index": [5, 2, 4, 7, 8, 1],
+        "values": ["0x1.0000000000000p+1", "nan", "nan", "nan", "0x0.0p+0", "nan"],
+    },
+    "int_std": {
+        "index": [8, 3, 5, 4],
+        "values": [
+            "0x1.6a09e667f3bcdp+0",
+            "0x1.6a09e667f3bcdp+2",
+            "nan",
+            "nan",
+        ],
+    },
+    "int_var": {
+        "index": [8, 3, 5, 4],
+        "values": ["0x1.0000000000000p+1", "0x1.0000000000000p+5", "nan", "nan"],
+    },
+    "multi_std": {
+        "index": [[2, 9], [1, 8], [1, 7], [2, 8], [3, 7]],
+        "values": ["0x1.6a09e667f3bcdp+0", "0x1.c48c6001f0ac0p+1", "nan", "nan", "nan"],
+    },
+    "multi_var": {
+        "index": [[2, 9], [1, 8], [1, 7], [2, 8], [3, 7]],
+        "values": ["0x1.0000000000000p+1", "0x1.9000000000000p+3", "nan", "nan", "nan"],
+    },
+}
+
 
 def _run_script_once(ray_threads: int, script: str) -> str:
     def _format_timeout_stream(value: bytes | str | None) -> str:
@@ -166,6 +306,15 @@ def _run_multi_key_once(ray_threads: int, n_rows: int) -> str:
 def _run_single_key_once(ray_threads: int, n_rows: int) -> str:
     script = _SINGLE_KEY_SCRIPT_TEMPLATE.replace("__N_ROWS__", str(n_rows))
     return _run_script_once(ray_threads, script)
+
+
+def _run_single_key_partitioned_once(ray_threads: int, n_rows: int) -> str:
+    script = _SINGLE_KEY_PARTITIONED_SCRIPT_TEMPLATE.replace("__N_ROWS__", str(n_rows))
+    return _run_script_once(ray_threads, script)
+
+
+def _run_order_contract_once(ray_threads: int) -> str:
+    return _run_script_once(ray_threads, _ORDER_CONTRACT_SCRIPT_TEMPLATE)
 
 
 def test_run_script_once_passes_timeout_to_subprocess(
@@ -232,6 +381,18 @@ def test_single_key_template_uses_threshold_relative_row_count() -> None:
     assert all(isinstance(value, str) and value for value in payload.values())
 
 
+def test_single_key_partitioned_template_uses_threshold_relative_row_count() -> None:
+    payload = json.loads(_run_single_key_partitioned_once(1, 1))
+
+    assert set(payload) == {
+        "std_sorted",
+        "std_firstseen",
+        "var_sorted",
+        "var_firstseen",
+    }
+    assert all(isinstance(value, str) and value for value in payload.values())
+
+
 def test_sort_false_fingerprint_deterministic_across_threads_and_repeats() -> None:
     baseline = _run_multi_key_once(1, FAST_MULTI_ROWS)
 
@@ -248,6 +409,15 @@ def test_single_key_float_sum_mean_std_var_bitwise_deterministic_across_threads(
 
     for _ in range(FAST_REPEATS):
         assert _run_single_key_once(8, FAST_SINGLE_ROWS) == baseline
+
+
+def test_single_key_partitioned_std_var_bitwise_deterministic_across_threads() -> None:
+    baseline = _run_single_key_partitioned_once(1, FAST_SINGLE_ROWS)
+
+    assert _run_single_key_partitioned_once(1, FAST_SINGLE_ROWS) == baseline
+
+    for _ in range(FAST_REPEATS):
+        assert _run_single_key_partitioned_once(8, FAST_SINGLE_ROWS) == baseline
 
 
 @pytest.mark.stress
@@ -268,3 +438,24 @@ def test_single_key_float_sum_mean_std_var_bitwise_deterministic_stress_across_t
 
     for _ in range(STRESS_REPEATS):
         assert _run_single_key_once(8, STRESS_SINGLE_ROWS) == baseline
+
+
+@pytest.mark.stress
+def test_single_key_partitioned_std_var_bitwise_deterministic_stress_across_threads() -> None:
+    baseline = _run_single_key_partitioned_once(1, STRESS_SINGLE_ROWS)
+
+    assert _run_single_key_partitioned_once(1, STRESS_SINGLE_ROWS) == baseline
+
+    for _ in range(STRESS_REPEATS):
+        assert _run_single_key_partitioned_once(8, STRESS_SINGLE_ROWS) == baseline
+
+
+@pytest.mark.stress
+def test_sort_false_std_var_order_contract_stable_across_threads() -> None:
+    baseline = json.loads(_run_order_contract_once(1))
+
+    assert baseline == EXPECTED_ORDER_CONTRACT_PAYLOAD
+    assert json.loads(_run_order_contract_once(1)) == EXPECTED_ORDER_CONTRACT_PAYLOAD
+
+    for _ in range(STRESS_REPEATS):
+        assert json.loads(_run_order_contract_once(8)) == EXPECTED_ORDER_CONTRACT_PAYLOAD
