@@ -342,6 +342,7 @@ def resolve_booster_benchmark_dispatch(
             if ignore_force_pandas_sort
             else bool(sort) and force_pandas_sort_enabled()
         ),
+        context="benchmark",
     )
     execution = f"booster->rust.{rust_func.__name__}"
     if needs_python_sort and sort:

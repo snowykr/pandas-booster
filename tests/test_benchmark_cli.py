@@ -260,6 +260,32 @@ def test_describe_booster_execution_uses_pandas_label_for_large_single_float_sum
     )
 
 
+def test_describe_booster_execution_reports_benchmark_abi_skew_for_missing_kernel(
+    benchmark_module,
+    monkeypatch,
+):
+    import pandas_booster._abi_compat as abi
+    import pandas_booster._rust as rust
+
+    monkeypatch.delenv("PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY", raising=False)
+    monkeypatch.setattr(abi, "_WARNED_ABI_SKEW", False)
+    monkeypatch.delattr(rust, "groupby_std_f64", raising=False)
+    monkeypatch.delattr(rust, "groupby_std_f64_sorted", raising=False)
+
+    df = benchmark_module.pd.DataFrame(
+        {"key": [1, 1, 2, 2], "value": [1.0, 3.0, 10.0, 14.0]}
+    )
+
+    with (
+        pytest.warns(abi.PandasBoosterAbiSkewWarning, match=r"ABI skew \(benchmark\)"),
+        pytest.raises(
+            abi.PandasBoosterKeyShapeSkewError,
+            match=r"pandas-booster ABI skew \(benchmark\).*groupby_std_f64",
+        ),
+    ):
+        benchmark_module.describe_booster_execution(df, ["key"], "value", "std", True)
+
+
 def test_build_profile_json_payload_handles_unavailable_breakdowns(benchmark_module):
     profiled_case = {
         "preset": "1key",
