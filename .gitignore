@@ -35,6 +35,10 @@ env/
 .DS_Store
 Thumbs.db
 
+# Agent tooling
+.codex
+.omx/
+
 # Benchmarking
 criterion/
 
