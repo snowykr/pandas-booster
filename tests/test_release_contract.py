@@ -438,6 +438,7 @@ def test_ci_keeps_non_tag_release_readiness_paths():
         "python scripts/check_release_contract.py workflow --file .github/workflows/publish.yml"
         in ci_text
     )
+    assert "ruff check python tests scripts benches" in ci_text
     assert "name: Build Wheel Smoke" in ci_text
     assert _job_if_expression(ci_text, "build-wheel-smoke") == main_pr_smoke_gate
     assert _job_if_expression(ci_text, "test-wheel-smoke") == main_pr_smoke_gate

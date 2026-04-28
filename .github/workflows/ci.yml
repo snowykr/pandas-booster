@@ -61,7 +61,7 @@ jobs:
         run: basedpyright --project pyrightconfig.json
 
       - name: Run ruff
-        run: ruff check python tests scripts
+        run: ruff check python tests scripts benches
 
       - name: Validate release metadata contract
         run: python scripts/check_release_contract.py metadata

@@ -584,8 +584,8 @@ def render_stats_evidence_section(evidence: list[dict[str, Any]]) -> str:
     )
     lines.append(
         "When the dataset is smaller or the group count is low, the fixed overhead from NumPy "
-        "contiguity/copy work, the Python↔Rust boundary, and Series materialization eats into that gain "
-        "even though the kernel itself remains parallel."
+        "contiguity/copy work, the Python↔Rust boundary, and Series materialization "
+        "eats into that gain even though the kernel itself remains parallel."
     )
     lines.append("")
     lines.append("| Workload | Agg | Sort | Backend | Execution | Cold | Warm |")
@@ -602,26 +602,52 @@ def render_stats_evidence_section(evidence: list[dict[str, Any]]) -> str:
                 continue
             cold_stats: BenchmarkStats = backend_data["cold_stats"]
             warm_stats: BenchmarkStats = backend_data["warm_stats"]
-            lines.append(
-                f"| {item['workload']} | `{agg}` | {sort} | {backend_name} | `{execution[backend_name]}` | "
-                f"{cold_stats.format_ms(2)} | {warm_stats.format_ms(2)} |"
-            )
+            row = [
+                item["workload"],
+                f"`{agg}`",
+                sort,
+                backend_name,
+                f"`{execution[backend_name]}`",
+                cold_stats.format_ms(2),
+                warm_stats.format_ms(2),
+            ]
+            lines.append("| " + " | ".join(row) + " |")
 
     lines.append("")
     lines.append("### Booster conversion vs compute breakdown")
     lines.append("")
     lines.append(
         "The table below isolates the Rust-first Booster path for the same single-key datasets. "
-        "`local_build`, `merge`, `reorder`, and `materialize` come from the internal Rust profiling "
-        "hook, while the Python-side phases measure post-kernel normalization and final pandas Series assembly."
+        "`local_build`, `merge`, `reorder`, and `materialize` come from the "
+        "internal Rust profiling hook, while the Python-side phases measure "
+        "post-kernel normalization and final pandas Series assembly."
     )
     lines.append("")
-    lines.append(
-        "| Workload | Agg | Sort | Execution | Prepare inputs | Local build | Merge | Reorder | Materialize | Python normalize | Series build | Rust total | Total pipeline | Partial groups | Final groups | Partial/final |"
+    breakdown_columns = [
+        "Workload",
+        "Agg",
+        "Sort",
+        "Execution",
+        "Prepare inputs",
+        "Local build",
+        "Merge",
+        "Reorder",
+        "Materialize",
+        "Python normalize",
+        "Series build",
+        "Rust total",
+        "Total pipeline",
+        "Partial groups",
+        "Final groups",
+        "Partial/final",
+    ]
+    breakdown_separators = ["-" * len(column) for column in breakdown_columns]
+    lines.append("| " + " | ".join(breakdown_columns) + " |")
+    separator_row = "|" + "|".join(
+        f"{separator:-^{len(separator) + 2}}"
+        for separator in breakdown_separators
     )
-    lines.append(
-        "|----------|-----|------|-----------|----------------|-------------|-------|---------|-------------|------------------|--------------|------------|----------------|----------------|--------------|---------------|"
-    )
+    lines.append(separator_row + "|")
     has_breakdown_rows = False
     for item in evidence:
         breakdown = item["breakdown"]
@@ -629,15 +655,25 @@ def render_stats_evidence_section(evidence: list[dict[str, Any]]) -> str:
             continue
         has_breakdown_rows = True
         phases = breakdown["phases"]
-        lines.append(
-            f"| {item['workload']} | `{item['agg']}` | {'True' if item['sort'] else 'False'} | `{breakdown['execution']}` | "
-            f"{phases['prepare_inputs_s'].format_ms(2)} | {phases['local_build_s'].format_ms(2)} | "
-            f"{phases['merge_s'].format_ms(2)} | {phases['reorder_s'].format_ms(2)} | "
-            f"{phases['materialize_s'].format_ms(2)} | {phases['python_normalize_s'].format_ms(2)} | "
-            f"{phases['python_series_build_s'].format_ms(2)} | {phases['rust_total_s'].format_ms(2)} | "
-            f"{phases['total_pipeline_s'].format_ms(2)} | {breakdown['partial_group_total']:,} | "
-            f"{breakdown['final_group_count']:,} | {breakdown['partial_to_final_ratio']:.3f} |"
-        )
+        row = [
+            item["workload"],
+            f"`{item['agg']}`",
+            "True" if item["sort"] else "False",
+            f"`{breakdown['execution']}`",
+            phases["prepare_inputs_s"].format_ms(2),
+            phases["local_build_s"].format_ms(2),
+            phases["merge_s"].format_ms(2),
+            phases["reorder_s"].format_ms(2),
+            phases["materialize_s"].format_ms(2),
+            phases["python_normalize_s"].format_ms(2),
+            phases["python_series_build_s"].format_ms(2),
+            phases["rust_total_s"].format_ms(2),
+            phases["total_pipeline_s"].format_ms(2),
+            f"{breakdown['partial_group_total']:,}",
+            f"{breakdown['final_group_count']:,}",
+            f"{breakdown['partial_to_final_ratio']:.3f}",
+        ]
+        lines.append("| " + " | ".join(row) + " |")
     if not has_breakdown_rows:
         lines.append(
             "No Rust-only Booster breakdown rows were available for the selected evidence cases."
@@ -1366,7 +1402,11 @@ def format_performance_section(
             sections.append("")
 
         if cardinality in ["all", "standard"] and standard_results:
-            heading = "### Standard Cardinality (5M rows)" if not multiple_aggs else "#### Standard Cardinality (5M rows)"
+            heading = (
+                "### Standard Cardinality (5M rows)"
+                if not multiple_aggs
+                else "#### Standard Cardinality (5M rows)"
+            )
             sections.append(heading)
             sections.append("")
             sections.append(render_standard_table(standard_results))
@@ -1537,7 +1577,8 @@ def run_benchmarks(
                             )
 
                     print(
-                        f"  {backend_name:8s} | Cold: {cold_str} | Warm: {warm_str}{correctness_str}"
+                        f"  {backend_name:8s} | Cold: {cold_str} | "
+                        f"Warm: {warm_str}{correctness_str}"
                     )
 
     print("\n" + "=" * 90)
@@ -1669,14 +1710,18 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python benches/benchmark.py                                    # Run default benchmarks (cardinality=all, diagnostic=none)
-  python benches/benchmark.py --cardinality all                  # Run core benchmarks only (standard + high)
+  python benches/benchmark.py
+      # Run default benchmarks (cardinality=all, diagnostic=none)
+  python benches/benchmark.py --cardinality all
+      # Run core benchmarks only (standard + high)
   python benches/benchmark.py --cardinality standard             # Standard only
   python benches/benchmark.py --cardinality high                 # High only
   python benches/benchmark.py --agg std --agg var                # Run only std/var benchmarks
   python benches/benchmark.py --agg min --agg max               # Run only min/max benchmarks
-  python benches/benchmark.py --diagnostic threshold --sort-mode unsorted  # Add threshold diagnostics
-  python benches/benchmark.py --cardinality all --diagnostic threshold --sort-mode unsorted  # Core + diagnostics
+  python benches/benchmark.py --diagnostic threshold --sort-mode unsorted
+      # Add threshold diagnostics
+  python benches/benchmark.py --cardinality all --diagnostic threshold --sort-mode unsorted
+      # Core + diagnostics
   python benches/benchmark.py --sort-mode sorted                 # Sorted only
   python benches/benchmark.py --cardinality high --sort-mode unsorted  # Combine
   python benches/benchmark.py --output results.md                # Save results
