@@ -11,7 +11,7 @@ from .accessor import BoosterAccessor
 from .proxy import BoosterDataFrameGroupBy
 
 __all__ = ["BoosterAccessor", "activate", "deactivate", "is_active"]
-__version__ = "0.1.0"
+__version__ = "0.1.2"
 
 _original_groupby = None
 _is_active = False

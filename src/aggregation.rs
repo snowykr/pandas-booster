@@ -83,6 +83,116 @@ impl Aggregator<f64, f64> for MeanAggF64 {
     }
 }
 
+/// Shared mergeable variance state using a numerically stable mean/M2 update.
+#[derive(Clone, Default)]
+struct VarianceState {
+    count: u64,
+    mean: f64,
+    m2: f64,
+}
+
+impl VarianceState {
+    fn update(&mut self, value: f64) {
+        self.count += 1;
+
+        let delta = value - self.mean;
+        self.mean += delta / self.count as f64;
+        let delta2 = value - self.mean;
+        self.m2 += delta * delta2;
+    }
+
+    fn merge(&mut self, other: Self) {
+        if other.count == 0 {
+            return;
+        }
+
+        if self.count == 0 {
+            *self = other;
+            return;
+        }
+
+        let self_count = self.count as f64;
+        let other_count = other.count as f64;
+        let total_count = self.count + other.count;
+        let total_count_f64 = total_count as f64;
+        let delta = other.mean - self.mean;
+
+        self.m2 += other.m2 + delta * delta * (self_count * other_count / total_count_f64);
+        self.mean += delta * (other_count / total_count_f64);
+        self.count = total_count;
+    }
+
+    fn sample_variance(&self) -> f64 {
+        if self.count <= 1 {
+            return f64::NAN;
+        }
+
+        let variance = self.m2 / (self.count - 1) as f64;
+        if variance < 0.0 {
+            0.0
+        } else {
+            variance
+        }
+    }
+}
+
+/// Variance aggregator for f64. Skips NaN values and returns sample variance.
+#[derive(Clone, Default)]
+pub struct VarAggF64 {
+    state: VarianceState,
+}
+
+impl Aggregator<f64, f64> for VarAggF64 {
+    fn init() -> Self {
+        Self::default()
+    }
+
+    fn update(&mut self, value: f64) {
+        if !value.is_nan() {
+            self.state.update(value);
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.state.merge(other.state);
+    }
+
+    fn finalize(&self) -> f64 {
+        self.state.sample_variance()
+    }
+}
+
+/// Standard deviation aggregator for f64. Skips NaN values and derives from variance state.
+#[derive(Clone, Default)]
+pub struct StdAggF64 {
+    state: VarianceState,
+}
+
+impl Aggregator<f64, f64> for StdAggF64 {
+    fn init() -> Self {
+        Self::default()
+    }
+
+    fn update(&mut self, value: f64) {
+        if !value.is_nan() {
+            self.state.update(value);
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.state.merge(other.state);
+    }
+
+    fn finalize(&self) -> f64 {
+        let variance = self.state.sample_variance();
+        if variance.is_nan() {
+            variance
+        } else {
+            variance.sqrt()
+        }
+    }
+}
+
 /// Min aggregator for f64. Returns NaN for empty/all-NaN groups.
 #[derive(Clone)]
 pub struct MinAggF64 {
@@ -231,6 +341,59 @@ impl Aggregator<i64, f64> for MeanAggI64 {
             f64::NAN
         } else {
             self.sum as f64 / self.count as f64
+        }
+    }
+}
+
+/// Variance aggregator for i64. Returns sample variance as f64.
+#[derive(Clone, Default)]
+pub struct VarAggI64 {
+    state: VarianceState,
+}
+
+impl Aggregator<i64, f64> for VarAggI64 {
+    fn init() -> Self {
+        Self::default()
+    }
+
+    fn update(&mut self, value: i64) {
+        self.state.update(value as f64);
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.state.merge(other.state);
+    }
+
+    fn finalize(&self) -> f64 {
+        self.state.sample_variance()
+    }
+}
+
+/// Standard deviation aggregator for i64. Returns sample standard deviation as f64.
+#[derive(Clone, Default)]
+pub struct StdAggI64 {
+    state: VarianceState,
+}
+
+impl Aggregator<i64, f64> for StdAggI64 {
+    fn init() -> Self {
+        Self::default()
+    }
+
+    fn update(&mut self, value: i64) {
+        self.state.update(value as f64);
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.state.merge(other.state);
+    }
+
+    fn finalize(&self) -> f64 {
+        let variance = self.state.sample_variance();
+        if variance.is_nan() {
+            variance
+        } else {
+            variance.sqrt()
         }
     }
 }
@@ -542,5 +705,164 @@ mod tests {
 
         agg1.merge(agg2);
         assert_eq!(agg1.finalize(), 3);
+    }
+
+    fn assert_close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < 1e-10,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn test_var_f64_ddof1_skips_nan_and_std_matches_sqrt_var() {
+        let mut var = VarAggF64::init();
+        let mut std = StdAggF64::init();
+
+        for value in [1.0, f64::NAN, 2.0, 3.0] {
+            var.update(value);
+            std.update(value);
+        }
+
+        let variance = var.finalize();
+        let standard_deviation = std.finalize();
+
+        assert_close(variance, 1.0);
+        assert_close(standard_deviation, variance.sqrt());
+    }
+
+    #[test]
+    fn test_var_and_std_f64_return_nan_for_empty_all_nan_and_singleton_groups() {
+        let empty_var = VarAggF64::init();
+        let empty_std = StdAggF64::init();
+        assert!(empty_var.finalize().is_nan());
+        assert!(empty_std.finalize().is_nan());
+
+        let mut all_nan_var = VarAggF64::init();
+        let mut all_nan_std = StdAggF64::init();
+        all_nan_var.update(f64::NAN);
+        all_nan_std.update(f64::NAN);
+        assert!(all_nan_var.finalize().is_nan());
+        assert!(all_nan_std.finalize().is_nan());
+
+        let mut singleton_var = VarAggF64::init();
+        let mut singleton_std = StdAggF64::init();
+        singleton_var.update(42.0);
+        singleton_std.update(42.0);
+        assert!(singleton_var.finalize().is_nan());
+        assert!(singleton_std.finalize().is_nan());
+    }
+
+    #[test]
+    fn test_var_i64_uses_sample_variance_and_returns_f64() {
+        let mut var = VarAggI64::init();
+        let mut std = StdAggI64::init();
+
+        for value in [1_i64, 2, 3, 4] {
+            var.update(value);
+            std.update(value);
+        }
+
+        let variance = var.finalize();
+        let standard_deviation = std.finalize();
+
+        assert_close(variance, 5.0 / 3.0);
+        assert_close(standard_deviation, variance.sqrt());
+    }
+
+    #[test]
+    fn variance_merge_invariance() {
+        let mut sequential_var = VarAggF64::init();
+        let mut sequential_std = StdAggF64::init();
+        for value in [1.0, f64::NAN, 2.0, 5.0, 7.0] {
+            sequential_var.update(value);
+            sequential_std.update(value);
+        }
+
+        let mut left_var = VarAggF64::init();
+        let mut left_std = StdAggF64::init();
+        for value in [1.0, f64::NAN, 2.0] {
+            left_var.update(value);
+            left_std.update(value);
+        }
+
+        let mut right_var = VarAggF64::init();
+        let mut right_std = StdAggF64::init();
+        for value in [5.0, 7.0] {
+            right_var.update(value);
+            right_std.update(value);
+        }
+
+        left_var.merge(right_var);
+        left_std.merge(right_std);
+
+        let expected_variance: f64 = 91.0 / 12.0;
+        let expected_std = expected_variance.sqrt();
+
+        assert_close(sequential_var.finalize(), expected_variance);
+        assert_close(left_var.finalize(), expected_variance);
+        assert_close(sequential_std.finalize(), expected_std);
+        assert_close(left_std.finalize(), expected_std);
+    }
+
+    #[test]
+    fn test_variance_merge_is_deterministic_and_finalizes_non_negative() {
+        let mut left_assoc_var = VarAggF64::init();
+        for value in [10.0, 12.0] {
+            left_assoc_var.update(value);
+        }
+        let mut middle_var = VarAggF64::init();
+        for value in [14.0, 16.0] {
+            middle_var.update(value);
+        }
+        let mut right_assoc_var = VarAggF64::init();
+        for value in [18.0, 20.0] {
+            right_assoc_var.update(value);
+        }
+
+        let mut merge_left = left_assoc_var.clone();
+        merge_left.merge(middle_var.clone());
+        merge_left.merge(right_assoc_var.clone());
+
+        let mut merge_right = middle_var;
+        merge_right.merge(right_assoc_var);
+        let mut merge_right_root = left_assoc_var;
+        merge_right_root.merge(merge_right);
+
+        let left_variance = merge_left.finalize();
+        let right_variance = merge_right_root.finalize();
+        assert_close(left_variance, 14.0);
+        assert_close(right_variance, 14.0);
+        assert!(left_variance >= 0.0);
+        assert!(right_variance >= 0.0);
+
+        let mut left_assoc_std = StdAggF64::init();
+        for value in [10.0, 12.0] {
+            left_assoc_std.update(value);
+        }
+        let mut middle_std = StdAggF64::init();
+        for value in [14.0, 16.0] {
+            middle_std.update(value);
+        }
+        let mut right_assoc_std = StdAggF64::init();
+        for value in [18.0, 20.0] {
+            right_assoc_std.update(value);
+        }
+
+        let mut merge_left_std = left_assoc_std.clone();
+        merge_left_std.merge(middle_std.clone());
+        merge_left_std.merge(right_assoc_std.clone());
+
+        let mut merge_right_std = middle_std;
+        merge_right_std.merge(right_assoc_std);
+        let mut merge_right_std_root = left_assoc_std;
+        merge_right_std_root.merge(merge_right_std);
+
+        let left_standard_deviation = merge_left_std.finalize();
+        let right_standard_deviation = merge_right_std_root.finalize();
+        assert_close(left_standard_deviation, 14.0_f64.sqrt());
+        assert_close(right_standard_deviation, 14.0_f64.sqrt());
+        assert!(left_standard_deviation >= 0.0);
+        assert!(right_standard_deviation >= 0.0);
     }
 }

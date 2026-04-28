@@ -33,7 +33,7 @@ python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 # 2. Install build tools and dependencies
-pip install maturin
+pip install "maturin>=1.13,<2.0"
 pip install -e ".[bench,dev]"
 
 # 3. Build and install in development mode
@@ -109,10 +109,10 @@ Emergency toggle (panic button):
   - truthy (`1/true/yes/on`, case-insensitive): force Python `Series.sort_index()` after Rust aggregation for `sort=True`.
   - anything else (including `0/false/no/off`): keep Rust-side sorting.
 - `PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY` (default: OFF when unset):
-  - truthy (`1/true/yes/on`, case-insensitive): force pandas fallback for **single-key float** `sum`/`mean`.
+  - truthy (`1/true/yes/on`, case-insensitive): force pandas fallback for **single-key float** `sum`/`mean`/`std`/`var`.
   - anything else (including `0/false/no/off`): use Rust deterministic reduction kernels.
 
-These toggles are intended for quick rollback if a Rust ordering or deterministic-float reduction issue is discovered. Forcing Python sort moves the `sort=True` cost to Pandas and is slower. Forcing pandas float groupby rolls single-key float `sum`/`mean` back to pandas semantics/performance.
+These toggles are intended for quick rollback if a Rust ordering or deterministic-float reduction issue is discovered. Forcing Python sort moves the `sort=True` cost to Pandas and is slower. Forcing pandas float groupby rolls single-key float `sum`/`mean`/`std`/`var` back to pandas semantics/performance.
 
 Note: the Rust-side `sort=True` kernels allocate a permutation vector and perform an `O(G log G)` comparison sort over groups (G = number of groups). This can increase memory usage at very high cardinality.
 
@@ -139,22 +139,43 @@ The following aggregation functions are currently supported:
 |-----------|-------------|
 | `sum` | Sum of values in each group |
 | `mean` | Arithmetic mean of values in each group |
+| `std` | Sample standard deviation (ddof=1) |
+| `var` | Sample variance (ddof=1) |
 | `min` | Minimum value in each group |
 | `max` | Maximum value in each group |
 | `count` | Count of non-NaN values in each group |
+
+### Acceleration Scope and Mandatory Fallback
+
+To ensure predictable performance and correctness, the following rules define where Rust-first dispatch is certified.
+
+#### Certified Rust Dispatch Domain (`std`/`var`)
+
+| Feature | Supported (Rust-first) | Mandatory pandas Fallback |
+|---------|-------------------------|--------------------------|
+| Keys | Single or Multi-key (up to 10), integer dtypes | Non-integer keys, custom objects |
+| Values | Numeric (`int64`, `float64`) | `uint64`, object, bool, datetime, category |
+| Semantics | `ddof=1` (default) | Custom `ddof`, `numeric_only`, `skipna=False` |
+| Dtypes | Primitive NumPy arrays | Extension dtypes (nullable `Int64`, `Float64`, `pd.NA`) |
+
+#### Determinism and Precision
+
+- **Determinism**: Accelerated float aggregations (`sum`, `mean`, `std`, `var`) are bitwise-identical across thread counts for identical inputs in the same environment.
+- **Precision**: Results are semantically pandas-compatible but not guaranteed to be bit-for-bit identical to pandas. `std` and `var` follow this same policy.
+- **Escape Hatch**: `PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY=1` forces pandas execution for single-key float-input `sum`/`mean`/`std`/`var` if bit-for-bit identity is required.
 
 ## Requirements and Constraints
 
 To ensure correctness and performance, the following constraints apply:
 
-- **Minimum dataset size**: 100,000 rows. For smaller datasets, the overhead of dispatching to Rust outweighs the benefits, and the library automatically falls back to native Pandas.
-- **Key column(s)**: Must be integer dtype (e.g., `int64`, `int32`). For multi-column groupby, all key columns must be integers. The accelerated path preserves Pandas' index dtype (e.g., `int32` on Windows).
+- **Minimum dataset size**: 100,000 rows for legacy aggregations (`sum`, `mean`, `min`, `max`, `count`). For smaller datasets on these operations, the library automatically falls back to native Pandas. **Note**: Supported `std` and `var` operations are Rust-first by default within their certified dispatch domain regardless of dataset size.
+- **Key column(s)**: Must be integer dtype (e.g., `int64`, `int32`). For multi-column groupby, all key columns must be integers. The accelerated path preserves Pandas' index dtype (e.g., `int32` on numpy-backend pandas).
 - **Maximum key columns**: Up to 10 columns for multi-column groupby.
 - **Value column**: Must be a numeric dtype (integers or floats).
 - **Extension dtypes**: Pandas extension dtypes (e.g., nullable `Int64` / `Float64` using `pd.NA`) are not supported and will trigger a fallback to Pandas.
 - **NaN handling**: `NaN` values in the target column are skipped in aggregations, matching standard Pandas behavior.
-- **Determinism policy (single-key float `sum`/`mean`)**: For identical inputs in the same runtime environment, pandas-booster returns bitwise-identical results across thread counts. `NaN` inputs are skipped; all-`NaN` groups follow existing semantics (`sum -> +0.0`, `mean -> NaN`). Compared with pandas, outputs may differ at the last-bit level (including `+0.0` vs `-0.0`) because pandas-booster uses an implementation-defined deterministic reduction order.
-- **Return types**: Integer aggregations follow Pandas-style dtypes: `sum/min/max/count` return integer results, and `mean` returns `float64`.
+- **Determinism policy (single-key float `sum`/`mean`/`std`/`var`)**: For identical inputs in the same runtime environment, pandas-booster returns bitwise-identical results across thread counts. `NaN` inputs are skipped; all-`NaN` groups follow existing semantics (`sum -> +0.0`, `mean -> NaN`, `std/var -> NaN`). Compared with pandas, outputs may differ at the last-bit level (including `+0.0` vs `-0.0`) because pandas-booster uses an implementation-defined deterministic reduction order.
+- **Return types**: Integer aggregations follow Pandas-style dtypes: `sum/min/max/count` return integer results; `mean/std/var` return `float64`. Standard deviation and variance always use `ddof=1`.
 
 ## Performance
 
@@ -170,6 +191,7 @@ The library is designed for large datasets where multi-core parallelism can be f
 - **Warm:** Average of 20 fresh process executions. Each process runs Cold once and a Warmup once (both discarded), then measures the next run (steady state).
 - **Correctness:** Booster and Polars outputs are validated against a Pandas baseline. For `sort=False`, benchmarks validate Pandas-compatible appearance order (first-seen group order).
 - **Polars sort handling:** Polars does not have a `sort` parameter in `group_by`. For fair comparison, I define `sort=True` as "groupby+agg followed by sorting the result by keys" (cost included in timing), and `sort=False` as "groupby+agg with Pandas-compatible appearance order (first-seen group order)". This ensures all three engines (Pandas, Polars, Booster) are measured under identical conditions.
+- **Profile evidence:** `--profile-json` writes internal single-key `std`/`var` phase timings for the Rust path (`local_build`, `merge`, `reorder`, `materialize`, and Python post-processing) so benchmark reports can separate kernel time from conversion and Series construction overhead.
 - **Speedup baseline:** All speedup values (`x`) use **Pandas** as the baseline (1.0x) within each sort mode.
 - **Optional Polars:** Polars is included in the benchmarks for comparison if installed. If not installed, the benchmark suite proceeds with Pandas vs Booster only.
 
@@ -245,6 +267,12 @@ maturin develop --release
 # Run default benchmarks (standard + high)
 python benches/benchmark.py --samples 20 --output results.md
 
+# Run only selected aggregation functions
+python benches/benchmark.py --agg std --agg var --samples 20 --output results.md
+
+# Save single-key std/var phase-profile evidence as JSON
+python benches/benchmark.py --agg std --agg var --samples 20 --profile-json profile.json
+
 # Include threshold diagnostics as well
 python benches/benchmark.py --cardinality all --diagnostic threshold --sort-mode unsorted --samples 20 --output results.md
 ```
@@ -292,7 +320,7 @@ The release process is automated via the `publish.yml` workflow triggered by ver
    Ensure the environment is ready and push a new tag:
    ```bash
    python -m pip install --upgrade pip
-   pip install "maturin>=1.4,<2.0"
+   pip install "maturin>=1.13,<2.0"
    git tag vX.Y.Z
    git push origin vX.Y.Z
    ```
@@ -300,10 +328,27 @@ The release process is automated via the `publish.yml` workflow triggered by ver
 The workflow builds cross-platform wheels and handles the PyPI upload automatically.
 
 ### Testing
-Run the test suite using `pytest`:
+Run the same local checks that CI runs:
 ```bash
 source .venv/bin/activate
-pytest tests/
+
+# Rust static validation
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+
+# Python quality and release contract checks
+basedpyright --project pyrightconfig.json
+ruff check python tests scripts
+python scripts/check_release_contract.py metadata
+python scripts/check_release_contract.py workflow --file .github/workflows/publish.yml
+
+# Build the extension and run the Python suite
+maturin develop --release
+pytest tests/ -v --strict-markers -m "not stress"
+
+# Optional longer determinism lane, matching the CI stress job
+pytest tests/test_sort_false_determinism.py -v --strict-markers -m stress
 ```
 
 ### Benchmarking
@@ -341,6 +386,10 @@ python benches/benchmark.py --cardinality standard
 # Run only high cardinality benchmarks
 python benches/benchmark.py --cardinality high
 
+# Run only selected aggregation functions
+python benches/benchmark.py --agg std --agg var
+python benches/benchmark.py --agg min --agg max --cardinality high --sort-mode sorted
+
 # Add threshold-neighborhood diagnostics (opt-in)
 python benches/benchmark.py --diagnostic threshold --sort-mode unsorted
 
@@ -354,9 +403,21 @@ python benches/benchmark.py --cardinality high --sort-mode sorted
 # Save results to markdown file
 python benches/benchmark.py --output results.md
 
+# Save internal single-key std/var profile evidence to JSON
+python benches/benchmark.py --agg std --agg var --profile-json profile.json
+
 # Adjust sample count (applies to both cold and warm; default: 5)
 python benches/benchmark.py --samples 20
 ```
+
+Note: `--agg` is repeatable and filters the benchmark to only the selected aggregation functions.
+If omitted, the current default behavior is preserved: the core performance tables benchmark `sum`,
+while the extra single-key evidence section benchmarks `std` and `var`.
+
+Note: `--profile-json` is an internal benchmark diagnostics output. It includes the same
+single-key `std`/`var` evidence cases used by the Markdown report, plus phase breakdowns when a
+Rust-only Booster profile hook is available. Cases that fall back to pandas or require Python
+sorting remain in the JSON with `breakdown: null`.
 
 Note: `--cardinality` is for workload classes (`standard`, `high`, `all`), while
 `--diagnostic` is for internal boundary checks (`none`, `threshold`).

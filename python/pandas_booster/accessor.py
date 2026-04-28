@@ -19,7 +19,7 @@ from ._config import (
 if TYPE_CHECKING:
     from pandas import DataFrame, Series
 
-AggFunc = Literal["sum", "mean", "min", "max", "count"]
+AggFunc = Literal["sum", "mean", "min", "max", "count", "std", "var"]
 
 
 @pd.api.extensions.register_dataframe_accessor("booster")
@@ -27,22 +27,31 @@ class BoosterAccessor:
     """Pandas DataFrame accessor providing Rust-accelerated groupby operations.
 
     Automatically falls back to native Pandas when:
-    - Dataset has fewer than 100,000 rows
+    - Dataset has fewer than 100,000 rows (legacy aggs only: sum, mean, min, max, count)
     - Key column is not integer dtype
     - Value column is not numeric (int/float)
     - Columns are nullable extension dtypes (e.g. pandas Int64) or contain pd.NA
+
+    Note: std and var use pandas-default semantics (ddof=1) and always return float64.
+    Unlike legacy aggs, supported std and var are Rust-first by default regardless of
+    dataset size. This provides significant speedups (up to 1.5x) for high-cardinality
+    workloads, though standard-cardinality single-key cases may remain slower than
+    pandas. The `PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY` environment toggle
+    can be used to force a pandas fallback specifically for single-key float-input
+    sum/mean/std/var operations; it does not broaden to multi-key or int-backed paths.
 
     Examples:
         Single key:
         >>> df = pd.DataFrame({"key": [1, 2, 1], "val": [10.0, 20.0, 30.0]})
         >>> df.booster.groupby("key", "val", "sum")
+        >>> df.booster.groupby("key", "val", "std")
 
         Multiple keys:
         >>> df = pd.DataFrame({"k1": [1, 1, 2], "k2": [10, 20, 10], "val": [1.0, 2.0, 3.0]})
         >>> df.booster.groupby(["k1", "k2"], "val", "sum")
     """
 
-    _SUPPORTED_AGGS: set[str] = {"sum", "mean", "min", "max", "count"}
+    _SUPPORTED_AGGS: set[str] = {"sum", "mean", "min", "max", "count", "std", "var"}
     _MAX_MULTI_KEYS: int = 10
 
     def __init__(self, pandas_obj: DataFrame) -> None:
@@ -77,7 +86,7 @@ class BoosterAccessor:
             by: Column name(s) to group by. Can be a single string or a list of strings.
                 All key columns must be integer dtype for acceleration.
             target: Column name to aggregate (must be numeric).
-            agg: Aggregation function - one of "sum", "mean", "min", "max", "count".
+            agg: Aggregation function - one of "sum", "mean", "min", "max", "count", "std", "var".
             sort: If True (default), sort the result by the group keys to match
                 Pandas default behavior. If False, preserve Pandas' "first-seen"
                 group order (order of appearance in the input).
@@ -114,22 +123,16 @@ class BoosterAccessor:
         key_col = cast(pd.Series, key_col)
         val_col = cast(pd.Series, val_col)
 
-        if len(self._df) < self._get_fallback_threshold():
+        if agg not in {"std", "var"} and len(self._df) < self._get_fallback_threshold():
             return self._pandas_fallback([by], target, agg, sort=sort)
 
-        if not pd.api.types.is_integer_dtype(key_col):
-            return self._pandas_fallback([by], target, agg, sort=sort)
-
-        if _groupby_accel_mod.should_fallback_for_key_dtype(key_col):
-            return self._pandas_fallback([by], target, agg, sort=sort)
-
-        if not self._is_numeric_dtype(val_col):
-            return self._pandas_fallback([by], target, agg, sort=sort)
-
-        if pd.api.types.is_extension_array_dtype(val_col):
-            return self._pandas_fallback([by], target, agg, sort=sort)
-
-        if self._has_nullable_na(key_col) or self._has_nullable_na(val_col):
+        compatibility = _groupby_accel_mod.classify_groupby_compatibility(
+            key_cols=[key_col],
+            val_col=val_col,
+            agg=agg,
+            force_pandas_float_groupby=force_pandas_float_groupby_enabled(),
+        )
+        if not compatibility.supported or compatibility.force_pandas:
             return self._pandas_fallback([by], target, agg, sort=sort)
 
         if (
@@ -158,36 +161,19 @@ class BoosterAccessor:
                 return self._pandas_fallback(by_cols, target, agg, sort=sort)
             key_cols[col_name] = cast(pd.Series, col)
 
-        if len(self._df) < self._get_fallback_threshold():
+        if agg not in {"std", "var"} and len(self._df) < self._get_fallback_threshold():
             return self._pandas_fallback(by_cols, target, agg, sort=sort)
 
-        for col_name in by_cols:
-            col = key_cols[col_name]
-            if not pd.api.types.is_integer_dtype(col):
-                return self._pandas_fallback(by_cols, target, agg, sort=sort)
-            if _groupby_accel_mod.should_fallback_for_key_dtype(col):
-                return self._pandas_fallback(by_cols, target, agg, sort=sort)
-            if self._has_nullable_na(col):
-                return self._pandas_fallback(by_cols, target, agg, sort=sort)
-
-        if not self._is_numeric_dtype(val_col):
-            return self._pandas_fallback(by_cols, target, agg, sort=sort)
-
-        if pd.api.types.is_extension_array_dtype(val_col):
-            return self._pandas_fallback(by_cols, target, agg, sort=sort)
-
-        if self._has_nullable_na(val_col):
+        compatibility = _groupby_accel_mod.classify_groupby_compatibility(
+            key_cols=[key_cols[col_name] for col_name in by_cols],
+            val_col=val_col,
+            agg=agg,
+            force_pandas_float_groupby=force_pandas_float_groupby_enabled(),
+        )
+        if not compatibility.supported or compatibility.force_pandas:
             return self._pandas_fallback(by_cols, target, agg, sort=sort)
 
         return self._rust_groupby_multi(by_cols, target, key_cols, val_col, agg, sort=sort)
-
-    def _is_numeric_dtype(self, series: Series) -> bool:
-        return pd.api.types.is_integer_dtype(series) or pd.api.types.is_float_dtype(series)
-
-    def _has_nullable_na(self, series: Series) -> bool:
-        if pd.api.types.is_extension_array_dtype(series):
-            return bool(series.isna().any())
-        return False
 
     def _pandas_fallback(
         self, by_cols: list[str], target: str, agg: AggFunc, *, sort: bool
@@ -216,15 +202,15 @@ class BoosterAccessor:
             values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
             func_base = f"groupby_{agg}_f64"
 
-        rust_func, needs_python_sort = _groupby_accel_mod.select_rust_groupby_func(
-            rust,
-            func_base,
-            sort=sort,
-            n_rows=len(self._df),
-            force_pandas_sort=force_pandas_sort,
-        )
-
         try:
+            rust_func, needs_python_sort = _groupby_accel_mod.select_rust_groupby_func(
+                rust,
+                func_base,
+                sort=sort,
+                n_rows=len(self._df),
+                force_pandas_sort=force_pandas_sort,
+                context="accessor",
+            )
             result_keys, result_values = rust_func(keys, values)
             result_values_arr = _abi_compat.normalize_result_values(
                 result_values,
@@ -283,15 +269,15 @@ class BoosterAccessor:
             values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
             func_base = f"groupby_multi_{agg}_f64"
 
-        rust_func, needs_python_sort = _groupby_accel_mod.select_rust_groupby_func(
-            rust,
-            func_base,
-            sort=sort,
-            n_rows=len(self._df),
-            force_pandas_sort=force_pandas_sort,
-        )
-
         try:
+            rust_func, needs_python_sort = _groupby_accel_mod.select_rust_groupby_func(
+                rust,
+                func_base,
+                sort=sort,
+                n_rows=len(self._df),
+                force_pandas_sort=force_pandas_sort,
+                context="accessor",
+            )
             rust_result = rust_func(key_arrays, values)
             if not isinstance(rust_result, tuple) or len(rust_result) != 2:
                 _abi_compat.raise_abi_skew(

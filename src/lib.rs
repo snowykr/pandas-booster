@@ -19,7 +19,7 @@
 //!
 //! ## Performance Notes
 //!
-//! - **GIL Release**: All heavy computations use `py.allow_threads()` to release the Python
+//! - **GIL Release**: All heavy computations use `py.detach()` to release the Python
 //!   Global Interpreter Lock, enabling true parallelism.
 //! - **Fallback Threshold**: Datasets smaller than [`FALLBACK_THRESHOLD`] (100,000 rows) should
 //!   use native Pandas instead, as the overhead of Rust dispatch outweighs benefits.
@@ -39,7 +39,9 @@ pub mod zero_copy;
 use crate::radix_groupby::SMALL_DIRECT_THRESHOLD_ELEMS;
 use groupby::{GroupByResultF64, GroupByResultI64};
 use numpy::{IntoPyArray, PyArray1, PyArrayMethods, PyReadonlyArray1};
+use pyo3::types::PyDict;
 use rayon::prelude::*;
+use std::time::Instant;
 
 type MultiGroupByKeysReturn<'py> = Vec<Bound<'py, PyArray1<i64>>>;
 
@@ -51,6 +53,11 @@ type MultiGroupByReturn<'py> = MultiGroupByReturnF64<'py>;
 
 type SingleGroupByReturnF64<'py> = (Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<f64>>);
 type SingleGroupByReturnI64<'py> = (Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>);
+type SingleGroupByProfileReturnF64<'py> = (
+    Bound<'py, PyArray1<i64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyDict>,
+);
 
 // Backwards-friendly alias: most kernels still return f64 values.
 type SingleGroupByReturn<'py> = SingleGroupByReturnF64<'py>;
@@ -60,9 +67,36 @@ fn convert_single_result_f64<'py>(
     result: GroupByResultF64,
 ) -> PyResult<SingleGroupByReturnF64<'py>> {
     let GroupByResultF64 { keys, values } = result;
-    let keys_1d = keys.into_pyarray_bound(py);
-    let values_1d = values.into_pyarray_bound(py);
+    let keys_1d = keys.into_pyarray(py);
+    let values_1d = values.into_pyarray(py);
     Ok((keys_1d, values_1d))
+}
+
+fn build_single_profile_dict<'py>(
+    py: Python<'py>,
+    profile: &groupby::SingleKeyPhaseProfile,
+    materialize_conversion_s: f64,
+) -> PyResult<Bound<'py, PyDict>> {
+    let profile_dict = PyDict::new(py);
+    let materialize_s = profile.materialize_s + materialize_conversion_s;
+    let final_group_count = profile.final_group_count;
+    let partial_group_total = profile.partial_group_total;
+    let partial_to_final_ratio = if final_group_count == 0 {
+        0.0
+    } else {
+        partial_group_total as f64 / final_group_count as f64
+    };
+    let rust_total_s = profile.local_build_s + profile.merge_s + profile.reorder_s + materialize_s;
+
+    profile_dict.set_item("local_build_s", profile.local_build_s)?;
+    profile_dict.set_item("merge_s", profile.merge_s)?;
+    profile_dict.set_item("reorder_s", profile.reorder_s)?;
+    profile_dict.set_item("materialize_s", materialize_s)?;
+    profile_dict.set_item("rust_total_s", rust_total_s)?;
+    profile_dict.set_item("partial_group_total", partial_group_total)?;
+    profile_dict.set_item("final_group_count", final_group_count)?;
+    profile_dict.set_item("partial_to_final_ratio", partial_to_final_ratio)?;
+    Ok(profile_dict)
 }
 
 fn convert_single_result<'py>(
@@ -77,8 +111,8 @@ fn convert_single_result_i64<'py>(
     result: GroupByResultI64,
 ) -> PyResult<SingleGroupByReturnI64<'py>> {
     let GroupByResultI64 { keys, values } = result;
-    let keys_1d = keys.into_pyarray_bound(py);
-    let values_1d = values.into_pyarray_bound(py);
+    let keys_1d = keys.into_pyarray(py);
+    let values_1d = values.into_pyarray(py);
     Ok((keys_1d, values_1d))
 }
 
@@ -86,18 +120,27 @@ fn convert_single_result_i64<'py>(
 /// Below this threshold, Python/Pandas overhead dominates and native Pandas is faster.
 const FALLBACK_THRESHOLD: usize = 100_000;
 
-/// Validates that input arrays have matching lengths and meet the minimum size threshold.
+/// Validates that single-key input arrays have matching lengths.
 ///
 /// # Errors
 /// - `PyValueError` if `keys_len != values_len`
-/// - `PyValueError` if `keys_len < FALLBACK_THRESHOLD`
-fn validate_inputs(keys_len: usize, values_len: usize) -> PyResult<()> {
+fn validate_inputs_len(keys_len: usize, values_len: usize) -> PyResult<()> {
     if keys_len != values_len {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
             "keys and values must have the same length, got {} and {}",
             keys_len, values_len
         )));
     }
+    Ok(())
+}
+
+/// Validates that input arrays have matching lengths and meet the minimum size threshold.
+///
+/// # Errors
+/// - `PyValueError` if `keys_len != values_len`
+/// - `PyValueError` if `keys_len < FALLBACK_THRESHOLD`
+fn validate_inputs(keys_len: usize, values_len: usize) -> PyResult<()> {
+    validate_inputs_len(keys_len, values_len)?;
     if keys_len < FALLBACK_THRESHOLD {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
             "Dataset too small for acceleration (got {}, need at least {}), use pandas directly",
@@ -120,8 +163,7 @@ fn groupby_sum_f64<'py>(
     let values_slice = zero_copy::get_slice_f64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result =
-        py.allow_threads(|| groupby::parallel_groupby_sum_f64(keys_slice, values_slice))?;
+    let result = py.detach(|| groupby::parallel_groupby_sum_f64(keys_slice, values_slice))?;
     convert_single_result(py, result)
 }
 
@@ -136,8 +178,37 @@ fn groupby_mean_f64<'py>(
     let values_slice = zero_copy::get_slice_f64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result =
-        py.allow_threads(|| groupby::parallel_groupby_mean_f64(keys_slice, values_slice))?;
+    let result = py.detach(|| groupby::parallel_groupby_mean_f64(keys_slice, values_slice))?;
+    convert_single_result(py, result)
+}
+
+/// Computes parallel groupby sample variance for f64 values.
+#[pyfunction]
+fn groupby_var_f64<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<SingleGroupByReturn<'py>> {
+    let keys_slice = zero_copy::get_slice_i64(&keys)?;
+    let values_slice = zero_copy::get_slice_f64(&values)?;
+    validate_inputs_len(keys_slice.len(), values_slice.len())?;
+
+    let result = py.detach(|| groupby::parallel_groupby_var_f64(keys_slice, values_slice))?;
+    convert_single_result(py, result)
+}
+
+/// Computes parallel groupby sample standard deviation for f64 values.
+#[pyfunction]
+fn groupby_std_f64<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<SingleGroupByReturn<'py>> {
+    let keys_slice = zero_copy::get_slice_i64(&keys)?;
+    let values_slice = zero_copy::get_slice_f64(&values)?;
+    validate_inputs_len(keys_slice.len(), values_slice.len())?;
+
+    let result = py.detach(|| groupby::parallel_groupby_std_f64(keys_slice, values_slice))?;
     convert_single_result(py, result)
 }
 
@@ -152,8 +223,7 @@ fn groupby_min_f64<'py>(
     let values_slice = zero_copy::get_slice_f64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result =
-        py.allow_threads(|| groupby::parallel_groupby_min_f64(keys_slice, values_slice))?;
+    let result = py.detach(|| groupby::parallel_groupby_min_f64(keys_slice, values_slice))?;
     convert_single_result(py, result)
 }
 
@@ -168,8 +238,7 @@ fn groupby_max_f64<'py>(
     let values_slice = zero_copy::get_slice_f64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result =
-        py.allow_threads(|| groupby::parallel_groupby_max_f64(keys_slice, values_slice))?;
+    let result = py.detach(|| groupby::parallel_groupby_max_f64(keys_slice, values_slice))?;
     convert_single_result(py, result)
 }
 
@@ -184,8 +253,7 @@ fn groupby_sum_i64<'py>(
     let values_slice = zero_copy::get_slice_i64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result =
-        py.allow_threads(|| groupby::parallel_groupby_sum_i64(keys_slice, values_slice))?;
+    let result = py.detach(|| groupby::parallel_groupby_sum_i64(keys_slice, values_slice))?;
     convert_single_result_i64(py, result)
 }
 
@@ -200,8 +268,37 @@ fn groupby_mean_i64<'py>(
     let values_slice = zero_copy::get_slice_i64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result =
-        py.allow_threads(|| groupby::parallel_groupby_mean_i64(keys_slice, values_slice))?;
+    let result = py.detach(|| groupby::parallel_groupby_mean_i64(keys_slice, values_slice))?;
+    convert_single_result(py, result)
+}
+
+/// Computes parallel groupby sample variance for i64 values.
+#[pyfunction]
+fn groupby_var_i64<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, i64>,
+) -> PyResult<SingleGroupByReturn<'py>> {
+    let keys_slice = zero_copy::get_slice_i64(&keys)?;
+    let values_slice = zero_copy::get_slice_i64(&values)?;
+    validate_inputs_len(keys_slice.len(), values_slice.len())?;
+
+    let result = py.detach(|| groupby::parallel_groupby_var_i64(keys_slice, values_slice))?;
+    convert_single_result(py, result)
+}
+
+/// Computes parallel groupby sample standard deviation for i64 values.
+#[pyfunction]
+fn groupby_std_i64<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, i64>,
+) -> PyResult<SingleGroupByReturn<'py>> {
+    let keys_slice = zero_copy::get_slice_i64(&keys)?;
+    let values_slice = zero_copy::get_slice_i64(&values)?;
+    validate_inputs_len(keys_slice.len(), values_slice.len())?;
+
+    let result = py.detach(|| groupby::parallel_groupby_std_i64(keys_slice, values_slice))?;
     convert_single_result(py, result)
 }
 
@@ -216,8 +313,7 @@ fn groupby_min_i64<'py>(
     let values_slice = zero_copy::get_slice_i64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result =
-        py.allow_threads(|| groupby::parallel_groupby_min_i64(keys_slice, values_slice))?;
+    let result = py.detach(|| groupby::parallel_groupby_min_i64(keys_slice, values_slice))?;
     convert_single_result_i64(py, result)
 }
 
@@ -232,8 +328,7 @@ fn groupby_max_i64<'py>(
     let values_slice = zero_copy::get_slice_i64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result =
-        py.allow_threads(|| groupby::parallel_groupby_max_i64(keys_slice, values_slice))?;
+    let result = py.detach(|| groupby::parallel_groupby_max_i64(keys_slice, values_slice))?;
     convert_single_result_i64(py, result)
 }
 
@@ -248,8 +343,7 @@ fn groupby_count_f64<'py>(
     let values_slice = zero_copy::get_slice_f64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result =
-        py.allow_threads(|| groupby::parallel_groupby_count_f64(keys_slice, values_slice))?;
+    let result = py.detach(|| groupby::parallel_groupby_count_f64(keys_slice, values_slice))?;
     convert_single_result_i64(py, result)
 }
 
@@ -264,8 +358,7 @@ fn groupby_count_i64<'py>(
     let values_slice = zero_copy::get_slice_i64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result =
-        py.allow_threads(|| groupby::parallel_groupby_count_i64(keys_slice, values_slice))?;
+    let result = py.detach(|| groupby::parallel_groupby_count_i64(keys_slice, values_slice))?;
     convert_single_result_i64(py, result)
 }
 
@@ -284,7 +377,7 @@ fn groupby_sum_f64_sorted<'py>(
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
     let result =
-        py.allow_threads(|| groupby::parallel_groupby_sum_f64_sorted(keys_slice, values_slice))?;
+        py.detach(|| groupby::parallel_groupby_sum_f64_sorted(keys_slice, values_slice))?;
     convert_single_result(py, result)
 }
 
@@ -299,8 +392,82 @@ fn groupby_mean_f64_sorted<'py>(
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
     let result =
-        py.allow_threads(|| groupby::parallel_groupby_mean_f64_sorted(keys_slice, values_slice))?;
+        py.detach(|| groupby::parallel_groupby_mean_f64_sorted(keys_slice, values_slice))?;
     convert_single_result(py, result)
+}
+
+#[pyfunction]
+fn groupby_var_f64_sorted<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<SingleGroupByReturn<'py>> {
+    let keys_slice = zero_copy::get_slice_i64(&keys)?;
+    let values_slice = zero_copy::get_slice_f64(&values)?;
+    validate_inputs_len(keys_slice.len(), values_slice.len())?;
+
+    let result =
+        py.detach(|| groupby::parallel_groupby_var_f64_sorted(keys_slice, values_slice))?;
+    convert_single_result(py, result)
+}
+
+#[pyfunction]
+fn profile_groupby_var_f64_sorted<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<SingleGroupByProfileReturnF64<'py>> {
+    let keys_slice = zero_copy::get_slice_i64(&keys)?;
+    let values_slice = zero_copy::get_slice_f64(&values)?;
+    validate_inputs_len(keys_slice.len(), values_slice.len())?;
+
+    let profiled =
+        py.detach(|| groupby::profile_parallel_groupby_var_f64_sorted(keys_slice, values_slice))?;
+    let materialize_start = Instant::now();
+    let (keys_1d, values_1d) = convert_single_result_f64(py, profiled.result)?;
+    let profile_dict = build_single_profile_dict(
+        py,
+        &profiled.profile,
+        materialize_start.elapsed().as_secs_f64(),
+    )?;
+    Ok((keys_1d, values_1d, profile_dict))
+}
+
+#[pyfunction]
+fn groupby_std_f64_sorted<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<SingleGroupByReturn<'py>> {
+    let keys_slice = zero_copy::get_slice_i64(&keys)?;
+    let values_slice = zero_copy::get_slice_f64(&values)?;
+    validate_inputs_len(keys_slice.len(), values_slice.len())?;
+
+    let result =
+        py.detach(|| groupby::parallel_groupby_std_f64_sorted(keys_slice, values_slice))?;
+    convert_single_result(py, result)
+}
+
+#[pyfunction]
+fn profile_groupby_std_f64_sorted<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<SingleGroupByProfileReturnF64<'py>> {
+    let keys_slice = zero_copy::get_slice_i64(&keys)?;
+    let values_slice = zero_copy::get_slice_f64(&values)?;
+    validate_inputs_len(keys_slice.len(), values_slice.len())?;
+
+    let profiled =
+        py.detach(|| groupby::profile_parallel_groupby_std_f64_sorted(keys_slice, values_slice))?;
+    let materialize_start = Instant::now();
+    let (keys_1d, values_1d) = convert_single_result_f64(py, profiled.result)?;
+    let profile_dict = build_single_profile_dict(
+        py,
+        &profiled.profile,
+        materialize_start.elapsed().as_secs_f64(),
+    )?;
+    Ok((keys_1d, values_1d, profile_dict))
 }
 
 #[pyfunction]
@@ -314,7 +481,7 @@ fn groupby_min_f64_sorted<'py>(
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
     let result =
-        py.allow_threads(|| groupby::parallel_groupby_min_f64_sorted(keys_slice, values_slice))?;
+        py.detach(|| groupby::parallel_groupby_min_f64_sorted(keys_slice, values_slice))?;
     convert_single_result(py, result)
 }
 
@@ -329,7 +496,7 @@ fn groupby_max_f64_sorted<'py>(
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
     let result =
-        py.allow_threads(|| groupby::parallel_groupby_max_f64_sorted(keys_slice, values_slice))?;
+        py.detach(|| groupby::parallel_groupby_max_f64_sorted(keys_slice, values_slice))?;
     convert_single_result(py, result)
 }
 
@@ -344,7 +511,7 @@ fn groupby_count_f64_sorted<'py>(
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
     let result =
-        py.allow_threads(|| groupby::parallel_groupby_count_f64_sorted(keys_slice, values_slice))?;
+        py.detach(|| groupby::parallel_groupby_count_f64_sorted(keys_slice, values_slice))?;
     convert_single_result_i64(py, result)
 }
 
@@ -359,7 +526,7 @@ fn groupby_sum_i64_sorted<'py>(
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
     let result =
-        py.allow_threads(|| groupby::parallel_groupby_sum_i64_sorted(keys_slice, values_slice))?;
+        py.detach(|| groupby::parallel_groupby_sum_i64_sorted(keys_slice, values_slice))?;
     convert_single_result_i64(py, result)
 }
 
@@ -374,7 +541,37 @@ fn groupby_mean_i64_sorted<'py>(
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
     let result =
-        py.allow_threads(|| groupby::parallel_groupby_mean_i64_sorted(keys_slice, values_slice))?;
+        py.detach(|| groupby::parallel_groupby_mean_i64_sorted(keys_slice, values_slice))?;
+    convert_single_result(py, result)
+}
+
+#[pyfunction]
+fn groupby_var_i64_sorted<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, i64>,
+) -> PyResult<SingleGroupByReturn<'py>> {
+    let keys_slice = zero_copy::get_slice_i64(&keys)?;
+    let values_slice = zero_copy::get_slice_i64(&values)?;
+    validate_inputs_len(keys_slice.len(), values_slice.len())?;
+
+    let result =
+        py.detach(|| groupby::parallel_groupby_var_i64_sorted(keys_slice, values_slice))?;
+    convert_single_result(py, result)
+}
+
+#[pyfunction]
+fn groupby_std_i64_sorted<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, i64>,
+) -> PyResult<SingleGroupByReturn<'py>> {
+    let keys_slice = zero_copy::get_slice_i64(&keys)?;
+    let values_slice = zero_copy::get_slice_i64(&values)?;
+    validate_inputs_len(keys_slice.len(), values_slice.len())?;
+
+    let result =
+        py.detach(|| groupby::parallel_groupby_std_i64_sorted(keys_slice, values_slice))?;
     convert_single_result(py, result)
 }
 
@@ -389,7 +586,7 @@ fn groupby_min_i64_sorted<'py>(
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
     let result =
-        py.allow_threads(|| groupby::parallel_groupby_min_i64_sorted(keys_slice, values_slice))?;
+        py.detach(|| groupby::parallel_groupby_min_i64_sorted(keys_slice, values_slice))?;
     convert_single_result_i64(py, result)
 }
 
@@ -404,7 +601,7 @@ fn groupby_max_i64_sorted<'py>(
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
     let result =
-        py.allow_threads(|| groupby::parallel_groupby_max_i64_sorted(keys_slice, values_slice))?;
+        py.detach(|| groupby::parallel_groupby_max_i64_sorted(keys_slice, values_slice))?;
     convert_single_result_i64(py, result)
 }
 
@@ -419,7 +616,7 @@ fn groupby_count_i64_sorted<'py>(
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
     let result =
-        py.allow_threads(|| groupby::parallel_groupby_count_i64_sorted(keys_slice, values_slice))?;
+        py.detach(|| groupby::parallel_groupby_count_i64_sorted(keys_slice, values_slice))?;
     convert_single_result_i64(py, result)
 }
 
@@ -437,9 +634,8 @@ fn groupby_sum_f64_firstseen_u32<'py>(
     let values_slice = zero_copy::get_slice_f64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby::parallel_groupby_sum_f64_firstseen_u32(keys_slice, values_slice)
-    })?;
+    let result =
+        py.detach(|| groupby::parallel_groupby_sum_f64_firstseen_u32(keys_slice, values_slice))?;
     convert_single_result(py, result)
 }
 
@@ -453,9 +649,8 @@ fn groupby_sum_f64_firstseen_u64<'py>(
     let values_slice = zero_copy::get_slice_f64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby::parallel_groupby_sum_f64_firstseen_u64(keys_slice, values_slice)
-    })?;
+    let result =
+        py.detach(|| groupby::parallel_groupby_sum_f64_firstseen_u64(keys_slice, values_slice))?;
     convert_single_result(py, result)
 }
 
@@ -469,10 +664,85 @@ fn groupby_mean_f64_firstseen_u32<'py>(
     let values_slice = zero_copy::get_slice_f64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby::parallel_groupby_mean_f64_firstseen_u32(keys_slice, values_slice)
-    })?;
+    let result =
+        py.detach(|| groupby::parallel_groupby_mean_f64_firstseen_u32(keys_slice, values_slice))?;
     convert_single_result(py, result)
+}
+
+#[pyfunction]
+fn groupby_var_f64_firstseen_u32<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<SingleGroupByReturn<'py>> {
+    let keys_slice = zero_copy::get_slice_i64(&keys)?;
+    let values_slice = zero_copy::get_slice_f64(&values)?;
+    validate_inputs_len(keys_slice.len(), values_slice.len())?;
+
+    let result =
+        py.detach(|| groupby::parallel_groupby_var_f64_firstseen_u32(keys_slice, values_slice))?;
+    convert_single_result(py, result)
+}
+
+#[pyfunction]
+fn profile_groupby_var_f64_firstseen_u32<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<SingleGroupByProfileReturnF64<'py>> {
+    let keys_slice = zero_copy::get_slice_i64(&keys)?;
+    let values_slice = zero_copy::get_slice_f64(&values)?;
+    validate_inputs_len(keys_slice.len(), values_slice.len())?;
+
+    let profiled = py.detach(|| {
+        groupby::profile_parallel_groupby_var_f64_firstseen_u32(keys_slice, values_slice)
+    })?;
+    let materialize_start = Instant::now();
+    let (keys_1d, values_1d) = convert_single_result_f64(py, profiled.result)?;
+    let profile_dict = build_single_profile_dict(
+        py,
+        &profiled.profile,
+        materialize_start.elapsed().as_secs_f64(),
+    )?;
+    Ok((keys_1d, values_1d, profile_dict))
+}
+
+#[pyfunction]
+fn groupby_std_f64_firstseen_u32<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<SingleGroupByReturn<'py>> {
+    let keys_slice = zero_copy::get_slice_i64(&keys)?;
+    let values_slice = zero_copy::get_slice_f64(&values)?;
+    validate_inputs_len(keys_slice.len(), values_slice.len())?;
+
+    let result =
+        py.detach(|| groupby::parallel_groupby_std_f64_firstseen_u32(keys_slice, values_slice))?;
+    convert_single_result(py, result)
+}
+
+#[pyfunction]
+fn profile_groupby_std_f64_firstseen_u32<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<SingleGroupByProfileReturnF64<'py>> {
+    let keys_slice = zero_copy::get_slice_i64(&keys)?;
+    let values_slice = zero_copy::get_slice_f64(&values)?;
+    validate_inputs_len(keys_slice.len(), values_slice.len())?;
+
+    let profiled = py.detach(|| {
+        groupby::profile_parallel_groupby_std_f64_firstseen_u32(keys_slice, values_slice)
+    })?;
+    let materialize_start = Instant::now();
+    let (keys_1d, values_1d) = convert_single_result_f64(py, profiled.result)?;
+    let profile_dict = build_single_profile_dict(
+        py,
+        &profiled.profile,
+        materialize_start.elapsed().as_secs_f64(),
+    )?;
+    Ok((keys_1d, values_1d, profile_dict))
 }
 
 #[pyfunction]
@@ -485,10 +755,85 @@ fn groupby_mean_f64_firstseen_u64<'py>(
     let values_slice = zero_copy::get_slice_f64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby::parallel_groupby_mean_f64_firstseen_u64(keys_slice, values_slice)
-    })?;
+    let result =
+        py.detach(|| groupby::parallel_groupby_mean_f64_firstseen_u64(keys_slice, values_slice))?;
     convert_single_result(py, result)
+}
+
+#[pyfunction]
+fn groupby_var_f64_firstseen_u64<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<SingleGroupByReturn<'py>> {
+    let keys_slice = zero_copy::get_slice_i64(&keys)?;
+    let values_slice = zero_copy::get_slice_f64(&values)?;
+    validate_inputs_len(keys_slice.len(), values_slice.len())?;
+
+    let result =
+        py.detach(|| groupby::parallel_groupby_var_f64_firstseen_u64(keys_slice, values_slice))?;
+    convert_single_result(py, result)
+}
+
+#[pyfunction]
+fn profile_groupby_var_f64_firstseen_u64<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<SingleGroupByProfileReturnF64<'py>> {
+    let keys_slice = zero_copy::get_slice_i64(&keys)?;
+    let values_slice = zero_copy::get_slice_f64(&values)?;
+    validate_inputs_len(keys_slice.len(), values_slice.len())?;
+
+    let profiled = py.detach(|| {
+        groupby::profile_parallel_groupby_var_f64_firstseen_u64(keys_slice, values_slice)
+    })?;
+    let materialize_start = Instant::now();
+    let (keys_1d, values_1d) = convert_single_result_f64(py, profiled.result)?;
+    let profile_dict = build_single_profile_dict(
+        py,
+        &profiled.profile,
+        materialize_start.elapsed().as_secs_f64(),
+    )?;
+    Ok((keys_1d, values_1d, profile_dict))
+}
+
+#[pyfunction]
+fn groupby_std_f64_firstseen_u64<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<SingleGroupByReturn<'py>> {
+    let keys_slice = zero_copy::get_slice_i64(&keys)?;
+    let values_slice = zero_copy::get_slice_f64(&values)?;
+    validate_inputs_len(keys_slice.len(), values_slice.len())?;
+
+    let result =
+        py.detach(|| groupby::parallel_groupby_std_f64_firstseen_u64(keys_slice, values_slice))?;
+    convert_single_result(py, result)
+}
+
+#[pyfunction]
+fn profile_groupby_std_f64_firstseen_u64<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<SingleGroupByProfileReturnF64<'py>> {
+    let keys_slice = zero_copy::get_slice_i64(&keys)?;
+    let values_slice = zero_copy::get_slice_f64(&values)?;
+    validate_inputs_len(keys_slice.len(), values_slice.len())?;
+
+    let profiled = py.detach(|| {
+        groupby::profile_parallel_groupby_std_f64_firstseen_u64(keys_slice, values_slice)
+    })?;
+    let materialize_start = Instant::now();
+    let (keys_1d, values_1d) = convert_single_result_f64(py, profiled.result)?;
+    let profile_dict = build_single_profile_dict(
+        py,
+        &profiled.profile,
+        materialize_start.elapsed().as_secs_f64(),
+    )?;
+    Ok((keys_1d, values_1d, profile_dict))
 }
 
 #[pyfunction]
@@ -501,9 +846,8 @@ fn groupby_min_f64_firstseen_u32<'py>(
     let values_slice = zero_copy::get_slice_f64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby::parallel_groupby_min_f64_firstseen_u32(keys_slice, values_slice)
-    })?;
+    let result =
+        py.detach(|| groupby::parallel_groupby_min_f64_firstseen_u32(keys_slice, values_slice))?;
     convert_single_result(py, result)
 }
 
@@ -517,9 +861,8 @@ fn groupby_min_f64_firstseen_u64<'py>(
     let values_slice = zero_copy::get_slice_f64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby::parallel_groupby_min_f64_firstseen_u64(keys_slice, values_slice)
-    })?;
+    let result =
+        py.detach(|| groupby::parallel_groupby_min_f64_firstseen_u64(keys_slice, values_slice))?;
     convert_single_result(py, result)
 }
 
@@ -533,9 +876,8 @@ fn groupby_max_f64_firstseen_u32<'py>(
     let values_slice = zero_copy::get_slice_f64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby::parallel_groupby_max_f64_firstseen_u32(keys_slice, values_slice)
-    })?;
+    let result =
+        py.detach(|| groupby::parallel_groupby_max_f64_firstseen_u32(keys_slice, values_slice))?;
     convert_single_result(py, result)
 }
 
@@ -549,9 +891,8 @@ fn groupby_max_f64_firstseen_u64<'py>(
     let values_slice = zero_copy::get_slice_f64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby::parallel_groupby_max_f64_firstseen_u64(keys_slice, values_slice)
-    })?;
+    let result =
+        py.detach(|| groupby::parallel_groupby_max_f64_firstseen_u64(keys_slice, values_slice))?;
     convert_single_result(py, result)
 }
 
@@ -565,9 +906,8 @@ fn groupby_count_f64_firstseen_u32<'py>(
     let values_slice = zero_copy::get_slice_f64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby::parallel_groupby_count_f64_firstseen_u32(keys_slice, values_slice)
-    })?;
+    let result =
+        py.detach(|| groupby::parallel_groupby_count_f64_firstseen_u32(keys_slice, values_slice))?;
     convert_single_result_i64(py, result)
 }
 
@@ -581,9 +921,8 @@ fn groupby_count_f64_firstseen_u64<'py>(
     let values_slice = zero_copy::get_slice_f64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby::parallel_groupby_count_f64_firstseen_u64(keys_slice, values_slice)
-    })?;
+    let result =
+        py.detach(|| groupby::parallel_groupby_count_f64_firstseen_u64(keys_slice, values_slice))?;
     convert_single_result_i64(py, result)
 }
 
@@ -597,9 +936,8 @@ fn groupby_sum_i64_firstseen_u32<'py>(
     let values_slice = zero_copy::get_slice_i64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby::parallel_groupby_sum_i64_firstseen_u32(keys_slice, values_slice)
-    })?;
+    let result =
+        py.detach(|| groupby::parallel_groupby_sum_i64_firstseen_u32(keys_slice, values_slice))?;
     convert_single_result_i64(py, result)
 }
 
@@ -613,9 +951,8 @@ fn groupby_sum_i64_firstseen_u64<'py>(
     let values_slice = zero_copy::get_slice_i64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby::parallel_groupby_sum_i64_firstseen_u64(keys_slice, values_slice)
-    })?;
+    let result =
+        py.detach(|| groupby::parallel_groupby_sum_i64_firstseen_u64(keys_slice, values_slice))?;
     convert_single_result_i64(py, result)
 }
 
@@ -629,9 +966,38 @@ fn groupby_mean_i64_firstseen_u32<'py>(
     let values_slice = zero_copy::get_slice_i64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby::parallel_groupby_mean_i64_firstseen_u32(keys_slice, values_slice)
-    })?;
+    let result =
+        py.detach(|| groupby::parallel_groupby_mean_i64_firstseen_u32(keys_slice, values_slice))?;
+    convert_single_result(py, result)
+}
+
+#[pyfunction]
+fn groupby_var_i64_firstseen_u32<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, i64>,
+) -> PyResult<SingleGroupByReturn<'py>> {
+    let keys_slice = zero_copy::get_slice_i64(&keys)?;
+    let values_slice = zero_copy::get_slice_i64(&values)?;
+    validate_inputs_len(keys_slice.len(), values_slice.len())?;
+
+    let result =
+        py.detach(|| groupby::parallel_groupby_var_i64_firstseen_u32(keys_slice, values_slice))?;
+    convert_single_result(py, result)
+}
+
+#[pyfunction]
+fn groupby_std_i64_firstseen_u32<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, i64>,
+) -> PyResult<SingleGroupByReturn<'py>> {
+    let keys_slice = zero_copy::get_slice_i64(&keys)?;
+    let values_slice = zero_copy::get_slice_i64(&values)?;
+    validate_inputs_len(keys_slice.len(), values_slice.len())?;
+
+    let result =
+        py.detach(|| groupby::parallel_groupby_std_i64_firstseen_u32(keys_slice, values_slice))?;
     convert_single_result(py, result)
 }
 
@@ -645,9 +1011,38 @@ fn groupby_mean_i64_firstseen_u64<'py>(
     let values_slice = zero_copy::get_slice_i64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby::parallel_groupby_mean_i64_firstseen_u64(keys_slice, values_slice)
-    })?;
+    let result =
+        py.detach(|| groupby::parallel_groupby_mean_i64_firstseen_u64(keys_slice, values_slice))?;
+    convert_single_result(py, result)
+}
+
+#[pyfunction]
+fn groupby_var_i64_firstseen_u64<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, i64>,
+) -> PyResult<SingleGroupByReturn<'py>> {
+    let keys_slice = zero_copy::get_slice_i64(&keys)?;
+    let values_slice = zero_copy::get_slice_i64(&values)?;
+    validate_inputs_len(keys_slice.len(), values_slice.len())?;
+
+    let result =
+        py.detach(|| groupby::parallel_groupby_var_i64_firstseen_u64(keys_slice, values_slice))?;
+    convert_single_result(py, result)
+}
+
+#[pyfunction]
+fn groupby_std_i64_firstseen_u64<'py>(
+    py: Python<'py>,
+    keys: PyReadonlyArray1<'py, i64>,
+    values: PyReadonlyArray1<'py, i64>,
+) -> PyResult<SingleGroupByReturn<'py>> {
+    let keys_slice = zero_copy::get_slice_i64(&keys)?;
+    let values_slice = zero_copy::get_slice_i64(&values)?;
+    validate_inputs_len(keys_slice.len(), values_slice.len())?;
+
+    let result =
+        py.detach(|| groupby::parallel_groupby_std_i64_firstseen_u64(keys_slice, values_slice))?;
     convert_single_result(py, result)
 }
 
@@ -661,9 +1056,8 @@ fn groupby_min_i64_firstseen_u32<'py>(
     let values_slice = zero_copy::get_slice_i64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby::parallel_groupby_min_i64_firstseen_u32(keys_slice, values_slice)
-    })?;
+    let result =
+        py.detach(|| groupby::parallel_groupby_min_i64_firstseen_u32(keys_slice, values_slice))?;
     convert_single_result_i64(py, result)
 }
 
@@ -677,9 +1071,8 @@ fn groupby_min_i64_firstseen_u64<'py>(
     let values_slice = zero_copy::get_slice_i64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby::parallel_groupby_min_i64_firstseen_u64(keys_slice, values_slice)
-    })?;
+    let result =
+        py.detach(|| groupby::parallel_groupby_min_i64_firstseen_u64(keys_slice, values_slice))?;
     convert_single_result_i64(py, result)
 }
 
@@ -693,9 +1086,8 @@ fn groupby_max_i64_firstseen_u32<'py>(
     let values_slice = zero_copy::get_slice_i64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby::parallel_groupby_max_i64_firstseen_u32(keys_slice, values_slice)
-    })?;
+    let result =
+        py.detach(|| groupby::parallel_groupby_max_i64_firstseen_u32(keys_slice, values_slice))?;
     convert_single_result_i64(py, result)
 }
 
@@ -709,9 +1101,8 @@ fn groupby_max_i64_firstseen_u64<'py>(
     let values_slice = zero_copy::get_slice_i64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby::parallel_groupby_max_i64_firstseen_u64(keys_slice, values_slice)
-    })?;
+    let result =
+        py.detach(|| groupby::parallel_groupby_max_i64_firstseen_u64(keys_slice, values_slice))?;
     convert_single_result_i64(py, result)
 }
 
@@ -725,9 +1116,8 @@ fn groupby_count_i64_firstseen_u32<'py>(
     let values_slice = zero_copy::get_slice_i64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby::parallel_groupby_count_i64_firstseen_u32(keys_slice, values_slice)
-    })?;
+    let result =
+        py.detach(|| groupby::parallel_groupby_count_i64_firstseen_u32(keys_slice, values_slice))?;
     convert_single_result_i64(py, result)
 }
 
@@ -741,9 +1131,8 @@ fn groupby_count_i64_firstseen_u64<'py>(
     let values_slice = zero_copy::get_slice_i64(&values)?;
     validate_inputs(keys_slice.len(), values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby::parallel_groupby_count_i64_firstseen_u64(keys_slice, values_slice)
-    })?;
+    let result =
+        py.detach(|| groupby::parallel_groupby_count_i64_firstseen_u64(keys_slice, values_slice))?;
     convert_single_result_i64(py, result)
 }
 
@@ -763,8 +1152,8 @@ fn get_thread_count() -> usize {
 // Multi-column groupby functions
 // =============================================================================
 
-/// Validates multi-key inputs: all columns same length, meets threshold.
-fn validate_multi_inputs(key_lengths: &[usize], values_len: usize) -> PyResult<()> {
+/// Validates multi-key inputs: all columns same length.
+fn validate_multi_inputs_len(key_lengths: &[usize], values_len: usize) -> PyResult<()> {
     if key_lengths.is_empty() {
         return Err(pyo3::exceptions::PyValueError::new_err(
             "At least one key column is required",
@@ -784,6 +1173,12 @@ fn validate_multi_inputs(key_lengths: &[usize], values_len: usize) -> PyResult<(
             )));
         }
     }
+    Ok(())
+}
+
+/// Validates multi-key inputs: all columns same length, meets threshold.
+fn validate_multi_inputs(key_lengths: &[usize], values_len: usize) -> PyResult<()> {
+    validate_multi_inputs_len(key_lengths, values_len)?;
     if values_len < FALLBACK_THRESHOLD {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
             "Dataset too small for acceleration (got {}, need at least {}), use pandas directly",
@@ -811,8 +1206,7 @@ fn groupby_multi_sum_f64<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result =
-        py.allow_threads(|| groupby_multi::multi_groupby_sum_f64(&key_slices, values_slice))?;
+    let result = py.detach(|| groupby_multi::multi_groupby_sum_f64(&key_slices, values_slice))?;
 
     convert_multi_result(py, result)
 }
@@ -833,8 +1227,49 @@ fn groupby_multi_mean_f64<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result =
-        py.allow_threads(|| groupby_multi::multi_groupby_mean_f64(&key_slices, values_slice))?;
+    let result = py.detach(|| groupby_multi::multi_groupby_mean_f64(&key_slices, values_slice))?;
+
+    convert_multi_result(py, result)
+}
+
+/// Multi-column groupby variance for f64 values.
+#[pyfunction]
+fn groupby_multi_var_f64<'py>(
+    py: Python<'py>,
+    key_cols: Vec<PyReadonlyArray1<'py, i64>>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<MultiGroupByReturn<'py>> {
+    let values_slice = zero_copy::get_slice_f64(&values)?;
+    let key_slices: Vec<&[i64]> = key_cols
+        .iter()
+        .map(|col| zero_copy::get_slice_i64(col))
+        .collect::<PyResult<Vec<_>>>()?;
+
+    let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
+    validate_multi_inputs_len(&key_lengths, values_slice.len())?;
+
+    let result = py.detach(|| groupby_multi::multi_groupby_var_f64(&key_slices, values_slice))?;
+
+    convert_multi_result(py, result)
+}
+
+/// Multi-column groupby standard deviation for f64 values.
+#[pyfunction]
+fn groupby_multi_std_f64<'py>(
+    py: Python<'py>,
+    key_cols: Vec<PyReadonlyArray1<'py, i64>>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<MultiGroupByReturn<'py>> {
+    let values_slice = zero_copy::get_slice_f64(&values)?;
+    let key_slices: Vec<&[i64]> = key_cols
+        .iter()
+        .map(|col| zero_copy::get_slice_i64(col))
+        .collect::<PyResult<Vec<_>>>()?;
+
+    let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
+    validate_multi_inputs_len(&key_lengths, values_slice.len())?;
+
+    let result = py.detach(|| groupby_multi::multi_groupby_std_f64(&key_slices, values_slice))?;
 
     convert_multi_result(py, result)
 }
@@ -855,8 +1290,7 @@ fn groupby_multi_min_f64<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result =
-        py.allow_threads(|| groupby_multi::multi_groupby_min_f64(&key_slices, values_slice))?;
+    let result = py.detach(|| groupby_multi::multi_groupby_min_f64(&key_slices, values_slice))?;
 
     convert_multi_result(py, result)
 }
@@ -877,8 +1311,7 @@ fn groupby_multi_max_f64<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result =
-        py.allow_threads(|| groupby_multi::multi_groupby_max_f64(&key_slices, values_slice))?;
+    let result = py.detach(|| groupby_multi::multi_groupby_max_f64(&key_slices, values_slice))?;
 
     convert_multi_result(py, result)
 }
@@ -899,8 +1332,7 @@ fn groupby_multi_sum_i64<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result =
-        py.allow_threads(|| groupby_multi::multi_groupby_sum_i64(&key_slices, values_slice))?;
+    let result = py.detach(|| groupby_multi::multi_groupby_sum_i64(&key_slices, values_slice))?;
 
     convert_multi_result_i64(py, result)
 }
@@ -921,8 +1353,49 @@ fn groupby_multi_mean_i64<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result =
-        py.allow_threads(|| groupby_multi::multi_groupby_mean_i64(&key_slices, values_slice))?;
+    let result = py.detach(|| groupby_multi::multi_groupby_mean_i64(&key_slices, values_slice))?;
+
+    convert_multi_result(py, result)
+}
+
+/// Multi-column groupby variance for i64 values.
+#[pyfunction]
+fn groupby_multi_var_i64<'py>(
+    py: Python<'py>,
+    key_cols: Vec<PyReadonlyArray1<'py, i64>>,
+    values: PyReadonlyArray1<'py, i64>,
+) -> PyResult<MultiGroupByReturn<'py>> {
+    let values_slice = zero_copy::get_slice_i64(&values)?;
+    let key_slices: Vec<&[i64]> = key_cols
+        .iter()
+        .map(|col| zero_copy::get_slice_i64(col))
+        .collect::<PyResult<Vec<_>>>()?;
+
+    let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
+    validate_multi_inputs_len(&key_lengths, values_slice.len())?;
+
+    let result = py.detach(|| groupby_multi::multi_groupby_var_i64(&key_slices, values_slice))?;
+
+    convert_multi_result(py, result)
+}
+
+/// Multi-column groupby standard deviation for i64 values.
+#[pyfunction]
+fn groupby_multi_std_i64<'py>(
+    py: Python<'py>,
+    key_cols: Vec<PyReadonlyArray1<'py, i64>>,
+    values: PyReadonlyArray1<'py, i64>,
+) -> PyResult<MultiGroupByReturn<'py>> {
+    let values_slice = zero_copy::get_slice_i64(&values)?;
+    let key_slices: Vec<&[i64]> = key_cols
+        .iter()
+        .map(|col| zero_copy::get_slice_i64(col))
+        .collect::<PyResult<Vec<_>>>()?;
+
+    let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
+    validate_multi_inputs_len(&key_lengths, values_slice.len())?;
+
+    let result = py.detach(|| groupby_multi::multi_groupby_std_i64(&key_slices, values_slice))?;
 
     convert_multi_result(py, result)
 }
@@ -943,8 +1416,7 @@ fn groupby_multi_min_i64<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result =
-        py.allow_threads(|| groupby_multi::multi_groupby_min_i64(&key_slices, values_slice))?;
+    let result = py.detach(|| groupby_multi::multi_groupby_min_i64(&key_slices, values_slice))?;
 
     convert_multi_result_i64(py, result)
 }
@@ -965,8 +1437,7 @@ fn groupby_multi_max_i64<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result =
-        py.allow_threads(|| groupby_multi::multi_groupby_max_i64(&key_slices, values_slice))?;
+    let result = py.detach(|| groupby_multi::multi_groupby_max_i64(&key_slices, values_slice))?;
 
     convert_multi_result_i64(py, result)
 }
@@ -987,8 +1458,7 @@ fn groupby_multi_count_f64<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result =
-        py.allow_threads(|| groupby_multi::multi_groupby_count_f64(&key_slices, values_slice))?;
+    let result = py.detach(|| groupby_multi::multi_groupby_count_f64(&key_slices, values_slice))?;
 
     convert_multi_result_i64(py, result)
 }
@@ -1009,8 +1479,7 @@ fn groupby_multi_count_i64<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result =
-        py.allow_threads(|| groupby_multi::multi_groupby_count_i64(&key_slices, values_slice))?;
+    let result = py.detach(|| groupby_multi::multi_groupby_count_i64(&key_slices, values_slice))?;
 
     convert_multi_result_i64(py, result)
 }
@@ -1035,8 +1504,8 @@ fn groupby_multi_sum_f64_sorted<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py
-        .allow_threads(|| groupby_multi::multi_groupby_sum_f64_sorted(&key_slices, values_slice))?;
+    let result =
+        py.detach(|| groupby_multi::multi_groupby_sum_f64_sorted(&key_slices, values_slice))?;
 
     convert_multi_result(py, result)
 }
@@ -1057,9 +1526,52 @@ fn groupby_multi_mean_f64_sorted<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby_multi::multi_groupby_mean_f64_sorted(&key_slices, values_slice)
-    })?;
+    let result =
+        py.detach(|| groupby_multi::multi_groupby_mean_f64_sorted(&key_slices, values_slice))?;
+
+    convert_multi_result(py, result)
+}
+
+/// Multi-column groupby variance for f64 values (sorted by key tuple).
+#[pyfunction]
+fn groupby_multi_var_f64_sorted<'py>(
+    py: Python<'py>,
+    key_cols: Vec<PyReadonlyArray1<'py, i64>>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<MultiGroupByReturn<'py>> {
+    let values_slice = zero_copy::get_slice_f64(&values)?;
+    let key_slices: Vec<&[i64]> = key_cols
+        .iter()
+        .map(|col| zero_copy::get_slice_i64(col))
+        .collect::<PyResult<Vec<_>>>()?;
+
+    let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
+    validate_multi_inputs_len(&key_lengths, values_slice.len())?;
+
+    let result =
+        py.detach(|| groupby_multi::multi_groupby_var_f64_sorted(&key_slices, values_slice))?;
+
+    convert_multi_result(py, result)
+}
+
+/// Multi-column groupby standard deviation for f64 values (sorted by key tuple).
+#[pyfunction]
+fn groupby_multi_std_f64_sorted<'py>(
+    py: Python<'py>,
+    key_cols: Vec<PyReadonlyArray1<'py, i64>>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<MultiGroupByReturn<'py>> {
+    let values_slice = zero_copy::get_slice_f64(&values)?;
+    let key_slices: Vec<&[i64]> = key_cols
+        .iter()
+        .map(|col| zero_copy::get_slice_i64(col))
+        .collect::<PyResult<Vec<_>>>()?;
+
+    let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
+    validate_multi_inputs_len(&key_lengths, values_slice.len())?;
+
+    let result =
+        py.detach(|| groupby_multi::multi_groupby_std_f64_sorted(&key_slices, values_slice))?;
 
     convert_multi_result(py, result)
 }
@@ -1080,8 +1592,8 @@ fn groupby_multi_min_f64_sorted<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py
-        .allow_threads(|| groupby_multi::multi_groupby_min_f64_sorted(&key_slices, values_slice))?;
+    let result =
+        py.detach(|| groupby_multi::multi_groupby_min_f64_sorted(&key_slices, values_slice))?;
 
     convert_multi_result(py, result)
 }
@@ -1102,8 +1614,8 @@ fn groupby_multi_max_f64_sorted<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py
-        .allow_threads(|| groupby_multi::multi_groupby_max_f64_sorted(&key_slices, values_slice))?;
+    let result =
+        py.detach(|| groupby_multi::multi_groupby_max_f64_sorted(&key_slices, values_slice))?;
 
     convert_multi_result(py, result)
 }
@@ -1124,9 +1636,8 @@ fn groupby_multi_count_f64_sorted<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby_multi::multi_groupby_count_f64_sorted(&key_slices, values_slice)
-    })?;
+    let result =
+        py.detach(|| groupby_multi::multi_groupby_count_f64_sorted(&key_slices, values_slice))?;
 
     convert_multi_result_i64(py, result)
 }
@@ -1147,8 +1658,8 @@ fn groupby_multi_sum_i64_sorted<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py
-        .allow_threads(|| groupby_multi::multi_groupby_sum_i64_sorted(&key_slices, values_slice))?;
+    let result =
+        py.detach(|| groupby_multi::multi_groupby_sum_i64_sorted(&key_slices, values_slice))?;
 
     convert_multi_result_i64(py, result)
 }
@@ -1169,9 +1680,52 @@ fn groupby_multi_mean_i64_sorted<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby_multi::multi_groupby_mean_i64_sorted(&key_slices, values_slice)
-    })?;
+    let result =
+        py.detach(|| groupby_multi::multi_groupby_mean_i64_sorted(&key_slices, values_slice))?;
+
+    convert_multi_result(py, result)
+}
+
+/// Multi-column groupby variance for i64 values (sorted by key tuple).
+#[pyfunction]
+fn groupby_multi_var_i64_sorted<'py>(
+    py: Python<'py>,
+    key_cols: Vec<PyReadonlyArray1<'py, i64>>,
+    values: PyReadonlyArray1<'py, i64>,
+) -> PyResult<MultiGroupByReturn<'py>> {
+    let values_slice = zero_copy::get_slice_i64(&values)?;
+    let key_slices: Vec<&[i64]> = key_cols
+        .iter()
+        .map(|col| zero_copy::get_slice_i64(col))
+        .collect::<PyResult<Vec<_>>>()?;
+
+    let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
+    validate_multi_inputs_len(&key_lengths, values_slice.len())?;
+
+    let result =
+        py.detach(|| groupby_multi::multi_groupby_var_i64_sorted(&key_slices, values_slice))?;
+
+    convert_multi_result(py, result)
+}
+
+/// Multi-column groupby standard deviation for i64 values (sorted by key tuple).
+#[pyfunction]
+fn groupby_multi_std_i64_sorted<'py>(
+    py: Python<'py>,
+    key_cols: Vec<PyReadonlyArray1<'py, i64>>,
+    values: PyReadonlyArray1<'py, i64>,
+) -> PyResult<MultiGroupByReturn<'py>> {
+    let values_slice = zero_copy::get_slice_i64(&values)?;
+    let key_slices: Vec<&[i64]> = key_cols
+        .iter()
+        .map(|col| zero_copy::get_slice_i64(col))
+        .collect::<PyResult<Vec<_>>>()?;
+
+    let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
+    validate_multi_inputs_len(&key_lengths, values_slice.len())?;
+
+    let result =
+        py.detach(|| groupby_multi::multi_groupby_std_i64_sorted(&key_slices, values_slice))?;
 
     convert_multi_result(py, result)
 }
@@ -1192,8 +1746,8 @@ fn groupby_multi_min_i64_sorted<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py
-        .allow_threads(|| groupby_multi::multi_groupby_min_i64_sorted(&key_slices, values_slice))?;
+    let result =
+        py.detach(|| groupby_multi::multi_groupby_min_i64_sorted(&key_slices, values_slice))?;
 
     convert_multi_result_i64(py, result)
 }
@@ -1214,8 +1768,8 @@ fn groupby_multi_max_i64_sorted<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py
-        .allow_threads(|| groupby_multi::multi_groupby_max_i64_sorted(&key_slices, values_slice))?;
+    let result =
+        py.detach(|| groupby_multi::multi_groupby_max_i64_sorted(&key_slices, values_slice))?;
 
     convert_multi_result_i64(py, result)
 }
@@ -1236,9 +1790,8 @@ fn groupby_multi_count_i64_sorted<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby_multi::multi_groupby_count_i64_sorted(&key_slices, values_slice)
-    })?;
+    let result =
+        py.detach(|| groupby_multi::multi_groupby_count_i64_sorted(&key_slices, values_slice))?;
 
     convert_multi_result_i64(py, result)
 }
@@ -1257,9 +1810,8 @@ fn groupby_multi_sum_f64_firstseen_u32<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby_multi::multi_groupby_sum_f64_firstseen_u32(&key_slices, values_slice)
-    })?;
+    let result = py
+        .detach(|| groupby_multi::multi_groupby_sum_f64_firstseen_u32(&key_slices, values_slice))?;
     convert_multi_result(py, result)
 }
 
@@ -1277,9 +1829,8 @@ fn groupby_multi_sum_f64_firstseen_u64<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby_multi::multi_groupby_sum_f64_firstseen_u64(&key_slices, values_slice)
-    })?;
+    let result = py
+        .detach(|| groupby_multi::multi_groupby_sum_f64_firstseen_u64(&key_slices, values_slice))?;
     convert_multi_result(py, result)
 }
 
@@ -1297,9 +1848,47 @@ fn groupby_multi_mean_f64_firstseen_u32<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py.allow_threads(|| {
+    let result = py.detach(|| {
         groupby_multi::multi_groupby_mean_f64_firstseen_u32(&key_slices, values_slice)
     })?;
+    convert_multi_result(py, result)
+}
+
+#[pyfunction]
+fn groupby_multi_var_f64_firstseen_u32<'py>(
+    py: Python<'py>,
+    key_cols: Vec<PyReadonlyArray1<'py, i64>>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<MultiGroupByReturn<'py>> {
+    let values_slice = zero_copy::get_slice_f64(&values)?;
+    let key_slices: Vec<&[i64]> = key_cols
+        .iter()
+        .map(|col| zero_copy::get_slice_i64(col))
+        .collect::<PyResult<Vec<_>>>()?;
+    let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
+    validate_multi_inputs_len(&key_lengths, values_slice.len())?;
+
+    let result = py
+        .detach(|| groupby_multi::multi_groupby_var_f64_firstseen_u32(&key_slices, values_slice))?;
+    convert_multi_result(py, result)
+}
+
+#[pyfunction]
+fn groupby_multi_std_f64_firstseen_u32<'py>(
+    py: Python<'py>,
+    key_cols: Vec<PyReadonlyArray1<'py, i64>>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<MultiGroupByReturn<'py>> {
+    let values_slice = zero_copy::get_slice_f64(&values)?;
+    let key_slices: Vec<&[i64]> = key_cols
+        .iter()
+        .map(|col| zero_copy::get_slice_i64(col))
+        .collect::<PyResult<Vec<_>>>()?;
+    let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
+    validate_multi_inputs_len(&key_lengths, values_slice.len())?;
+
+    let result = py
+        .detach(|| groupby_multi::multi_groupby_std_f64_firstseen_u32(&key_slices, values_slice))?;
     convert_multi_result(py, result)
 }
 
@@ -1317,9 +1906,47 @@ fn groupby_multi_mean_f64_firstseen_u64<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py.allow_threads(|| {
+    let result = py.detach(|| {
         groupby_multi::multi_groupby_mean_f64_firstseen_u64(&key_slices, values_slice)
     })?;
+    convert_multi_result(py, result)
+}
+
+#[pyfunction]
+fn groupby_multi_var_f64_firstseen_u64<'py>(
+    py: Python<'py>,
+    key_cols: Vec<PyReadonlyArray1<'py, i64>>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<MultiGroupByReturn<'py>> {
+    let values_slice = zero_copy::get_slice_f64(&values)?;
+    let key_slices: Vec<&[i64]> = key_cols
+        .iter()
+        .map(|col| zero_copy::get_slice_i64(col))
+        .collect::<PyResult<Vec<_>>>()?;
+    let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
+    validate_multi_inputs_len(&key_lengths, values_slice.len())?;
+
+    let result = py
+        .detach(|| groupby_multi::multi_groupby_var_f64_firstseen_u64(&key_slices, values_slice))?;
+    convert_multi_result(py, result)
+}
+
+#[pyfunction]
+fn groupby_multi_std_f64_firstseen_u64<'py>(
+    py: Python<'py>,
+    key_cols: Vec<PyReadonlyArray1<'py, i64>>,
+    values: PyReadonlyArray1<'py, f64>,
+) -> PyResult<MultiGroupByReturn<'py>> {
+    let values_slice = zero_copy::get_slice_f64(&values)?;
+    let key_slices: Vec<&[i64]> = key_cols
+        .iter()
+        .map(|col| zero_copy::get_slice_i64(col))
+        .collect::<PyResult<Vec<_>>>()?;
+    let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
+    validate_multi_inputs_len(&key_lengths, values_slice.len())?;
+
+    let result = py
+        .detach(|| groupby_multi::multi_groupby_std_f64_firstseen_u64(&key_slices, values_slice))?;
     convert_multi_result(py, result)
 }
 
@@ -1337,9 +1964,8 @@ fn groupby_multi_min_f64_firstseen_u32<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby_multi::multi_groupby_min_f64_firstseen_u32(&key_slices, values_slice)
-    })?;
+    let result = py
+        .detach(|| groupby_multi::multi_groupby_min_f64_firstseen_u32(&key_slices, values_slice))?;
     convert_multi_result(py, result)
 }
 
@@ -1357,9 +1983,8 @@ fn groupby_multi_min_f64_firstseen_u64<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby_multi::multi_groupby_min_f64_firstseen_u64(&key_slices, values_slice)
-    })?;
+    let result = py
+        .detach(|| groupby_multi::multi_groupby_min_f64_firstseen_u64(&key_slices, values_slice))?;
     convert_multi_result(py, result)
 }
 
@@ -1377,9 +2002,8 @@ fn groupby_multi_max_f64_firstseen_u32<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby_multi::multi_groupby_max_f64_firstseen_u32(&key_slices, values_slice)
-    })?;
+    let result = py
+        .detach(|| groupby_multi::multi_groupby_max_f64_firstseen_u32(&key_slices, values_slice))?;
     convert_multi_result(py, result)
 }
 
@@ -1397,9 +2021,8 @@ fn groupby_multi_max_f64_firstseen_u64<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby_multi::multi_groupby_max_f64_firstseen_u64(&key_slices, values_slice)
-    })?;
+    let result = py
+        .detach(|| groupby_multi::multi_groupby_max_f64_firstseen_u64(&key_slices, values_slice))?;
     convert_multi_result(py, result)
 }
 
@@ -1417,7 +2040,7 @@ fn groupby_multi_count_f64_firstseen_u32<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py.allow_threads(|| {
+    let result = py.detach(|| {
         groupby_multi::multi_groupby_count_f64_firstseen_u32(&key_slices, values_slice)
     })?;
     convert_multi_result_i64(py, result)
@@ -1437,7 +2060,7 @@ fn groupby_multi_count_f64_firstseen_u64<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py.allow_threads(|| {
+    let result = py.detach(|| {
         groupby_multi::multi_groupby_count_f64_firstseen_u64(&key_slices, values_slice)
     })?;
     convert_multi_result_i64(py, result)
@@ -1457,9 +2080,8 @@ fn groupby_multi_sum_i64_firstseen_u32<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby_multi::multi_groupby_sum_i64_firstseen_u32(&key_slices, values_slice)
-    })?;
+    let result = py
+        .detach(|| groupby_multi::multi_groupby_sum_i64_firstseen_u32(&key_slices, values_slice))?;
     convert_multi_result_i64(py, result)
 }
 
@@ -1477,9 +2099,8 @@ fn groupby_multi_sum_i64_firstseen_u64<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby_multi::multi_groupby_sum_i64_firstseen_u64(&key_slices, values_slice)
-    })?;
+    let result = py
+        .detach(|| groupby_multi::multi_groupby_sum_i64_firstseen_u64(&key_slices, values_slice))?;
     convert_multi_result_i64(py, result)
 }
 
@@ -1497,9 +2118,47 @@ fn groupby_multi_mean_i64_firstseen_u32<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py.allow_threads(|| {
+    let result = py.detach(|| {
         groupby_multi::multi_groupby_mean_i64_firstseen_u32(&key_slices, values_slice)
     })?;
+    convert_multi_result(py, result)
+}
+
+#[pyfunction]
+fn groupby_multi_var_i64_firstseen_u32<'py>(
+    py: Python<'py>,
+    key_cols: Vec<PyReadonlyArray1<'py, i64>>,
+    values: PyReadonlyArray1<'py, i64>,
+) -> PyResult<MultiGroupByReturn<'py>> {
+    let values_slice = zero_copy::get_slice_i64(&values)?;
+    let key_slices: Vec<&[i64]> = key_cols
+        .iter()
+        .map(|col| zero_copy::get_slice_i64(col))
+        .collect::<PyResult<Vec<_>>>()?;
+    let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
+    validate_multi_inputs_len(&key_lengths, values_slice.len())?;
+
+    let result = py
+        .detach(|| groupby_multi::multi_groupby_var_i64_firstseen_u32(&key_slices, values_slice))?;
+    convert_multi_result(py, result)
+}
+
+#[pyfunction]
+fn groupby_multi_std_i64_firstseen_u32<'py>(
+    py: Python<'py>,
+    key_cols: Vec<PyReadonlyArray1<'py, i64>>,
+    values: PyReadonlyArray1<'py, i64>,
+) -> PyResult<MultiGroupByReturn<'py>> {
+    let values_slice = zero_copy::get_slice_i64(&values)?;
+    let key_slices: Vec<&[i64]> = key_cols
+        .iter()
+        .map(|col| zero_copy::get_slice_i64(col))
+        .collect::<PyResult<Vec<_>>>()?;
+    let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
+    validate_multi_inputs_len(&key_lengths, values_slice.len())?;
+
+    let result = py
+        .detach(|| groupby_multi::multi_groupby_std_i64_firstseen_u32(&key_slices, values_slice))?;
     convert_multi_result(py, result)
 }
 
@@ -1517,9 +2176,47 @@ fn groupby_multi_mean_i64_firstseen_u64<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py.allow_threads(|| {
+    let result = py.detach(|| {
         groupby_multi::multi_groupby_mean_i64_firstseen_u64(&key_slices, values_slice)
     })?;
+    convert_multi_result(py, result)
+}
+
+#[pyfunction]
+fn groupby_multi_var_i64_firstseen_u64<'py>(
+    py: Python<'py>,
+    key_cols: Vec<PyReadonlyArray1<'py, i64>>,
+    values: PyReadonlyArray1<'py, i64>,
+) -> PyResult<MultiGroupByReturn<'py>> {
+    let values_slice = zero_copy::get_slice_i64(&values)?;
+    let key_slices: Vec<&[i64]> = key_cols
+        .iter()
+        .map(|col| zero_copy::get_slice_i64(col))
+        .collect::<PyResult<Vec<_>>>()?;
+    let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
+    validate_multi_inputs_len(&key_lengths, values_slice.len())?;
+
+    let result = py
+        .detach(|| groupby_multi::multi_groupby_var_i64_firstseen_u64(&key_slices, values_slice))?;
+    convert_multi_result(py, result)
+}
+
+#[pyfunction]
+fn groupby_multi_std_i64_firstseen_u64<'py>(
+    py: Python<'py>,
+    key_cols: Vec<PyReadonlyArray1<'py, i64>>,
+    values: PyReadonlyArray1<'py, i64>,
+) -> PyResult<MultiGroupByReturn<'py>> {
+    let values_slice = zero_copy::get_slice_i64(&values)?;
+    let key_slices: Vec<&[i64]> = key_cols
+        .iter()
+        .map(|col| zero_copy::get_slice_i64(col))
+        .collect::<PyResult<Vec<_>>>()?;
+    let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
+    validate_multi_inputs_len(&key_lengths, values_slice.len())?;
+
+    let result = py
+        .detach(|| groupby_multi::multi_groupby_std_i64_firstseen_u64(&key_slices, values_slice))?;
     convert_multi_result(py, result)
 }
 
@@ -1537,9 +2234,8 @@ fn groupby_multi_min_i64_firstseen_u32<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby_multi::multi_groupby_min_i64_firstseen_u32(&key_slices, values_slice)
-    })?;
+    let result = py
+        .detach(|| groupby_multi::multi_groupby_min_i64_firstseen_u32(&key_slices, values_slice))?;
     convert_multi_result_i64(py, result)
 }
 
@@ -1557,9 +2253,8 @@ fn groupby_multi_min_i64_firstseen_u64<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby_multi::multi_groupby_min_i64_firstseen_u64(&key_slices, values_slice)
-    })?;
+    let result = py
+        .detach(|| groupby_multi::multi_groupby_min_i64_firstseen_u64(&key_slices, values_slice))?;
     convert_multi_result_i64(py, result)
 }
 
@@ -1577,9 +2272,8 @@ fn groupby_multi_max_i64_firstseen_u32<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby_multi::multi_groupby_max_i64_firstseen_u32(&key_slices, values_slice)
-    })?;
+    let result = py
+        .detach(|| groupby_multi::multi_groupby_max_i64_firstseen_u32(&key_slices, values_slice))?;
     convert_multi_result_i64(py, result)
 }
 
@@ -1597,9 +2291,8 @@ fn groupby_multi_max_i64_firstseen_u64<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py.allow_threads(|| {
-        groupby_multi::multi_groupby_max_i64_firstseen_u64(&key_slices, values_slice)
-    })?;
+    let result = py
+        .detach(|| groupby_multi::multi_groupby_max_i64_firstseen_u64(&key_slices, values_slice))?;
     convert_multi_result_i64(py, result)
 }
 
@@ -1617,7 +2310,7 @@ fn groupby_multi_count_i64_firstseen_u32<'py>(
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
 
-    let result = py.allow_threads(|| {
+    let result = py.detach(|| {
         groupby_multi::multi_groupby_count_i64_firstseen_u32(&key_slices, values_slice)
     })?;
     convert_multi_result_i64(py, result)
@@ -1636,7 +2329,7 @@ fn groupby_multi_count_i64_firstseen_u64<'py>(
         .collect::<PyResult<Vec<_>>>()?;
     let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
     validate_multi_inputs(&key_lengths, values_slice.len())?;
-    let result = py.allow_threads(|| {
+    let result = py.detach(|| {
         groupby_multi::multi_groupby_count_i64_firstseen_u64(&key_slices, values_slice)
     })?;
     convert_multi_result_i64(py, result)
@@ -1669,18 +2362,18 @@ fn convert_multi_result_f64<'py>(
 
         let key_arrays: Vec<Bound<'py, PyArray1<i64>>> = key_cols
             .into_iter()
-            .map(|col| col.into_pyarray_bound(py))
+            .map(|col| col.into_pyarray(py))
             .collect();
-        let values_1d = result.values.into_pyarray_bound(py);
+        let values_1d = result.values.into_pyarray(py);
         return Ok((key_arrays, values_1d));
     }
 
     // Allocate output arrays under the GIL.
     // SAFETY: we will initialize all elements before returning to Python.
     let key_arrays: Vec<Bound<'py, PyArray1<i64>>> = (0..n_keys)
-        .map(|_| unsafe { PyArray1::<i64>::new_bound(py, n_groups, false) })
+        .map(|_| unsafe { PyArray1::<i64>::new(py, n_groups, false) })
         .collect();
-    let values_out = unsafe { PyArray1::<f64>::new_bound(py, n_groups, false) };
+    let values_out = unsafe { PyArray1::<f64>::new(py, n_groups, false) };
 
     // Extract raw pointers under GIL; fill outside GIL.
     let key_ptrs: Vec<usize> = key_arrays.iter().map(|a| a.data() as usize).collect();
@@ -1689,7 +2382,7 @@ fn convert_multi_result_f64<'py>(
     let keys_flat = result.keys_flat;
     let values = result.values;
 
-    py.allow_threads(|| {
+    py.detach(|| {
         // Rayon overhead can dominate for small outputs.
         if n_groups < 50_000 {
             for out_g in 0..n_groups {
@@ -1749,16 +2442,16 @@ fn convert_multi_result_i64<'py>(
 
         let key_arrays: Vec<Bound<'py, PyArray1<i64>>> = key_cols
             .into_iter()
-            .map(|col| col.into_pyarray_bound(py))
+            .map(|col| col.into_pyarray(py))
             .collect();
-        let values_1d = result.values.into_pyarray_bound(py);
+        let values_1d = result.values.into_pyarray(py);
         return Ok((key_arrays, values_1d));
     }
 
     let key_arrays: Vec<Bound<'py, PyArray1<i64>>> = (0..n_keys)
-        .map(|_| unsafe { PyArray1::<i64>::new_bound(py, n_groups, false) })
+        .map(|_| unsafe { PyArray1::<i64>::new(py, n_groups, false) })
         .collect();
-    let values_out = unsafe { PyArray1::<i64>::new_bound(py, n_groups, false) };
+    let values_out = unsafe { PyArray1::<i64>::new(py, n_groups, false) };
 
     let key_ptrs: Vec<usize> = key_arrays.iter().map(|a| a.data() as usize).collect();
     let values_ptr: usize = values_out.data() as usize;
@@ -1766,7 +2459,7 @@ fn convert_multi_result_i64<'py>(
     let keys_flat = result.keys_flat;
     let values = result.values;
 
-    py.allow_threads(|| {
+    py.detach(|| {
         if n_groups < 50_000 {
             for out_g in 0..n_groups {
                 let src_g = perm.map_or(out_g, |p| p[out_g]);
@@ -1812,10 +2505,14 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Single-key groupby
     m.add_function(wrap_pyfunction!(groupby_sum_f64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_mean_f64, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_var_f64, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_std_f64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_min_f64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_max_f64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_sum_i64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_mean_i64, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_var_i64, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_std_i64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_min_i64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_max_i64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_count_f64, m)?)?;
@@ -1824,11 +2521,17 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Single-key groupby (sorted, for sort=True)
     m.add_function(wrap_pyfunction!(groupby_sum_f64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_mean_f64_sorted, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_var_f64_sorted, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_std_f64_sorted, m)?)?;
+    m.add_function(wrap_pyfunction!(profile_groupby_var_f64_sorted, m)?)?;
+    m.add_function(wrap_pyfunction!(profile_groupby_std_f64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_min_f64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_max_f64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_count_f64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_sum_i64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_mean_i64_sorted, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_var_i64_sorted, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_std_i64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_min_i64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_max_i64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_count_i64_sorted, m)?)?;
@@ -1838,6 +2541,14 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(groupby_sum_f64_firstseen_u64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_mean_f64_firstseen_u32, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_mean_f64_firstseen_u64, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_var_f64_firstseen_u32, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_var_f64_firstseen_u64, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_std_f64_firstseen_u32, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_std_f64_firstseen_u64, m)?)?;
+    m.add_function(wrap_pyfunction!(profile_groupby_var_f64_firstseen_u32, m)?)?;
+    m.add_function(wrap_pyfunction!(profile_groupby_var_f64_firstseen_u64, m)?)?;
+    m.add_function(wrap_pyfunction!(profile_groupby_std_f64_firstseen_u32, m)?)?;
+    m.add_function(wrap_pyfunction!(profile_groupby_std_f64_firstseen_u64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_min_f64_firstseen_u32, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_min_f64_firstseen_u64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_max_f64_firstseen_u32, m)?)?;
@@ -1849,6 +2560,10 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(groupby_sum_i64_firstseen_u64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_mean_i64_firstseen_u32, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_mean_i64_firstseen_u64, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_var_i64_firstseen_u32, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_var_i64_firstseen_u64, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_std_i64_firstseen_u32, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_std_i64_firstseen_u64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_min_i64_firstseen_u32, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_min_i64_firstseen_u64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_max_i64_firstseen_u32, m)?)?;
@@ -1858,10 +2573,14 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Multi-key groupby
     m.add_function(wrap_pyfunction!(groupby_multi_sum_f64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_mean_f64, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_multi_var_f64, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_multi_std_f64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_min_f64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_max_f64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_sum_i64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_mean_i64, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_multi_var_i64, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_multi_std_i64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_min_i64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_max_i64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_count_f64, m)?)?;
@@ -1870,11 +2589,15 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Multi-key groupby (sorted, for sort=True)
     m.add_function(wrap_pyfunction!(groupby_multi_sum_f64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_mean_f64_sorted, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_multi_var_f64_sorted, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_multi_std_f64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_min_f64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_max_f64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_count_f64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_sum_i64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_mean_i64_sorted, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_multi_var_i64_sorted, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_multi_std_i64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_min_i64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_max_i64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_count_i64_sorted, m)?)?;
@@ -1884,6 +2607,10 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(groupby_multi_sum_f64_firstseen_u64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_mean_f64_firstseen_u32, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_mean_f64_firstseen_u64, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_multi_var_f64_firstseen_u32, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_multi_var_f64_firstseen_u64, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_multi_std_f64_firstseen_u32, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_multi_std_f64_firstseen_u64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_min_f64_firstseen_u32, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_min_f64_firstseen_u64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_max_f64_firstseen_u32, m)?)?;
@@ -1895,6 +2622,10 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(groupby_multi_sum_i64_firstseen_u64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_mean_i64_firstseen_u32, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_mean_i64_firstseen_u64, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_multi_var_i64_firstseen_u32, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_multi_var_i64_firstseen_u64, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_multi_std_i64_firstseen_u32, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_multi_std_i64_firstseen_u64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_min_i64_firstseen_u32, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_min_i64_firstseen_u64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_max_i64_firstseen_u32, m)?)?;
@@ -1905,4 +2636,30 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(get_fallback_threshold, m)?)?;
     m.add_function(wrap_pyfunction!(get_thread_count, m)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        validate_inputs, validate_inputs_len, validate_multi_inputs, validate_multi_inputs_len,
+        FALLBACK_THRESHOLD,
+    };
+
+    #[test]
+    fn test_single_key_std_var_boundary_skips_threshold_only_for_len_only_validator() {
+        assert!(validate_inputs_len(6, 6).is_ok());
+        assert!(validate_inputs_len(6, 5).is_err());
+
+        assert!(validate_inputs(6, 6).is_err());
+        assert!(validate_inputs(FALLBACK_THRESHOLD, FALLBACK_THRESHOLD).is_ok());
+    }
+
+    #[test]
+    fn test_multi_key_std_var_boundary_skips_threshold_only_for_len_only_validator() {
+        assert!(validate_multi_inputs_len(&[6, 6], 6).is_ok());
+        assert!(validate_multi_inputs_len(&[6, 5], 6).is_err());
+
+        assert!(validate_multi_inputs(&[6, 6], 6).is_err());
+        assert!(validate_multi_inputs(&[FALLBACK_THRESHOLD], FALLBACK_THRESHOLD).is_ok());
+    }
 }
