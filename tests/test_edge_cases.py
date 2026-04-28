@@ -542,6 +542,17 @@ def _patch_all_std_var_kernels_to_raise(
                     )
 
 
+def _patch_all_i64_kernels_for_agg_to_raise(
+    monkeypatch: pytest.MonkeyPatch, rust: object, agg: str, message: str
+) -> None:
+    def _boom(*_args, **_kwargs):
+        raise AssertionError(message)
+
+    for prefix in ("groupby", "groupby_multi"):
+        for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
+            monkeypatch.setattr(rust, f"{prefix}_{agg}_i64{suffix}", _boom, raising=False)
+
+
 def _delete_std_var_kernel_symbols(
     monkeypatch: pytest.MonkeyPatch,
     rust: object,
@@ -1193,6 +1204,38 @@ class TestStdVarContracts:
 
         pd.testing.assert_series_equal(accessor_result, expected, check_exact=False, rtol=1e-12)
         pd.testing.assert_series_equal(proxy_result, expected, check_exact=False, rtol=1e-12)
+
+    @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count", "std", "var"])
+    def test_uint64_values_fall_back_for_accessor_and_proxy(
+        self, monkeypatch: pytest.MonkeyPatch, agg: str
+    ):
+        import pandas_booster._rust as rust
+
+        df = pd.DataFrame(
+            {
+                "key": np.resize(np.array([1, 2, 3], dtype=np.int64), 100_002),
+                "val": np.resize(
+                    np.array(
+                        [0, int(np.iinfo(np.int64).max) + 1, np.iinfo(np.uint64).max],
+                        dtype=np.uint64,
+                    ),
+                    100_002,
+                ),
+            }
+        )
+        expected = getattr(df.groupby("key", sort=True)["val"], agg)()
+        _patch_all_i64_kernels_for_agg_to_raise(
+            monkeypatch,
+            rust,
+            agg,
+            "uint64 value inputs should stay on pandas fallback to avoid int64 wrapping",
+        )
+
+        accessor_result = _accessor_groupby_result(df, "key", "val", agg)
+        proxy_result = _proxy_groupby_result(df, "key", "val", agg)
+
+        pd.testing.assert_series_equal(accessor_result, expected)
+        pd.testing.assert_series_equal(proxy_result, expected)
 
     @pytest.mark.parametrize("agg", ["std", "var"])
     def test_std_var_unsupported_object_coercions_match_pandas_error(

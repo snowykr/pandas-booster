@@ -115,6 +115,8 @@ def is_supported_value_dtype(value_col: pd.Series, *, agg: AggFunc) -> bool:
         return False
 
     value_dtype = capture_value_numpy_dtype(value_col)
+    if value_dtype.kind == "u" and value_dtype.itemsize == 8:
+        return False
     return not (agg in {"std", "var"} and value_dtype.kind == "u")
 
 
