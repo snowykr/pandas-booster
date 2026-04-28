@@ -27,6 +27,12 @@ def _project_version() -> str:
         return tomllib.load(handle)["project"]["version"]
 
 
+def _write_package_init(root: Path, version: str) -> None:
+    package_dir = root / "python" / "pandas_booster"
+    package_dir.mkdir(parents=True)
+    (package_dir / "__init__.py").write_text(f'__version__ = "{version}"\n', encoding="utf-8")
+
+
 def _job_block(workflow_text: str, job_name: str) -> str:
     marker = f"  {job_name}:"
     lines = workflow_text.splitlines()
@@ -156,6 +162,7 @@ repository = \"https://github.com/snowykr/pandas-booster\"
         encoding="utf-8",
     )
     (tmp_path / "README.md").write_text("# pandas-booster\n", encoding="utf-8")
+    _write_package_init(tmp_path, "0.1.0")
 
     monkeypatch.setattr(contract, "project_root", lambda: tmp_path)
 
@@ -216,6 +223,7 @@ publish.yml
         + "\n",
         encoding="utf-8",
     )
+    _write_package_init(tmp_path, "0.1.0")
 
     monkeypatch.setattr(contract, "project_root", lambda: tmp_path)
 
@@ -281,6 +289,7 @@ GitHub environment `pypi` is configured
         + "\n",
         encoding="utf-8",
     )
+    _write_package_init(tmp_path, "0.1.0")
 
     monkeypatch.setattr(contract, "project_root", lambda: tmp_path)
 
@@ -291,6 +300,69 @@ GitHub environment `pypi` is configured
 def test_validate_metadata_accepts_current_repo_release_readme():
     contract = _load_release_contract_module()
     assert contract.validate_metadata(argparse.Namespace()) == 0
+
+
+def test_validate_metadata_requires_package_dunder_version_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    contract = _load_release_contract_module()
+
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[build-system]
+requires = [\"maturin>=1.13,<2.0\"]
+
+[project]
+name = \"pandas-booster\"
+version = \"0.1.2\"
+readme = \"README.md\"
+requires-python = \">=3.9\"
+classifiers = [
+    \"Programming Language :: Python :: 3.9\",
+    \"Programming Language :: Python :: 3.10\",
+    \"Programming Language :: Python :: 3.11\",
+    \"Programming Language :: Python :: 3.12\",
+]
+
+[project.urls]
+Homepage = \"https://github.com/snowykr/pandas-booster\"
+Repository = \"https://github.com/snowykr/pandas-booster\"
+Issues = \"https://github.com/snowykr/pandas-booster/issues\"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "Cargo.toml").write_text(
+        """
+[package]
+name = \"pandas_booster\"
+version = \"0.1.2\"
+repository = \"https://github.com/snowykr/pandas-booster\"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "README.md").write_text(
+        """
+# pandas-booster
+
+https://github.com/snowykr/pandas-booster/actions/workflows/ci.yml
+pip install pandas-booster
+PyPI project exists.
+Trusted Publisher
+publish.yml
+GitHub environment `pypi` is configured
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    _write_package_init(tmp_path, "0.1.1")
+
+    monkeypatch.setattr(contract, "project_root", lambda: tmp_path)
+
+    with pytest.raises(contract.ContractError, match="__version__ must exactly match"):
+        contract.validate_metadata(argparse.Namespace())
 
 
 def test_validate_tag_requires_v_prefix():
