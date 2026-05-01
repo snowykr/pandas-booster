@@ -82,6 +82,7 @@ def validate_metadata(_: argparse.Namespace) -> int:
     pyproject = load_toml(root / "pyproject.toml")
     cargo = load_toml(root / "Cargo.toml")
     readme_text = load_text(root / "README.md")
+    package_init_text = load_text(root / "python" / "pandas_booster" / "__init__.py")
 
     errors: list[str] = []
 
@@ -91,8 +92,8 @@ def validate_metadata(_: argparse.Namespace) -> int:
     classifiers = project.get("classifiers", [])
 
     build_requires = build_system.get("requires", [])
-    if "maturin>=1.4,<2.0" not in build_requires:
-        errors.append("pyproject.toml build-system.requires must include 'maturin>=1.4,<2.0'")
+    if "maturin>=1.13,<2.0" not in build_requires:
+        errors.append("pyproject.toml build-system.requires must include 'maturin>=1.13,<2.0'")
 
     if project.get("readme") != "README.md":
         errors.append("pyproject.toml project.readme must equal 'README.md'")
@@ -133,6 +134,13 @@ def validate_metadata(_: argparse.Namespace) -> int:
     if cargo_version != project_version:
         errors.append(
             "Cargo.toml package.version must exactly match pyproject.toml project.version"
+        )
+
+    expected_dunder_version = f'__version__ = "{project_version}"'
+    if expected_dunder_version not in package_init_text:
+        errors.append(
+            "python/pandas_booster/__init__.py __version__ must exactly match "
+            "pyproject.toml project.version"
         )
 
     for token in README_REQUIRED_TOKENS:

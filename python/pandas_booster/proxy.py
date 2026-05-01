@@ -21,8 +21,8 @@ from ._groupby_accel import (
     build_series_from_multi_result,
     build_series_from_single_result,
     capture_key_numpy_dtype,
+    classify_groupby_compatibility,
     select_rust_groupby_func,
-    should_fallback_for_key_dtype,
     to_i64_contiguous,
 )
 
@@ -41,6 +41,10 @@ class _SeriesGroupByProto(Protocol):
 
     def count(self, *args: Any, **kwargs: Any) -> Series: ...
 
+    def std(self, *args: Any, **kwargs: Any) -> Series: ...
+
+    def var(self, *args: Any, **kwargs: Any) -> Series: ...
+
     def __getattr__(self, name: str) -> Any: ...
 
 
@@ -54,7 +58,7 @@ class _DataFrameGroupByProto(Protocol):
     def __getattr__(self, name: str) -> Any: ...
 
 
-_ACCELERATED_AGGS = frozenset({"sum", "mean", "min", "max", "count"})
+_ACCELERATED_AGGS = frozenset({"sum", "mean", "min", "max", "count", "std", "var"})
 _FALLBACK_THRESHOLD: int | None = None
 
 
@@ -68,7 +72,7 @@ def _get_fallback_threshold() -> int:
     return _FALLBACK_THRESHOLD
 
 
-AggFunc = Literal["sum", "mean", "min", "max", "count"]
+AggFunc = Literal["sum", "mean", "min", "max", "count", "std", "var"]
 
 
 class BoosterSeriesGroupBy:
@@ -90,28 +94,29 @@ class BoosterSeriesGroupBy:
         self._target = target
         self._sort = sort
 
-    def _can_accelerate(self) -> bool:
-        if len(self._df) < _get_fallback_threshold():
+    def _can_accelerate(self, agg: AggFunc) -> bool:
+        if agg not in {"std", "var"} and len(self._df) < _get_fallback_threshold():
             return False
 
+        key_cols: list[pd.Series] = []
         for col_name in self._by_cols:
             col = self._df[col_name]
             if not isinstance(col, pd.Series):
                 return False
-            col = cast(pd.Series, col)
-            if not pd.api.types.is_integer_dtype(col):
-                return False
-            if should_fallback_for_key_dtype(col):
-                return False
+            key_cols.append(cast(pd.Series, col))
 
         val_col = self._df[self._target]
         if not isinstance(val_col, pd.Series):
             return False
         val_col = cast(pd.Series, val_col)
-        if not (pd.api.types.is_integer_dtype(val_col) or pd.api.types.is_float_dtype(val_col)):
-            return False
 
-        return not pd.api.types.is_extension_array_dtype(val_col)
+        compatibility = classify_groupby_compatibility(
+            key_cols=key_cols,
+            val_col=val_col,
+            agg=agg,
+            force_pandas_float_groupby=force_pandas_float_groupby_enabled(),
+        )
+        return compatibility.supported and not compatibility.force_pandas
 
     def _rust_aggregate(self, agg: AggFunc) -> Series:
         import importlib
@@ -149,15 +154,15 @@ class BoosterSeriesGroupBy:
                 values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
                 func_base = f"groupby_{agg}_f64"
 
-            rust_func, needs_python_sort = select_rust_groupby_func(
-                _rust,
-                func_base,
-                sort=sort,
-                n_rows=len(self._df),
-                force_pandas_sort=force_pandas_sort,
-            )
-
             try:
+                rust_func, needs_python_sort = select_rust_groupby_func(
+                    _rust,
+                    func_base,
+                    sort=sort,
+                    n_rows=len(self._df),
+                    force_pandas_sort=force_pandas_sort,
+                    context="proxy",
+                )
                 result_keys, result_values = rust_func(keys, values)
                 result_values_arr = normalize_result_values(
                     result_values,
@@ -201,15 +206,15 @@ class BoosterSeriesGroupBy:
                 values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
                 func_base = f"groupby_multi_{agg}_f64"
 
-            rust_func, needs_python_sort = select_rust_groupby_func(
-                _rust,
-                func_base,
-                sort=sort,
-                n_rows=len(self._df),
-                force_pandas_sort=force_pandas_sort,
-            )
-
             try:
+                rust_func, needs_python_sort = select_rust_groupby_func(
+                    _rust,
+                    func_base,
+                    sort=sort,
+                    n_rows=len(self._df),
+                    force_pandas_sort=force_pandas_sort,
+                    context="proxy",
+                )
                 rust_result = rust_func(key_arrays, values)
                 if not isinstance(rust_result, tuple) or len(rust_result) != 2:
                     raise_abi_skew(
@@ -257,7 +262,7 @@ class BoosterSeriesGroupBy:
                 return cast("Series", getattr(self._obj, agg)())
 
     def _try_accelerate(self, agg: AggFunc) -> Series:
-        if agg in _ACCELERATED_AGGS and self._can_accelerate():
+        if agg in _ACCELERATED_AGGS and self._can_accelerate(agg):
             return self._rust_aggregate(agg)
         return cast("Series", getattr(self._obj, agg)())
 
@@ -288,6 +293,18 @@ class BoosterSeriesGroupBy:
     def count(self) -> Series:
         """Compute count, using Rust acceleration when possible."""
         return self._try_accelerate("count")
+
+    def std(self, *args: Any, **kwargs: Any) -> Series:
+        """Compute std, using Rust acceleration when possible."""
+        if args or kwargs:
+            return cast("Series", self._obj.std(*args, **kwargs))
+        return self._try_accelerate("std")
+
+    def var(self, *args: Any, **kwargs: Any) -> Series:
+        """Compute var, using Rust acceleration when possible."""
+        if args or kwargs:
+            return cast("Series", self._obj.var(*args, **kwargs))
+        return self._try_accelerate("var")
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._obj, name)
