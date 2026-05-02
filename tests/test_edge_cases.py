@@ -4,6 +4,8 @@ Tests covering numerical extremes, empty data, and boundary conditions
 that are critical for ensuring library robustness.
 """
 
+from __future__ import annotations
+
 import warnings
 
 import numpy as np
