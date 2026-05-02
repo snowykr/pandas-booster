@@ -59,12 +59,16 @@ df = pd.DataFrame(
 
 res_float = df.booster.groupby(["k1", "k2"], "v_float", "sum", sort=False)
 res_int = df.booster.groupby(["k1", "k2"], "v_int", "sum", sort=False)
+res_prod_float = df.booster.groupby(["k1", "k2"], "v_float", "prod", sort=False)
+res_prod_int = df.booster.groupby(["k1", "k2"], "v_int", "prod", sort=False)
 
 print(
     json.dumps(
         {
             "float_sum": series_fingerprint(res_float),
             "int_sum": series_fingerprint(res_int),
+            "float_prod": series_fingerprint(res_prod_float),
+            "int_prod": series_fingerprint(res_prod_int),
         },
         sort_keys=True,
     )
@@ -105,6 +109,9 @@ v = np.where(
 ).astype(np.float64)
 v[idx % 997 == 0] = np.nan
 v[idx % 991 == 0] = -0.0
+v[idx % 983 == 0] = np.inf
+v[idx % 977 == 0] = 0.0
+v[idx % 971 == 0] = -np.inf
 
 df = pd.DataFrame({"k": k, "v": v})
 
@@ -117,6 +124,8 @@ res = {
     "std_firstseen": series_fingerprint(df.booster.groupby("k", "v", "std", sort=False)),
     "var_sorted": series_fingerprint(df.booster.groupby("k", "v", "var", sort=True)),
     "var_firstseen": series_fingerprint(df.booster.groupby("k", "v", "var", sort=False)),
+    "prod_sorted": series_fingerprint(df.booster.groupby("k", "v", "prod", sort=True)),
+    "prod_firstseen": series_fingerprint(df.booster.groupby("k", "v", "prod", sort=False)),
 }
 
 print(json.dumps(res, sort_keys=True))
@@ -166,6 +175,8 @@ res = {
     "std_firstseen": series_fingerprint(df.booster.groupby("k", "v", "std", sort=False)),
     "var_sorted": series_fingerprint(df.booster.groupby("k", "v", "var", sort=True)),
     "var_firstseen": series_fingerprint(df.booster.groupby("k", "v", "var", sort=False)),
+    "prod_sorted": series_fingerprint(df.booster.groupby("k", "v", "prod", sort=True)),
+    "prod_firstseen": series_fingerprint(df.booster.groupby("k", "v", "prod", sort=False)),
 }
 
 print(json.dumps(res, sort_keys=True))
@@ -361,7 +372,7 @@ def test_run_script_once_surfaces_timeout_output(
 def test_multi_key_template_uses_threshold_relative_row_count() -> None:
     payload = json.loads(_run_multi_key_once(1, 1))
 
-    assert set(payload) == {"float_sum", "int_sum"}
+    assert set(payload) == {"float_sum", "int_sum", "float_prod", "int_prod"}
     assert all(isinstance(value, str) and value for value in payload.values())
 
 
@@ -377,6 +388,8 @@ def test_single_key_template_uses_threshold_relative_row_count() -> None:
         "std_firstseen",
         "var_sorted",
         "var_firstseen",
+        "prod_sorted",
+        "prod_firstseen",
     }
     assert all(isinstance(value, str) and value for value in payload.values())
 
@@ -389,6 +402,8 @@ def test_single_key_partitioned_template_uses_threshold_relative_row_count() -> 
         "std_firstseen",
         "var_sorted",
         "var_firstseen",
+        "prod_sorted",
+        "prod_firstseen",
     }
     assert all(isinstance(value, str) and value for value in payload.values())
 
@@ -402,7 +417,7 @@ def test_sort_false_fingerprint_deterministic_across_threads_and_repeats() -> No
         assert _run_multi_key_once(8, FAST_MULTI_ROWS) == baseline
 
 
-def test_single_key_float_sum_mean_std_var_bitwise_deterministic_across_threads() -> None:
+def test_single_key_float_sum_mean_std_var_prod_bitwise_deterministic_across_threads() -> None:
     baseline = _run_single_key_once(1, FAST_SINGLE_ROWS)
 
     assert _run_single_key_once(1, FAST_SINGLE_ROWS) == baseline
@@ -431,7 +446,9 @@ def test_sort_false_fingerprint_deterministic_stress_across_threads_and_repeats(
 
 
 @pytest.mark.stress
-def test_single_key_float_sum_mean_std_var_bitwise_deterministic_stress_across_threads() -> None:
+def test_single_key_float_sum_mean_std_var_prod_bitwise_deterministic_stress_across_threads() -> (
+    None
+):
     baseline = _run_single_key_once(1, STRESS_SINGLE_ROWS)
 
     assert _run_single_key_once(1, STRESS_SINGLE_ROWS) == baseline

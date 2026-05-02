@@ -847,9 +847,7 @@ class TestStdVarContracts:
         pd.testing.assert_series_equal(proxy_result, expected, check_exact=False, rtol=1e-12)
 
     @pytest.mark.parametrize("agg", ["std", "var"])
-    def test_multi_key_unsorted_std_var_preserves_existing_first_seen_order(
-        self, agg: str
-    ):
+    def test_multi_key_unsorted_std_var_preserves_existing_first_seen_order(self, agg: str):
         df = pd.DataFrame(
             {
                 "k1": [2, 1, 2, 1, 2, 3, 1],
@@ -1072,9 +1070,8 @@ class TestStdVarContracts:
         abi_warnings = [w for w in rec if issubclass(w.category, abi.PandasBoosterAbiSkewWarning)]
         abi_warnings = [w for w in abi_warnings if abi.ABI_SKEW_PREFIX in str(w.message)]
         assert len(abi_warnings) == 1
-        assert (
-            f"missing Rust kernel symbol 'groupby_multi_{agg}_f64'"
-            in str(abi_warnings[0].message)
+        assert f"missing Rust kernel symbol 'groupby_multi_{agg}_f64'" in str(
+            abi_warnings[0].message
         )
 
     @pytest.mark.parametrize("agg", ["std", "var"])
@@ -1281,3 +1278,254 @@ class TestStdVarContracts:
 
         with pytest.raises(type(pandas_exc.value)):
             _ = _proxy_groupby_result(df, "key", "val", agg)
+
+
+class TestProdEdgeCases:
+    def _assert_float_prod_equal(self, result: pd.Series, expected: pd.Series) -> None:
+        pd.testing.assert_series_equal(
+            result.sort_index(),
+            expected.sort_index(),
+            check_exact=False,
+            rtol=1e-10,
+            atol=0.0,
+        )
+        result_sorted = result.sort_index()
+        expected_sorted = expected.sort_index()
+        zero_mask = (expected_sorted.to_numpy() == 0.0) & ~pd.isna(expected_sorted.to_numpy())
+        if zero_mask.any():
+            np.testing.assert_array_equal(
+                np.signbit(result_sorted.to_numpy()[zero_mask]),
+                np.signbit(expected_sorted.to_numpy()[zero_mask]),
+            )
+
+    def test_below_threshold_prod_falls_back_without_rust_symbol(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        import pandas_booster._rust as rust
+
+        threshold = rust.get_fallback_threshold()
+        n = max(1, threshold - 1)
+        df = pd.DataFrame(
+            {
+                "key": np.resize(np.array([1, 2], dtype=np.int64), n),
+                "val": np.linspace(1.001, 1.01, n, dtype=np.float64),
+            }
+        )
+
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("below-threshold prod should use pandas fallback")
+
+        for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
+            monkeypatch.setattr(rust, f"groupby_prod_f64{suffix}", _boom, raising=False)
+
+        result = df.booster.groupby("key", "val", "prod")
+        expected = df.groupby("key")["val"].prod()
+        self._assert_float_prod_equal(result, expected)
+
+    @pytest.mark.parametrize(
+        ("sort", "symbol"),
+        [
+            pytest.param(True, "groupby_prod_f64_sorted", id="sorted"),
+            pytest.param(False, "groupby_prod_f64_firstseen_u32", id="firstseen-u32"),
+        ],
+    )
+    def test_at_threshold_prod_invokes_expected_single_key_rust_symbol(
+        self, monkeypatch: pytest.MonkeyPatch, sort: bool, symbol: str
+    ):
+        import pandas_booster._rust as rust
+
+        threshold = rust.get_fallback_threshold()
+        n = threshold
+        df = pd.DataFrame(
+            {
+                "key": np.resize(np.array([1, 2], dtype=np.int64), n),
+                "val": np.linspace(1.001, 1.01, n, dtype=np.float64),
+            }
+        )
+        expected = df.groupby("key", sort=sort)["val"].prod()
+        calls: list[str] = []
+
+        def fake_kernel(_keys, _values):
+            calls.append(symbol)
+            return expected.index.to_numpy(dtype=np.int64), expected.to_numpy(dtype=np.float64)
+
+        monkeypatch.setattr(rust, symbol, fake_kernel, raising=False)
+        result = df.booster.groupby("key", "val", "prod", sort=sort)
+
+        assert calls == [symbol]
+        self._assert_float_prod_equal(result, expected)
+
+    @pytest.mark.parametrize("sort", [True, False])
+    def test_multi_key_below_threshold_prod_falls_back_without_rust_symbol(
+        self, monkeypatch: pytest.MonkeyPatch, sort: bool
+    ):
+        import pandas_booster._rust as rust
+
+        threshold = rust.get_fallback_threshold()
+        n = max(1, threshold - 1)
+        df = pd.DataFrame(
+            {
+                "k1": np.resize(np.array([1, 2], dtype=np.int64), n),
+                "k2": np.resize(np.array([10, 20, 30], dtype=np.int64), n),
+                "val": np.linspace(1.001, 1.01, n, dtype=np.float64),
+            }
+        )
+
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("below-threshold multi-key prod should use pandas fallback")
+
+        for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
+            monkeypatch.setattr(rust, f"groupby_multi_prod_f64{suffix}", _boom, raising=False)
+
+        result = df.booster.groupby(["k1", "k2"], "val", "prod", sort=sort)
+        expected = df.groupby(["k1", "k2"], sort=sort)["val"].prod()
+        self._assert_float_prod_equal(result, expected)
+
+    @pytest.mark.parametrize(
+        ("sort", "symbol"),
+        [
+            pytest.param(True, "groupby_multi_prod_f64_sorted", id="sorted"),
+            pytest.param(False, "groupby_multi_prod_f64_firstseen_u32", id="firstseen-u32"),
+        ],
+    )
+    def test_multi_key_at_threshold_prod_invokes_expected_rust_symbol(
+        self, monkeypatch: pytest.MonkeyPatch, sort: bool, symbol: str
+    ):
+        import pandas_booster._rust as rust
+
+        threshold = rust.get_fallback_threshold()
+        n = threshold
+        df = pd.DataFrame(
+            {
+                "k1": np.resize(np.array([1, 2], dtype=np.int64), n),
+                "k2": np.resize(np.array([10, 20, 30], dtype=np.int64), n),
+                "val": np.linspace(1.001, 1.01, n, dtype=np.float64),
+            }
+        )
+        expected = df.groupby(["k1", "k2"], sort=sort)["val"].prod()
+        calls: list[str] = []
+
+        def fake_kernel(_key_arrays, _values):
+            calls.append(symbol)
+            return [
+                expected.index.get_level_values(0).to_numpy(dtype=np.int64),
+                expected.index.get_level_values(1).to_numpy(dtype=np.int64),
+            ], expected.to_numpy(dtype=np.float64)
+
+        monkeypatch.setattr(rust, symbol, fake_kernel, raising=False)
+        result = df.booster.groupby(["k1", "k2"], "val", "prod", sort=sort)
+
+        assert calls == [symbol]
+        self._assert_float_prod_equal(result, expected)
+
+    @pytest.mark.parametrize("dtype", ["Int64", "boolean"])
+    def test_nullable_and_bool_prod_fallback_avoids_rust(
+        self, monkeypatch: pytest.MonkeyPatch, dtype: str
+    ):
+        import pandas_booster._rust as rust
+
+        n = 120_000
+        if dtype == "Int64":
+            val = pd.array(np.resize(np.array([1, 2, pd.NA], dtype=object), n), dtype="Int64")
+        else:
+            val = pd.array(np.resize(np.array([True, False], dtype=object), n), dtype="boolean")
+        df = pd.DataFrame({"key": np.resize(np.array([1, 2], dtype=np.int64), n), "val": val})
+
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("unsupported prod dtype should use pandas fallback")
+
+        for kernel in ("f64", "i64"):
+            for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
+                monkeypatch.setattr(rust, f"groupby_prod_{kernel}{suffix}", _boom, raising=False)
+
+        result = df.booster.groupby("key", "val", "prod")
+        expected = df.groupby("key")["val"].prod()
+        pd.testing.assert_series_equal(result.sort_index(), expected.sort_index())
+
+    def test_uint64_value_prod_fallback_avoids_unsafe_cast(self, monkeypatch: pytest.MonkeyPatch):
+        import pandas_booster._rust as rust
+
+        n = 120_000
+        df = pd.DataFrame(
+            {
+                "key": np.resize(np.array([1, 2], dtype=np.int64), n),
+                "val": np.resize(np.array([2**63, 3], dtype=np.uint64), n),
+            }
+        )
+
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("uint64 prod should not enter Rust acceleration")
+
+        for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
+            monkeypatch.setattr(rust, f"groupby_prod_i64{suffix}", _boom, raising=False)
+
+        result = df.booster.groupby("key", "val", "prod")
+        expected = df.groupby("key")["val"].prod()
+        pd.testing.assert_series_equal(result.sort_index(), expected.sort_index())
+
+    @pytest.mark.parametrize("dtype", [np.uint8, np.uint16, np.uint32])
+    def test_small_unsigned_prod_is_pandas_compatible(self, dtype):
+        import pandas_booster  # noqa: F401
+
+        n = 120_000
+        df = pd.DataFrame(
+            {
+                "key": np.resize(np.array([1, 2, 3], dtype=np.int64), n),
+                "val": np.resize(np.array([2, 3, 4], dtype=dtype), n),
+            }
+        )
+        result = df.booster.groupby("key", "val", "prod")
+        expected = df.groupby("key")["val"].prod()
+        pd.testing.assert_series_equal(result.sort_index(), expected.sort_index(), check_dtype=True)
+        assert result.dtype == expected.dtype == np.dtype("uint64")
+
+    def test_int64_prod_overflow_matches_pandas(self):
+        import pandas_booster  # noqa: F401
+
+        n = 120_000
+        df = pd.DataFrame(
+            {
+                "key": np.ones(n, dtype=np.int64),
+                "val": np.resize(np.array([2**62, 4, -3], dtype=np.int64), n),
+            }
+        )
+        result = df.booster.groupby("key", "val", "prod")
+        expected = df.groupby("key")["val"].prod()
+        pd.testing.assert_series_equal(result.sort_index(), expected.sort_index(), check_exact=True)
+
+    def test_float_prod_special_values_match_pandas(self):
+        import pandas_booster  # noqa: F401
+
+        pairs = [
+            (1, np.nan),
+            (1, np.nan),
+            (2, np.nan),
+            (2, 2.0),
+            (3, np.inf),
+            (3, 0.0),
+            (4, -np.inf),
+            (4, 0.0),
+            (5, -0.0),
+            (5, 2.0),
+            (6, 0.0),
+            (6, -2.0),
+            (7, -0.0),
+            (7, -2.0),
+            (8, 1e308),
+            (8, 1e308),
+            (9, 1e-308),
+            (9, 1e-308),
+        ]
+        repeats = 12_500
+        df = pd.DataFrame(
+            {
+                "key": np.array([k for k, _ in pairs] * repeats, dtype=np.int64),
+                "val": np.array([v for _, v in pairs] * repeats, dtype=np.float64),
+            }
+        )
+        result = df.booster.groupby("key", "val", "prod")
+        expected = df.groupby("key")["val"].prod()
+        self._assert_float_prod_equal(result, expected)
+        assert expected.loc[1] == 1.0
+        assert np.isnan(expected.loc[3]) and np.isnan(result.loc[3])
+        assert np.isnan(expected.loc[4]) and np.isnan(result.loc[4])
