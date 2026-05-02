@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 from pandas_booster.accessor import BoosterAccessor
 
-AggFunc = Literal["sum", "mean", "min", "max", "count"]
+AggFunc = Literal["sum", "mean", "min", "max", "count", "prod"]
 
 
 def _assert_groupby_series_equal(
@@ -28,7 +28,7 @@ def _assert_groupby_series_equal(
     )
 
 
-@pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count"])
+@pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count", "prod"])
 def test_single_key_sort_true_matches_pandas_order(monkeypatch: pytest.MonkeyPatch, agg: AggFunc):
     monkeypatch.delenv("PANDAS_BOOSTER_FORCE_PANDAS_SORT", raising=False)
 
@@ -239,7 +239,7 @@ def test_force_pandas_sort_truthy_calls_sort_index(monkeypatch: pytest.MonkeyPat
     _assert_groupby_series_equal(booster_off, pandas_on, agg="sum")
 
 
-@pytest.mark.parametrize("agg", ["mean", "min", "max", "count"])
+@pytest.mark.parametrize("agg", ["mean", "min", "max", "count", "prod"])
 def test_default_no_python_sort_for_other_aggs_when_rust_sorted(
     monkeypatch: pytest.MonkeyPatch, agg: AggFunc
 ) -> None:
@@ -304,3 +304,37 @@ def test_force_pandas_sort_matches_pandas_output(monkeypatch: pytest.MonkeyPatch
     pandas_on = df.groupby(["k1", "k2"], sort=True)["val"].sum()
 
     _assert_groupby_series_equal(booster_on, pandas_on, agg="sum")
+
+def test_single_key_prod_sort_true_special_value_signbits(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PANDAS_BOOSTER_FORCE_PANDAS_SORT", raising=False)
+
+    pairs = [
+        (1, np.nan), (1, np.nan),
+        (2, np.nan), (2, 2.0),
+        (3, np.inf), (3, 0.0),
+        (4, -np.inf), (4, 0.0),
+        (5, -0.0), (5, 2.0),
+        (6, 0.0), (6, -2.0),
+        (7, 1e308), (7, 1e308),
+        (8, 1e-308), (8, 1e-308),
+    ]
+    repeats = 12_500
+    keys = np.array([k for k, _ in pairs] * repeats, dtype=np.int64)
+    values = np.array([v for _, v in pairs] * repeats, dtype=np.float64)
+    df = pd.DataFrame({"key": keys, "val": values})
+
+    booster_result = cast(BoosterAccessor, df.booster).groupby("key", "val", "prod", sort=True)
+    pandas_result = df.groupby("key", sort=True)["val"].prod()
+
+    pd.testing.assert_series_equal(
+        booster_result,
+        pandas_result,
+        check_exact=False,
+        rtol=1e-9,
+        atol=0.0,
+    )
+    zero_mask = (pandas_result.to_numpy() == 0.0) & ~pd.isna(pandas_result.to_numpy())
+    np.testing.assert_array_equal(
+        np.signbit(booster_result.to_numpy()[zero_mask]),
+        np.signbit(pandas_result.to_numpy()[zero_mask]),
+    )

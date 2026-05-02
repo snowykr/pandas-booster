@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 from pandas_booster.accessor import BoosterAccessor
 
-AggFunc = Literal["sum", "mean", "min", "max", "count"]
+AggFunc = Literal["sum", "mean", "min", "max", "count", "prod"]
 StdVarAgg = Literal["std", "var"]
 
 
@@ -62,7 +62,7 @@ class TestFirstSeenOrderSortFalse:
         vals[(k1 == 2) & (k2 == 20)] = np.nan
         return pd.DataFrame({"k1": k1, "k2": k2, "val": vals})
 
-    @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count"])
+    @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count", "prod"])
     def test_booster_sort_false_preserves_first_seen_multi_key(self, agg: AggFunc):
         df = self._make_ordered_multi_df()
         booster_result = cast(BoosterAccessor, df.booster).groupby(
@@ -78,7 +78,7 @@ class TestFirstSeenOrderSortFalse:
             rtol=(0.0 if agg == "count" else 1e-10),
         )
 
-    @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count"])
+    @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count", "prod"])
     def test_proxy_sort_false_preserves_first_seen_multi_key(self, agg: AggFunc):
         import pandas_booster
 
@@ -100,7 +100,7 @@ class TestFirstSeenOrderSortFalse:
             rtol=(0.0 if agg == "count" else 1e-10),
         )
 
-    @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count"])
+    @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count", "prod"])
     def test_booster_sort_false_preserves_first_seen_multi_key_int(self, agg: AggFunc):
         df = self._make_ordered_multi_df()[["k1", "k2"]].copy()
         n = len(df)
@@ -927,3 +927,69 @@ class TestMultiKeyAllNaNGroup:
             check_exact=False,
             rtol=1e-10,
         )
+
+class TestProdMultiKey:
+    def test_composite_key_prod_sort_true_and_false_order(self):
+        base = pd.DataFrame(
+            {
+                "k1": ["b", "a", "b", "a", "a"],
+                "k2": [2, 1, 2, 2, 1],
+                "val": [2.0, 3.0, 5.0, 7.0, np.nan],
+            }
+        )
+        repeats = 40_000
+        df = pd.concat([base] * repeats, ignore_index=True)
+        df["k1_code"] = df["k1"].map({"a": 1, "b": 2}).astype(np.int64)
+
+        for sort, expected_order in (
+            (True, [(1, 1), (1, 2), (2, 2)]),
+            (False, [(2, 2), (1, 1), (1, 2)]),
+        ):
+            booster_result = cast(BoosterAccessor, df.booster).groupby(
+                ["k1_code", "k2"], "val", "prod", sort=sort
+            )
+            pandas_result = df.groupby(["k1_code", "k2"], sort=sort)["val"].prod()
+            assert booster_result.index.tolist() == pandas_result.index.tolist() == expected_order
+            pd.testing.assert_series_equal(
+                booster_result,
+                pandas_result,
+                check_exact=False,
+                rtol=1e-10,
+                atol=0.0,
+            )
+
+    def test_multi_key_prod_int_exactness_sort_modes(self):
+        n = 200_000
+        df = pd.DataFrame(
+            {
+                "k1": np.tile(np.array([3, 1, 3, 2], dtype=np.int64), n // 4),
+                "k2": np.tile(np.array([30, 10, 31, 20], dtype=np.int64), n // 4),
+                "val": np.tile(np.array([-2, 1, 2, 3], dtype=np.int64), n // 4),
+            }
+        )
+        for sort in (True, False):
+            booster_result = cast(BoosterAccessor, df.booster).groupby(
+                ["k1", "k2"], "val", "prod", sort=sort
+            )
+            pandas_result = df.groupby(["k1", "k2"], sort=sort)["val"].prod()
+            pd.testing.assert_series_equal(booster_result, pandas_result, check_exact=True)
+
+    def test_multi_key_prod_all_nan_group_retained_as_one(self):
+        n = 200_000
+        df = pd.DataFrame(
+            {
+                "k1": np.repeat(np.array([1, 2, 3, 4], dtype=np.int64), n // 4),
+                "k2": np.repeat(np.array([10, 20, 30, 40], dtype=np.int64), n // 4),
+                "val": np.ones(n, dtype=np.float64) * 1.001,
+            }
+        )
+        df.loc[(df["k1"] == 2) & (df["k2"] == 20), "val"] = np.nan
+
+        booster_result = cast(BoosterAccessor, df.booster).groupby(
+            ["k1", "k2"], "val", "prod", sort=False
+        )
+        pandas_result = df.groupby(["k1", "k2"], sort=False)["val"].prod()
+
+        assert (2, 20) in booster_result.index
+        assert booster_result.loc[(2, 20)] == pandas_result.loc[(2, 20)] == 1.0
+        pd.testing.assert_series_equal(booster_result, pandas_result, check_exact=False, rtol=1e-10)

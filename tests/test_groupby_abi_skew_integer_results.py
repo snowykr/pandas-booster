@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-AggFunc = Literal["sum", "min", "max", "count"]
+AggFunc = Literal["sum", "min", "max", "count", "prod"]
 ValueKernel = Literal["i64", "f64"]
 
 
@@ -45,8 +45,8 @@ def _patch_single_to_return_float_results(
             np.asarray(expected.to_numpy(), dtype=np.float64),
         )
 
-    monkeypatch.setattr(rust, f"groupby_{agg}_{kernel}", stale_single)
-    monkeypatch.setattr(rust, f"groupby_{agg}_{kernel}_sorted", stale_single)
+    monkeypatch.setattr(rust, f"groupby_{agg}_{kernel}", stale_single, raising=False)
+    monkeypatch.setattr(rust, f"groupby_{agg}_{kernel}_sorted", stale_single, raising=False)
 
 
 def _patch_multi_to_return_float_results(
@@ -64,8 +64,8 @@ def _patch_multi_to_return_float_results(
         ]
         return keys_cols, np.asarray(expected.to_numpy(), dtype=np.float64)
 
-    monkeypatch.setattr(rust, f"groupby_multi_{agg}_{kernel}", stale_multi)
-    monkeypatch.setattr(rust, f"groupby_multi_{agg}_{kernel}_sorted", stale_multi)
+    monkeypatch.setattr(rust, f"groupby_multi_{agg}_{kernel}", stale_multi, raising=False)
+    monkeypatch.setattr(rust, f"groupby_multi_{agg}_{kernel}_sorted", stale_multi, raising=False)
 
 
 def _assert_single_non_strict_fallback(
@@ -256,22 +256,22 @@ def _assert_multi_strict_fail(
         pandas_booster.deactivate()
 
 
-@pytest.mark.parametrize("agg", ["sum", "min", "max"])
+@pytest.mark.parametrize("agg", ["sum", "min", "max", "prod"])
 def test_single_key_integer_result_dtype_skew_falls_back_and_warns(monkeypatch, agg: AggFunc):
     _assert_single_non_strict_fallback(monkeypatch, agg)
 
 
-@pytest.mark.parametrize("agg", ["sum", "min", "max"])
+@pytest.mark.parametrize("agg", ["sum", "min", "max", "prod"])
 def test_single_key_integer_result_dtype_skew_strict_abi_hard_fails(monkeypatch, agg: AggFunc):
     _assert_single_strict_fail(monkeypatch, agg)
 
 
-@pytest.mark.parametrize("agg", ["sum", "min", "max"])
+@pytest.mark.parametrize("agg", ["sum", "min", "max", "prod"])
 def test_multi_key_integer_result_dtype_skew_falls_back_and_warns(monkeypatch, agg: AggFunc):
     _assert_multi_non_strict_fallback(monkeypatch, agg)
 
 
-@pytest.mark.parametrize("agg", ["sum", "min", "max"])
+@pytest.mark.parametrize("agg", ["sum", "min", "max", "prod"])
 def test_multi_key_integer_result_dtype_skew_strict_abi_hard_fails(monkeypatch, agg: AggFunc):
     _assert_multi_strict_fail(monkeypatch, agg)
 

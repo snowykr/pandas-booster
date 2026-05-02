@@ -8,7 +8,7 @@ import pandas as pd
 
 from ._abi_compat import raise_abi_skew
 
-AggFunc = Literal["sum", "mean", "min", "max", "count", "std", "var"]
+AggFunc = Literal["sum", "mean", "prod", "min", "max", "count", "std", "var"]
 
 
 class GroupByCompatibility(NamedTuple):
@@ -117,6 +117,8 @@ def is_supported_value_dtype(value_col: pd.Series, *, agg: AggFunc) -> bool:
     value_dtype = capture_value_numpy_dtype(value_col)
     if value_dtype.kind == "u" and value_dtype.itemsize == 8:
         return False
+    if agg == "prod" and value_dtype.kind == "u":
+        return False
     return not (agg in {"std", "var"} and value_dtype.kind == "u")
 
 
@@ -140,7 +142,7 @@ def classify_groupby_compatibility(
 
     if (
         len(key_cols) == 1
-        and agg in {"std", "var"}
+        and agg in {"sum", "mean", "prod", "std", "var"}
         and pd.api.types.is_float_dtype(val_col)
         and force_pandas_float_groupby
     ):
@@ -182,7 +184,7 @@ def build_series_from_single_result(
             np.int64
             if agg == "count"
             else value_dtype
-            if is_val_int and agg in {"sum", "min", "max"}
+            if is_val_int and agg in {"sum", "prod", "min", "max"}
             else np.float64
         )
         return pd.Series([], index=idx, name=name, dtype=out_dtype)
@@ -193,7 +195,7 @@ def build_series_from_single_result(
     values_arr = np.asarray(result_values)
     if agg == "count":
         values_arr = values_arr.astype(np.int64, copy=False)
-    elif is_val_int and agg in {"sum", "min", "max"}:
+    elif is_val_int and agg in {"sum", "prod", "min", "max"}:
         values_arr = values_arr.astype(value_dtype, copy=False)
     else:
         values_arr = values_arr.astype(np.float64, copy=False)
@@ -238,7 +240,7 @@ def build_series_from_multi_result(
             np.int64
             if agg == "count"
             else value_dtype
-            if is_val_int and agg in {"sum", "min", "max"}
+            if is_val_int and agg in {"sum", "prod", "min", "max"}
             else np.float64
         )
         return pd.Series([], index=idx, name=name, dtype=out_dtype)
@@ -260,7 +262,7 @@ def build_series_from_multi_result(
     values_arr = np.asarray(result_values)
     if agg == "count":
         values_arr = values_arr.astype(np.int64, copy=False)
-    elif is_val_int and agg in {"sum", "min", "max"}:
+    elif is_val_int and agg in {"sum", "prod", "min", "max"}:
         values_arr = values_arr.astype(value_dtype, copy=False)
     else:
         values_arr = values_arr.astype(np.float64, copy=False)

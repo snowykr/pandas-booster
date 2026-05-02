@@ -35,6 +35,8 @@ class _SeriesGroupByProto(Protocol):
 
     def mean(self, *args: Any, **kwargs: Any) -> Series: ...
 
+    def prod(self, *args: Any, **kwargs: Any) -> Series: ...
+
     def min(self, *args: Any, **kwargs: Any) -> Series: ...
 
     def max(self, *args: Any, **kwargs: Any) -> Series: ...
@@ -58,7 +60,7 @@ class _DataFrameGroupByProto(Protocol):
     def __getattr__(self, name: str) -> Any: ...
 
 
-_ACCELERATED_AGGS = frozenset({"sum", "mean", "min", "max", "count", "std", "var"})
+_ACCELERATED_AGGS = frozenset({"sum", "mean", "prod", "min", "max", "count", "std", "var"})
 _FALLBACK_THRESHOLD: int | None = None
 
 
@@ -72,7 +74,7 @@ def _get_fallback_threshold() -> int:
     return _FALLBACK_THRESHOLD
 
 
-AggFunc = Literal["sum", "mean", "min", "max", "count", "std", "var"]
+AggFunc = Literal["sum", "mean", "prod", "min", "max", "count", "std", "var"]
 
 
 class BoosterSeriesGroupBy:
@@ -138,9 +140,6 @@ class BoosterSeriesGroupBy:
         if len(by_cols) == 1:
             key_col = self._df[by_cols[0]]
             if not isinstance(key_col, pd.Series):
-                return cast("Series", getattr(self._obj, agg)())
-
-            if not is_val_int and agg in {"sum", "mean"} and force_pandas_float_groupby_enabled():
                 return cast("Series", getattr(self._obj, agg)())
 
             key_dtype = capture_key_numpy_dtype(key_col)
@@ -277,6 +276,12 @@ class BoosterSeriesGroupBy:
         if args or kwargs:
             return cast("Series", self._obj.mean(*args, **kwargs))
         return self._try_accelerate("mean")
+
+    def prod(self, *args: Any, **kwargs: Any) -> Series:
+        """Compute product, using Rust acceleration when possible."""
+        if args or kwargs:
+            return cast("Series", self._obj.prod(*args, **kwargs))
+        return self._try_accelerate("prod")
 
     def min(self, *args: Any, **kwargs: Any) -> Series:
         """Compute min, using Rust acceleration when possible."""

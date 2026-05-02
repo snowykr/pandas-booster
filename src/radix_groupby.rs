@@ -24,7 +24,8 @@ use std::hash::{Hash, Hasher};
 
 use crate::aggregation::{
     Aggregator, CountAggF64, CountAggI64, MaxAggF64, MaxAggI64, MeanAggF64, MeanAggI64, MinAggF64,
-    MinAggI64, StdAggF64, StdAggI64, SumAggF64, SumAggI64, VarAggF64, VarAggI64,
+    MinAggI64, ProdAggF64, ProdAggI64, StdAggF64, StdAggI64, SumAggF64, SumAggI64, VarAggF64,
+    VarAggI64,
 };
 use crate::radix_sort::{
     i64_to_sortable_u64, radix_sort_perm_by_u32, radix_sort_perm_by_u64,
@@ -1015,6 +1016,7 @@ macro_rules! impl_radix_dispatch {
 }
 
 impl_radix_dispatch!(radix_groupby_sum_f64, f64, SumAggF64, f64);
+impl_radix_dispatch!(radix_groupby_prod_f64, f64, ProdAggF64, f64);
 impl_radix_dispatch!(radix_groupby_mean_f64, f64, MeanAggF64, f64);
 impl_radix_dispatch!(radix_groupby_var_f64, f64, VarAggF64, f64);
 impl_radix_dispatch!(radix_groupby_std_f64, f64, StdAggF64, f64);
@@ -1022,6 +1024,7 @@ impl_radix_dispatch!(radix_groupby_min_f64, f64, MinAggF64, f64);
 impl_radix_dispatch!(radix_groupby_max_f64, f64, MaxAggF64, f64);
 
 impl_radix_dispatch!(radix_groupby_sum_i64, i64, SumAggI64, i64);
+impl_radix_dispatch!(radix_groupby_prod_i64, i64, ProdAggI64, i64);
 impl_radix_dispatch!(radix_groupby_mean_i64, i64, MeanAggI64, f64);
 impl_radix_dispatch!(radix_groupby_var_i64, i64, VarAggI64, f64);
 impl_radix_dispatch!(radix_groupby_std_i64, i64, StdAggI64, f64);
@@ -1056,6 +1059,7 @@ macro_rules! impl_radix_firstseen_u64 {
 }
 
 impl_radix_firstseen_u32!(radix_groupby_sum_f64_firstseen_u32, f64, SumAggF64, f64);
+impl_radix_firstseen_u32!(radix_groupby_prod_f64_firstseen_u32, f64, ProdAggF64, f64);
 impl_radix_firstseen_u32!(radix_groupby_mean_f64_firstseen_u32, f64, MeanAggF64, f64);
 impl_radix_firstseen_u32!(radix_groupby_var_f64_firstseen_u32, f64, VarAggF64, f64);
 impl_radix_firstseen_u32!(radix_groupby_std_f64_firstseen_u32, f64, StdAggF64, f64);
@@ -1064,6 +1068,7 @@ impl_radix_firstseen_u32!(radix_groupby_max_f64_firstseen_u32, f64, MaxAggF64, f
 impl_radix_firstseen_u32!(radix_groupby_count_f64_firstseen_u32, f64, CountAggF64, i64);
 
 impl_radix_firstseen_u32!(radix_groupby_sum_i64_firstseen_u32, i64, SumAggI64, i64);
+impl_radix_firstseen_u32!(radix_groupby_prod_i64_firstseen_u32, i64, ProdAggI64, i64);
 impl_radix_firstseen_u32!(radix_groupby_mean_i64_firstseen_u32, i64, MeanAggI64, f64);
 impl_radix_firstseen_u32!(radix_groupby_var_i64_firstseen_u32, i64, VarAggI64, f64);
 impl_radix_firstseen_u32!(radix_groupby_std_i64_firstseen_u32, i64, StdAggI64, f64);
@@ -1072,6 +1077,7 @@ impl_radix_firstseen_u32!(radix_groupby_max_i64_firstseen_u32, i64, MaxAggI64, i
 impl_radix_firstseen_u32!(radix_groupby_count_i64_firstseen_u32, i64, CountAggI64, i64);
 
 impl_radix_firstseen_u64!(radix_groupby_sum_f64_firstseen_u64, f64, SumAggF64, f64);
+impl_radix_firstseen_u64!(radix_groupby_prod_f64_firstseen_u64, f64, ProdAggF64, f64);
 impl_radix_firstseen_u64!(radix_groupby_mean_f64_firstseen_u64, f64, MeanAggF64, f64);
 impl_radix_firstseen_u64!(radix_groupby_var_f64_firstseen_u64, f64, VarAggF64, f64);
 impl_radix_firstseen_u64!(radix_groupby_std_f64_firstseen_u64, f64, StdAggF64, f64);
@@ -1080,6 +1086,7 @@ impl_radix_firstseen_u64!(radix_groupby_max_f64_firstseen_u64, f64, MaxAggF64, f
 impl_radix_firstseen_u64!(radix_groupby_count_f64_firstseen_u64, f64, CountAggF64, i64);
 
 impl_radix_firstseen_u64!(radix_groupby_sum_i64_firstseen_u64, i64, SumAggI64, i64);
+impl_radix_firstseen_u64!(radix_groupby_prod_i64_firstseen_u64, i64, ProdAggI64, i64);
 impl_radix_firstseen_u64!(radix_groupby_mean_i64_firstseen_u64, i64, MeanAggI64, f64);
 impl_radix_firstseen_u64!(radix_groupby_var_i64_firstseen_u64, i64, VarAggI64, f64);
 impl_radix_firstseen_u64!(radix_groupby_std_i64_firstseen_u64, i64, StdAggI64, f64);
@@ -1094,6 +1101,13 @@ pub fn radix_groupby_sum_f64_sorted(
     values: &[f64],
 ) -> Result<GroupByMultiResult<f64>, String> {
     radix_groupby_sorted::<f64, SumAggF64, f64>(key_slices, values)
+}
+
+pub fn radix_groupby_prod_f64_sorted(
+    key_slices: &[&[i64]],
+    values: &[f64],
+) -> Result<GroupByMultiResult<f64>, String> {
+    radix_groupby_sorted::<f64, ProdAggF64, f64>(key_slices, values)
 }
 
 pub fn radix_groupby_mean_f64_sorted(
@@ -1136,6 +1150,13 @@ pub fn radix_groupby_sum_i64_sorted(
     values: &[i64],
 ) -> Result<GroupByMultiResult<i64>, String> {
     radix_groupby_sorted::<i64, SumAggI64, i64>(key_slices, values)
+}
+
+pub fn radix_groupby_prod_i64_sorted(
+    key_slices: &[&[i64]],
+    values: &[i64],
+) -> Result<GroupByMultiResult<i64>, String> {
+    radix_groupby_sorted::<i64, ProdAggI64, i64>(key_slices, values)
 }
 
 pub fn radix_groupby_mean_i64_sorted(
@@ -1350,6 +1371,59 @@ mod tests {
 
         assert_eq!(result.n_keys, 3);
         assert_eq!(result.values.len(), 2);
+    }
+
+    #[test]
+    fn test_radix_groupby_prod_f64_sorted_and_firstseen_semantics() {
+        let col1 = vec![2i64, 1, 2, 1, 3, 3, 4, 4];
+        let col2 = vec![20i64, 10, 20, 10, 30, 30, 40, 40];
+        let values = vec![
+            2.0,
+            3.0,
+            f64::NAN,
+            4.0,
+            f64::NAN,
+            f64::NAN,
+            f64::INFINITY,
+            0.0,
+        ];
+        let key_slices: Vec<&[i64]> = vec![&col1, &col2];
+
+        let sorted = radix_groupby_prod_f64_sorted(&key_slices, &values).unwrap();
+        assert_eq!(sorted.n_keys, 2);
+        assert_eq!(sorted.values.len(), 4);
+        assert_eq!(key_at_out(&sorted, 0, 0), 1);
+        assert_eq!(key_at_out(&sorted, 0, 1), 10);
+        assert_eq!(value_at_out(&sorted, 0), 12.0);
+        assert_eq!(key_at_out(&sorted, 2, 0), 3);
+        assert_eq!(value_at_out(&sorted, 2), 1.0);
+        assert!(value_at_out(&sorted, 3).is_nan());
+
+        let firstseen = radix_groupby_prod_f64_firstseen_u64(&key_slices, &values).unwrap();
+        assert_eq!(key_at_out(&firstseen, 0, 0), 2);
+        assert_eq!(value_at_out(&firstseen, 0), 2.0);
+        assert_eq!(key_at_out(&firstseen, 1, 0), 1);
+        assert_eq!(value_at_out(&firstseen, 1), 12.0);
+    }
+
+    #[test]
+    fn test_radix_groupby_prod_i64_wraps_firstseen_u32_and_sorted() {
+        let col1 = vec![9i64, 1, 9, 1, 2];
+        let col2 = vec![90i64, 10, 90, 10, 20];
+        let values = vec![i64::MAX, 3, 2, 4, 5];
+        let key_slices: Vec<&[i64]> = vec![&col1, &col2];
+
+        let firstseen = radix_groupby_prod_i64_firstseen_u32(&key_slices, &values).unwrap();
+        assert_eq!(key_at_out(&firstseen, 0, 0), 9);
+        assert_eq!(value_at_out(&firstseen, 0), i64::MAX.wrapping_mul(2));
+        assert_eq!(key_at_out(&firstseen, 1, 0), 1);
+        assert_eq!(value_at_out(&firstseen, 1), 12);
+
+        let sorted = radix_groupby_prod_i64_sorted(&key_slices, &values).unwrap();
+        assert_eq!(key_at_out(&sorted, 0, 0), 1);
+        assert_eq!(value_at_out(&sorted, 0), 12);
+        assert_eq!(key_at_out(&sorted, 2, 0), 9);
+        assert_eq!(value_at_out(&sorted, 2), i64::MAX.wrapping_mul(2));
     }
 
     #[test]

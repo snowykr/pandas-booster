@@ -30,7 +30,8 @@ const STD_VAR_ENGINE_MIN_SAMPLE_UNIQUES: usize = 4_096;
 
 use crate::aggregation::{
     Aggregator, CountAggF64, CountAggI64, MaxAggF64, MaxAggI64, MeanAggF64, MeanAggI64, MinAggF64,
-    MinAggI64, StdAggF64, StdAggI64, SumAggF64, SumAggI64, VarAggF64, VarAggI64,
+    MinAggI64, ProdAggF64, ProdAggI64, StdAggF64, StdAggI64, SumAggF64, SumAggI64, VarAggF64,
+    VarAggI64,
 };
 
 /// Result container for groupby operations, holding key-value pairs.
@@ -1206,6 +1207,33 @@ pub fn parallel_groupby_sum_f64_firstseen_u64(
     parallel_groupby_firstseen_u64_deterministic::<f64, SumAggF64, f64>(keys, values)
 }
 
+pub fn parallel_groupby_prod_f64(keys: &[i64], values: &[f64]) -> PyResult<GroupByResultF64> {
+    parallel_groupby_deterministic::<f64, ProdAggF64, f64>(keys, values)
+}
+
+pub fn parallel_groupby_prod_f64_sorted(
+    keys: &[i64],
+    values: &[f64],
+) -> PyResult<GroupByResultF64> {
+    let mut result = parallel_groupby_prod_f64(keys, values)?;
+    reorder_single_result_by_key(&mut result);
+    Ok(result)
+}
+
+pub fn parallel_groupby_prod_f64_firstseen_u32(
+    keys: &[i64],
+    values: &[f64],
+) -> PyResult<GroupByResultF64> {
+    parallel_groupby_firstseen_u32_deterministic::<f64, ProdAggF64, f64>(keys, values)
+}
+
+pub fn parallel_groupby_prod_f64_firstseen_u64(
+    keys: &[i64],
+    values: &[f64],
+) -> PyResult<GroupByResultF64> {
+    parallel_groupby_firstseen_u64_deterministic::<f64, ProdAggF64, f64>(keys, values)
+}
+
 pub fn parallel_groupby_mean_f64(keys: &[i64], values: &[f64]) -> PyResult<GroupByResultF64> {
     parallel_groupby_deterministic::<f64, MeanAggF64, f64>(keys, values)
 }
@@ -1401,6 +1429,33 @@ pub fn parallel_groupby_sum_i64_firstseen_u64(
     values: &[i64],
 ) -> PyResult<GroupByResultI64> {
     parallel_groupby_firstseen_u64::<i64, SumAggI64, i64>(keys, values)
+}
+
+pub fn parallel_groupby_prod_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultI64> {
+    parallel_groupby::<i64, ProdAggI64, i64>(keys, values)
+}
+
+pub fn parallel_groupby_prod_i64_sorted(
+    keys: &[i64],
+    values: &[i64],
+) -> PyResult<GroupByResultI64> {
+    let mut result = parallel_groupby_prod_i64(keys, values)?;
+    reorder_single_result_by_key(&mut result);
+    Ok(result)
+}
+
+pub fn parallel_groupby_prod_i64_firstseen_u32(
+    keys: &[i64],
+    values: &[i64],
+) -> PyResult<GroupByResultI64> {
+    parallel_groupby_firstseen_u32::<i64, ProdAggI64, i64>(keys, values)
+}
+
+pub fn parallel_groupby_prod_i64_firstseen_u64(
+    keys: &[i64],
+    values: &[i64],
+) -> PyResult<GroupByResultI64> {
+    parallel_groupby_firstseen_u64::<i64, ProdAggI64, i64>(keys, values)
 }
 
 pub fn parallel_groupby_mean_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultF64> {
@@ -1677,6 +1732,36 @@ mod tests {
     }
 
     #[test]
+    fn test_groupby_prod_f64_nan_and_arithmetic_nan_semantics() {
+        let keys = vec![1, 1, 1, 2, 2, 3, 3];
+        let values = vec![2.0, f64::NAN, 3.0, f64::NAN, f64::NAN, f64::INFINITY, 0.0];
+        let result = parallel_groupby_prod_f64(&keys, &values).unwrap();
+
+        let mut map: AHashMap<i64, f64> = AHashMap::new();
+        for (k, v) in result.keys.iter().zip(result.values.iter()) {
+            map.insert(*k, *v);
+        }
+
+        assert_eq!(map[&1], 6.0);
+        assert_eq!(map[&2], 1.0);
+        assert!(map[&3].is_nan());
+    }
+
+    #[test]
+    fn test_groupby_prod_f64_sorted_and_firstseen() {
+        let keys = vec![3, 1, 2, 1, 3];
+        let values = vec![2.0, 10.0, 100.0, 0.5, 4.0];
+
+        let sorted = parallel_groupby_prod_f64_sorted(&keys, &values).unwrap();
+        assert_eq!(sorted.keys, vec![1, 2, 3]);
+        assert_eq!(sorted.values, vec![5.0, 100.0, 8.0]);
+
+        let firstseen = parallel_groupby_prod_f64_firstseen_u32(&keys, &values).unwrap();
+        assert_eq!(firstseen.keys, vec![3, 1, 2]);
+        assert_eq!(firstseen.values, vec![8.0, 5.0, 100.0]);
+    }
+
+    #[test]
     fn test_groupby_mean_f64() {
         let keys = vec![1, 2, 1, 2, 1];
         let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
@@ -1801,6 +1886,22 @@ mod tests {
 
         assert_eq!(map[&1], 9);
         assert_eq!(map[&2], 6);
+    }
+
+    #[test]
+    fn test_groupby_prod_i64_wraps_and_firstseen_u64() {
+        let keys = vec![9, 1, 9, 1, 2];
+        let values = vec![i64::MAX, 3, 2, 4, 5];
+        let result = parallel_groupby_prod_i64_firstseen_u64(&keys, &values).unwrap();
+
+        assert_eq!(result.keys, vec![9, 1, 2]);
+        assert_eq!(result.values[0], i64::MAX.wrapping_mul(2));
+        assert_eq!(result.values[1], 12);
+        assert_eq!(result.values[2], 5);
+
+        let sorted = parallel_groupby_prod_i64_sorted(&keys, &values).unwrap();
+        assert_eq!(sorted.keys, vec![1, 2, 9]);
+        assert_eq!(sorted.values, vec![12, 5, i64::MAX.wrapping_mul(2)]);
     }
 
     #[test]

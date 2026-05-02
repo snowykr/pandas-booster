@@ -34,9 +34,7 @@ def benchmark_module():
 
 
 def _make_result(benchmark_module, *, preset: str, agg: str, sort: bool) -> dict:
-    stats = benchmark_module.BenchmarkStats(
-        mean=0.1, std=0.01, min=0.09, max=0.11, samples=[0.1]
-    )
+    stats = benchmark_module.BenchmarkStats(mean=0.1, std=0.01, min=0.09, max=0.11, samples=[0.1])
     return {
         "preset": preset,
         "n_rows": 1_000,
@@ -160,9 +158,7 @@ def test_collect_stats_evidence_uses_actual_force_pandas_sort_setting(
     monkeypatch.setattr(
         benchmark_module,
         "benchmark_single",
-        lambda *args, **kwargs: _make_result(
-            benchmark_module, preset="1key", agg="std", sort=True
-        ),
+        lambda *args, **kwargs: _make_result(benchmark_module, preset="1key", agg="std", sort=True),
     )
     monkeypatch.setattr(
         benchmark_module,
@@ -272,9 +268,7 @@ def test_describe_booster_execution_reports_benchmark_abi_skew_for_missing_kerne
     monkeypatch.delattr(rust, "groupby_std_f64", raising=False)
     monkeypatch.delattr(rust, "groupby_std_f64_sorted", raising=False)
 
-    df = benchmark_module.pd.DataFrame(
-        {"key": [1, 1, 2, 2], "value": [1.0, 3.0, 10.0, 14.0]}
-    )
+    df = benchmark_module.pd.DataFrame({"key": [1, 1, 2, 2], "value": [1.0, 3.0, 10.0, 14.0]})
 
     with (
         pytest.warns(abi.PandasBoosterAbiSkewWarning, match=r"ABI skew \(benchmark\)"),
@@ -459,9 +453,7 @@ def test_main_profile_json_wires_evidence_collection_and_file_write(
         "samples": 3,
         "selected_aggs": ["std"],
     }
-    assert payload["cases"][0]["breakdown"]["execution"] == (
-        "booster->rust.groupby_std_f64_sorted"
-    )
+    assert payload["cases"][0]["breakdown"]["execution"] == ("booster->rust.groupby_std_f64_sorted")
 
 
 def test_render_stats_evidence_section_skips_unavailable_breakdowns(benchmark_module):
@@ -485,3 +477,88 @@ def test_render_stats_evidence_section_skips_unavailable_breakdowns(benchmark_mo
     assert "### Booster conversion vs compute breakdown" in rendered
     assert "booster->pandas.groupby.std" in rendered
     assert "No Rust-only Booster breakdown rows were available" in rendered
+
+
+def test_prod_is_supported_benchmark_aggregation(benchmark_module):
+    assert "prod" in benchmark_module.SUPPORTED_AGGS
+    assert benchmark_module.resolve_selected_aggs(["prod", "sum", "prod"]) == ["prod", "sum"]
+
+
+def test_build_polars_agg_expr_supports_prod(benchmark_module):
+    if benchmark_module.pl is None:
+        pytest.skip("Polars is not installed")
+
+    expr = benchmark_module.build_polars_agg_expr("value", "prod")
+    assert "value" in repr(expr)
+
+
+def test_benchmark_worker_type_surface_mentions_prod():
+    source = _BENCHMARK_PATH.read_text()
+    assert 'Literal["sum", "mean", "prod", "std", "var", "min", "max", "count"]' in source
+    assert '"prod"' in source
+
+
+def test_main_accepts_prod_agg(benchmark_module, monkeypatch):
+    captured: list[dict[str, object]] = []
+    results = [{"agg": "prod"}]
+
+    def fake_run_benchmarks(**kwargs):
+        captured.append(kwargs)
+        return results
+
+    monkeypatch.setattr(benchmark_module, "run_benchmarks", fake_run_benchmarks)
+    monkeypatch.setattr(benchmark_module, "collect_stats_evidence", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        benchmark_module.sys,
+        "argv",
+        [
+            "benchmark.py",
+            "--cardinality",
+            "standard",
+            "--sort-mode",
+            "sorted",
+            "--samples",
+            "1",
+            "--agg",
+            "prod",
+        ],
+    )
+
+    assert benchmark_module.main() == results
+    assert captured == [
+        {
+            "cardinality": "standard",
+            "diagnostic": "none",
+            "sort_mode": "sorted",
+            "n_samples": 1,
+            "aggs": ["prod"],
+        }
+    ]
+
+
+def test_describe_booster_execution_reports_prod_dispatch(benchmark_module, monkeypatch):
+    import pandas_booster._rust as rust
+
+    threshold = rust.get_fallback_threshold()
+    df = benchmark_module.pd.DataFrame(
+        {
+            "key": benchmark_module.np.resize(
+                benchmark_module.np.array([1, 2], dtype=benchmark_module.np.int64), threshold
+            ),
+            "value": benchmark_module.np.linspace(
+                1.001, 1.01, threshold, dtype=benchmark_module.np.float64
+            ),
+        }
+    )
+
+    def fake_prod(_keys, _values):
+        return benchmark_module.np.array(
+            [1, 2], dtype=benchmark_module.np.int64
+        ), benchmark_module.np.array([1.0, 2.0], dtype=benchmark_module.np.float64)
+
+    fake_prod.__name__ = "groupby_prod_f64_sorted"
+    monkeypatch.setattr(rust, "groupby_prod_f64_sorted", fake_prod, raising=False)
+
+    assert benchmark_module.describe_booster_execution(df, ["key"], "value", "prod", True) == (
+        "booster->rust.groupby_prod_f64_sorted"
+    )

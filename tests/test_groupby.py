@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 from pandas_booster.accessor import BoosterAccessor
 
-AggFunc = Literal["sum", "mean", "min", "max", "count"]
+AggFunc = Literal["sum", "mean", "min", "max", "count", "prod"]
 
 
 @pytest.fixture
@@ -407,7 +407,7 @@ class TestFirstSeenOrderSingleKeySortFalse:
 
         return pd.DataFrame({"key": keys, "val": vals})
 
-    @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count"])
+    @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count", "prod"])
     def test_sort_false_preserves_first_seen_float(self, agg: AggFunc):
         df = self._make_df()
         booster_result = cast(BoosterAccessor, df.booster).groupby("key", "val", agg, sort=False)
@@ -423,7 +423,7 @@ class TestFirstSeenOrderSingleKeySortFalse:
             rtol=(0.0 if agg == "count" else 1e-10),
         )
 
-    @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count"])
+    @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count", "prod"])
     def test_sort_false_preserves_first_seen_int(self, agg: AggFunc):
         n = 200_000
         keys = np.array([2, 99, 1, 5], dtype=np.int64)
@@ -691,7 +691,7 @@ class TestFirstSeenOrderSortFalse:
         vals[mask] = np.nan
         return pd.DataFrame({"key": keys, "val": vals})
 
-    @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count"])
+    @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count", "prod"])
     def test_booster_sort_false_preserves_first_seen_single_key(self, agg: AggFunc):
         df = self._make_ordered_df()
         booster_result = cast(BoosterAccessor, df.booster).groupby("key", "val", agg, sort=False)
@@ -705,7 +705,7 @@ class TestFirstSeenOrderSortFalse:
             rtol=(0.0 if agg == "count" else 1e-10),
         )
 
-    @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count"])
+    @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count", "prod"])
     def test_proxy_sort_false_preserves_first_seen_single_key(self, agg: AggFunc):
         import pandas_booster
 
@@ -726,3 +726,125 @@ class TestFirstSeenOrderSortFalse:
             check_exact=(agg == "count"),
             rtol=(0.0 if agg == "count" else 1e-10),
         )
+
+
+def _assert_prod_series_matches_pandas(
+    booster_result: pd.Series,
+    pandas_result: pd.Series,
+    *,
+    check_dtype: bool = True,
+) -> None:
+    pd.testing.assert_series_equal(
+        booster_result,
+        pandas_result,
+        check_exact=False,
+        check_dtype=check_dtype,
+        rtol=1e-10,
+        atol=0.0,
+    )
+    zero_mask = (pandas_result.to_numpy() == 0.0) & ~pd.isna(pandas_result.to_numpy())
+    if zero_mask.any():
+        np.testing.assert_array_equal(
+            np.signbit(booster_result.to_numpy()[zero_mask]),
+            np.signbit(pandas_result.to_numpy()[zero_mask]),
+        )
+
+
+class TestProdSingleKey:
+    def test_prod_f64_matches_pandas_sort_modes(self):
+        n = 200_000
+        idx = np.arange(n, dtype=np.int64)
+        df = pd.DataFrame(
+            {
+                "key": np.tile(np.array([3, 1, 2, 5], dtype=np.int64), n // 4),
+                "val": (1.0 + (idx % 7).astype(np.float64) / 1000.0),
+            }
+        )
+        df.loc[df.index % 997 == 0, "val"] = np.nan
+
+        for sort in (True, False):
+            booster_result = cast(BoosterAccessor, df.booster).groupby(
+                "key", "val", "prod", sort=sort
+            )
+            pandas_result = df.groupby("key", sort=sort)["val"].prod()
+            _assert_prod_series_matches_pandas(booster_result, pandas_result)
+
+    def test_prod_i64_matches_pandas_sort_modes(self):
+        n = 200_000
+        vals = np.tile(np.array([-2, -1, 1, 2, 3], dtype=np.int64), n // 5)
+        df = pd.DataFrame(
+            {
+                "key": np.tile(np.array([9, 4, 9, 1, 4], dtype=np.int64), n // 5),
+                "val": vals,
+            }
+        )
+
+        for sort in (True, False):
+            booster_result = cast(BoosterAccessor, df.booster).groupby(
+                "key", "val", "prod", sort=sort
+            )
+            pandas_result = df.groupby("key", sort=sort)["val"].prod()
+            pd.testing.assert_series_equal(booster_result, pandas_result, check_exact=True)
+
+    def test_prod_float_special_values_match_pandas_observables(self):
+        pairs = [
+            (10, np.nan),
+            (10, np.nan),
+            (20, np.nan),
+            (20, 2.0),
+            (30, np.inf),
+            (30, 0.0),
+            (40, -np.inf),
+            (40, 0.0),
+            (50, -0.0),
+            (50, 2.0),
+            (60, 0.0),
+            (60, -2.0),
+            (70, 1e308),
+            (70, 1e308),
+            (80, 1e-308),
+            (80, 1e-308),
+        ]
+        repeats = 12_500
+        df = pd.DataFrame(
+            {
+                "key": np.array([k for k, _ in pairs] * repeats, dtype=np.int64),
+                "val": np.array([v for _, v in pairs] * repeats, dtype=np.float64),
+            }
+        )
+
+        booster_result = cast(BoosterAccessor, df.booster).groupby("key", "val", "prod", sort=True)
+        pandas_result = df.groupby("key", sort=True)["val"].prod()
+
+        _assert_prod_series_matches_pandas(booster_result, pandas_result)
+        assert booster_result.loc[10] == pandas_result.loc[10] == 1.0
+        assert np.isnan(booster_result.loc[30]) and np.isnan(pandas_result.loc[30])
+        assert np.isnan(booster_result.loc[40]) and np.isnan(pandas_result.loc[40])
+        assert np.signbit(booster_result.loc[50]) == np.signbit(pandas_result.loc[50])
+        assert np.signbit(booster_result.loc[60]) == np.signbit(pandas_result.loc[60])
+
+    def test_single_key_float_prod_respects_force_pandas_escape_hatch(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        import pandas_booster._rust as rust
+
+        n = 120_000
+        df = pd.DataFrame(
+            {
+                "key": np.repeat(np.array([1, 2], dtype=np.int64), n // 2),
+                "val": np.linspace(1.001, 1.01, n, dtype=np.float64),
+            }
+        )
+        expected = df.groupby("key")["val"].prod()
+
+        def _boom(*_args, **_kwargs):
+            raise AssertionError(
+                "float prod should use pandas when force-pandas escape hatch is set"
+            )
+
+        monkeypatch.setenv("PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY", "1")
+        for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
+            monkeypatch.setattr(rust, f"groupby_prod_f64{suffix}", _boom, raising=False)
+
+        result = cast(BoosterAccessor, df.booster).groupby("key", "val", "prod", sort=True)
+        pd.testing.assert_series_equal(result, expected)

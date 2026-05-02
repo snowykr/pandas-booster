@@ -139,7 +139,7 @@ class TestGroupbyPositionalArgsCompatibility:
 
 
 class TestAcceleratedAggregations:
-    @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count"])
+    @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count", "prod"])
     def test_single_key_agg_matches_pandas(self, large_df, agg):
         import pandas_booster
 
@@ -155,7 +155,7 @@ class TestAcceleratedAggregations:
             rtol=1e-10,
         )
 
-    @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count"])
+    @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count", "prod"])
     def test_multi_key_agg_matches_pandas(self, large_df, agg):
         import pandas_booster
 
@@ -171,7 +171,7 @@ class TestAcceleratedAggregations:
             rtol=1e-10,
         )
 
-    @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count"])
+    @pytest.mark.parametrize("agg", ["sum", "mean", "min", "max", "count", "prod"])
     def test_integer_values_match_pandas(self, large_df, agg):
         import pandas_booster
 
@@ -428,3 +428,123 @@ class TestEdgeCases:
         pandas_booster.activate()
         gb = large_df.groupby("key")
         assert len(gb.groups) == large_df["key"].nunique()
+
+
+class TestProdProxy:
+    def test_prod_no_arg_single_and_multi_key_match_pandas(self, large_df):
+        import pandas_booster
+
+        pandas_booster.activate()
+        single_result = large_df.groupby("key")["val_float"].prod()
+        multi_result = large_df.groupby(["key", "key2"], sort=False)["val_int"].prod()
+        pandas_booster.deactivate()
+
+        single_expected = large_df.groupby("key")["val_float"].prod()
+        multi_expected = large_df.groupby(["key", "key2"], sort=False)["val_int"].prod()
+
+        pd.testing.assert_series_equal(
+            single_result.sort_index(), single_expected.sort_index(), check_exact=False, rtol=1e-10
+        )
+        pd.testing.assert_series_equal(multi_result, multi_expected, check_exact=True)
+
+    def test_prod_no_arg_uses_accelerated_proxy_when_eligible(
+        self, large_df, monkeypatch: pytest.MonkeyPatch
+    ):
+        import pandas_booster
+        import pandas_booster._rust as rust
+
+        expected = large_df.groupby("key", sort=True)["val_float"].prod()
+        calls: list[str] = []
+
+        def fake_sorted(_keys, _values):
+            calls.append("prod")
+            return expected.index.to_numpy(dtype=np.int64), expected.to_numpy(dtype=np.float64)
+
+        monkeypatch.setattr(rust, "groupby_prod_f64_sorted", fake_sorted, raising=False)
+
+        pandas_booster.activate()
+        try:
+            result = large_df.groupby("key", sort=True)["val_float"].prod()
+        finally:
+            pandas_booster.deactivate()
+
+        assert calls == ["prod"]
+        pd.testing.assert_series_equal(
+            result.sort_index(), expected.sort_index(), check_exact=False, rtol=1e-10
+        )
+
+    def test_prod_no_arg_uses_accelerated_proxy_for_multi_key_int_sort_true(
+        self, large_df, monkeypatch: pytest.MonkeyPatch
+    ):
+        import pandas_booster
+        import pandas_booster._rust as rust
+
+        expected = large_df.groupby(["key", "key2"], sort=True)["val_int"].prod()
+        calls: list[str] = []
+
+        def fake_sorted(_key_arrays, _values):
+            calls.append("prod")
+            return [
+                expected.index.get_level_values(0).to_numpy(dtype=np.int64),
+                expected.index.get_level_values(1).to_numpy(dtype=np.int64),
+            ], expected.to_numpy(dtype=np.int64)
+
+        monkeypatch.setattr(rust, "groupby_multi_prod_i64_sorted", fake_sorted, raising=False)
+
+        pandas_booster.activate()
+        try:
+            result = large_df.groupby(["key", "key2"], sort=True)["val_int"].prod()
+        finally:
+            pandas_booster.deactivate()
+
+        assert calls == ["prod"]
+        pd.testing.assert_series_equal(result, expected, check_exact=True)
+
+    @pytest.mark.parametrize(
+        ("kwargs"),
+        [
+            pytest.param({"min_count": 2}, id="min_count"),
+            pytest.param({"numeric_only": False}, id="numeric_only"),
+        ],
+    )
+    def test_prod_kwargs_delegate_to_pandas(
+        self, large_df, monkeypatch: pytest.MonkeyPatch, kwargs
+    ):
+        import pandas_booster
+        import pandas_booster._rust as rust
+
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("prod with kwargs must delegate to pandas")
+
+        for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
+            monkeypatch.setattr(rust, f"groupby_prod_f64{suffix}", _boom, raising=False)
+
+        pandas_booster.activate()
+        try:
+            result = large_df.groupby("key")["val_float"].prod(**kwargs)
+        finally:
+            pandas_booster.deactivate()
+        expected = large_df.groupby("key")["val_float"].prod(**kwargs)
+
+        pd.testing.assert_series_equal(
+            result.sort_index(), expected.sort_index(), check_exact=False, rtol=1e-10
+        )
+
+    def test_prod_invalid_positional_arg_delegates_and_preserves_type_error(
+        self, large_df, monkeypatch: pytest.MonkeyPatch
+    ):
+        import pandas_booster
+        import pandas_booster._rust as rust
+
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("prod with positional args must delegate to pandas")
+
+        for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
+            monkeypatch.setattr(rust, f"groupby_prod_f64{suffix}", _boom, raising=False)
+
+        pandas_booster.activate()
+        try:
+            with pytest.raises(TypeError):
+                large_df.groupby("key")["val_float"].prod(1, 2, 3)
+        finally:
+            pandas_booster.deactivate()

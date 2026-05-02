@@ -1,13 +1,13 @@
 //! Aggregation primitives for parallel groupby operations.
 //!
 //! This module defines the [`Aggregator`] trait and implementations for common
-//! statistical operations (sum, mean, min, max) on both `f64` and `i64` types.
+//! statistical operations (sum, prod, mean, min, max) on both `f64` and `i64` types.
 //!
 //! ## Design Decisions
 //!
 //! - **NaN Handling**: Float aggregators skip NaN values (matching Pandas behavior).
 //! - **Integer Output**: Integer aggregations follow Pandas semantics:
-//!   `sum/min/max/count` return integer outputs and `mean` returns `f64`.
+//!   `sum/prod/min/max/count` return integer outputs and `mean` returns `f64`.
 //! - **Thread Safety**: All aggregators implement `Send + Sync` for parallel execution.
 
 /// Core trait for streaming aggregation with support for parallel merge.
@@ -47,6 +47,37 @@ impl Aggregator<f64, f64> for SumAggF64 {
 
     fn finalize(&self) -> f64 {
         self.sum
+    }
+}
+
+/// Product aggregator for f64. Skips input NaN values only.
+///
+/// The identity is `1.0`, so empty/all-input-NaN groups finalize to `1.0`
+/// (pandas `min_count=0` behavior). Arithmetic NaNs produced by
+/// multiplication, such as `inf * 0`, are preserved because only the incoming
+/// value is checked before multiplying.
+#[derive(Clone, Default)]
+pub struct ProdAggF64 {
+    pub prod: f64,
+}
+
+impl Aggregator<f64, f64> for ProdAggF64 {
+    fn init() -> Self {
+        Self { prod: 1.0 }
+    }
+
+    fn update(&mut self, value: f64) {
+        if !value.is_nan() {
+            self.prod *= value;
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.prod *= other.prod;
+    }
+
+    fn finalize(&self) -> f64 {
+        self.prod
     }
 }
 
@@ -314,6 +345,30 @@ impl Aggregator<i64, i64> for SumAggI64 {
     }
 }
 
+/// Product aggregator for i64. Uses explicit wrapping multiplication.
+#[derive(Clone, Default)]
+pub struct ProdAggI64 {
+    pub prod: i64,
+}
+
+impl Aggregator<i64, i64> for ProdAggI64 {
+    fn init() -> Self {
+        Self { prod: 1 }
+    }
+
+    fn update(&mut self, value: i64) {
+        self.prod = self.prod.wrapping_mul(value);
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.prod = self.prod.wrapping_mul(other.prod);
+    }
+
+    fn finalize(&self) -> i64 {
+        self.prod
+    }
+}
+
 /// Mean aggregator for i64. Returns NaN for empty groups.
 #[derive(Clone, Default)]
 pub struct MeanAggI64 {
@@ -531,6 +586,44 @@ mod tests {
         agg.update(f64::NAN);
         agg.update(f64::NAN);
         assert!((agg.finalize() - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_prod_f64_skips_input_nan_and_all_nan_returns_one() {
+        let mut agg = ProdAggF64::init();
+        agg.update(f64::NAN);
+        agg.update(2.0);
+        agg.update(3.0);
+        assert_eq!(agg.finalize(), 6.0);
+
+        let mut all_nan = ProdAggF64::init();
+        all_nan.update(f64::NAN);
+        all_nan.update(f64::NAN);
+        assert_eq!(all_nan.finalize(), 1.0);
+    }
+
+    #[test]
+    fn test_prod_f64_preserves_arithmetic_nan() {
+        let mut agg = ProdAggF64::init();
+        agg.update(f64::INFINITY);
+        agg.update(0.0);
+        assert!(agg.finalize().is_nan());
+
+        agg.update(f64::NAN);
+        assert!(agg.finalize().is_nan());
+    }
+
+    #[test]
+    fn test_prod_i64_update_and_merge_wrap() {
+        let mut left = ProdAggI64::init();
+        left.update(i64::MAX);
+        left.update(2);
+        assert_eq!(left.finalize(), i64::MAX.wrapping_mul(2));
+
+        let mut right = ProdAggI64::init();
+        right.update(3);
+        left.merge(right);
+        assert_eq!(left.finalize(), i64::MAX.wrapping_mul(2).wrapping_mul(3));
     }
 
     #[test]
