@@ -76,7 +76,7 @@ if TYPE_CHECKING:
     from typing import Literal
 
 
-SUPPORTED_AGGS: tuple[str, ...] = ("sum", "mean", "std", "var", "min", "max", "count")
+SUPPORTED_AGGS: tuple[str, ...] = ("sum", "mean", "prod", "std", "var", "min", "max", "count")
 CORE_BENCHMARK_AGG = "sum"
 STATS_EVIDENCE_AGGS: tuple[str, str] = ("std", "var")
 STATS_EVIDENCE_SORTS: tuple[bool, bool] = (True, False)
@@ -247,6 +247,7 @@ def build_polars_agg_expr(value_col: str, agg: str) -> Any:
     agg_map = {
         "sum": pl.col(value_col).sum().alias(value_col),
         "mean": pl.col(value_col).mean().alias(value_col),
+        "prod": pl.col(value_col).product().alias(value_col),
         "std": pl.col(value_col).std().alias(value_col),
         "var": pl.col(value_col).var().alias(value_col),
         "min": pl.col(value_col).min().alias(value_col),
@@ -320,7 +321,7 @@ def resolve_booster_benchmark_dispatch(
     if (
         len(key_cols) == 1
         and pd.api.types.is_float_dtype(val_col)
-        and agg in {"sum", "mean"}
+        and agg in {"sum", "mean", "prod"}
         and force_pandas_float_groupby_enabled()
     ):
         return {
@@ -686,7 +687,7 @@ def render_stats_evidence_section(evidence: list[dict[str, Any]]) -> str:
 def benchmark_worker(
     preset_name: str,
     backend: str,
-    agg: Literal["sum", "mean", "std", "var", "min", "max", "count"] = "sum",
+    agg: Literal["sum", "mean", "prod", "std", "var", "min", "max", "count"] = "sum",
     sort: bool = True,
     verify_correctness: bool = False,
     mode: Literal["cold", "warm"] = "cold",
@@ -933,7 +934,7 @@ def benchmark_single(
 
     Args:
         preset_name: Name of the dataset preset from PRESETS.
-        agg: Aggregation function ("sum", "mean", "std", "var", "min", "max", "count").
+        agg: Aggregation function ("sum", "mean", "prod", "std", "var", "min", "max", "count").
         sort: Whether to sort the result.
         n_samples: Number of samples (= number of fresh processes).
         verify_correctness: Whether to verify results match.
@@ -1717,6 +1718,7 @@ Examples:
   python benches/benchmark.py --cardinality standard             # Standard only
   python benches/benchmark.py --cardinality high                 # High only
   python benches/benchmark.py --agg std --agg var                # Run only std/var benchmarks
+  python benches/benchmark.py --agg prod                         # Run only product benchmarks
   python benches/benchmark.py --agg min --agg max               # Run only min/max benchmarks
   python benches/benchmark.py --diagnostic threshold --sort-mode unsorted
       # Add threshold diagnostics
