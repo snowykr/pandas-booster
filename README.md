@@ -176,7 +176,7 @@ To ensure correctness and performance, the following constraints apply:
 - **Extension dtypes**: Pandas extension dtypes (e.g., nullable `Int64` / `Float64` using `pd.NA`) are not supported and will trigger a fallback to Pandas.
 - **NaN handling**: `NaN` values in the target column are skipped in aggregations, matching standard Pandas behavior.
 - **Determinism policy (single-key float `sum`/`mean`/`prod`/`std`/`var`)**: For identical inputs in the same runtime environment, pandas-booster returns bitwise-identical results across thread counts. `NaN` inputs are skipped; all-`NaN` groups follow existing semantics (`sum -> +0.0`, `prod -> 1.0`, `mean -> NaN`, `std/var -> NaN`). Compared with pandas, outputs may differ at the last-bit level (including `+0.0` vs `-0.0`) because pandas-booster uses an implementation-defined deterministic reduction order.
-- **Return types**: Integer aggregations follow Pandas-style dtypes: `sum/prod/min/max/count` return integer results for signed integer inputs; unsigned `prod` uses pandas fallback; `mean/std/var` return `float64`. Standard deviation and variance always use `ddof=1`.
+- **Return types**: Integer aggregations follow Pandas-style dtypes: `sum/prod/min/max/count` return integer results for signed integer inputs; all unsigned `prod` inputs always fall back to pandas; `mean/std/var` return `float64`. Standard deviation and variance always use `ddof=1`.
 
 ## Performance
 

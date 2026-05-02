@@ -1479,6 +1479,34 @@ class TestProdEdgeCases:
         pd.testing.assert_series_equal(result.sort_index(), expected.sort_index(), check_dtype=True)
         assert result.dtype == expected.dtype == np.dtype("uint64")
 
+    def test_multi_key_proxy_unsigned_prod_falls_back_to_pandas(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        import pandas_booster._rust as rust
+
+        n = 120_000
+        df = pd.DataFrame(
+            {
+                "k1": np.resize(np.array([1, 2, 3], dtype=np.int64), n),
+                "k2": np.resize(np.array([10, 20], dtype=np.int64), n),
+                "val": np.resize(np.array([2, 3, 4], dtype=np.uint32), n),
+            }
+        )
+
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("unsigned multi-key proxy prod should use pandas fallback")
+
+        for kernel in ("f64", "i64"):
+            for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
+                monkeypatch.setattr(
+                    rust, f"groupby_multi_prod_{kernel}{suffix}", _boom, raising=False
+                )
+
+        result = _proxy_groupby_result(df, ["k1", "k2"], "val", "prod", sort=False)
+        expected = df.groupby(["k1", "k2"], sort=False)["val"].prod()
+        pd.testing.assert_series_equal(result, expected, check_dtype=True)
+        assert result.dtype == expected.dtype == np.dtype("uint64")
+
     def test_int64_prod_overflow_matches_pandas(self):
         import pandas_booster  # noqa: F401
 
