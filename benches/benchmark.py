@@ -306,7 +306,7 @@ def resolve_booster_benchmark_dispatch(
     val_col = cast(pd.Series, df[value_col])
     key_series = [cast(pd.Series, df[col]) for col in key_cols]
 
-    if agg not in {"std", "var"} and len(df) < rust.get_fallback_threshold():
+    if agg not in {"std", "var", "median"} and len(df) < rust.get_fallback_threshold():
         return {
             "execution": f"booster->pandas.groupby.{agg}",
             "rust_func": None,
@@ -319,7 +319,20 @@ def resolve_booster_benchmark_dispatch(
         agg=cast(Any, agg),
         force_pandas_float_groupby=force_pandas_float_groupby_enabled(),
     )
-    if agg == "median" and not groupby_accel.has_any_rust_groupby_func(rust, "median"):
+    is_val_int = pd.api.types.is_integer_dtype(val_col)
+    prefix = "groupby_multi" if len(key_cols) > 1 else "groupby"
+    suffix = "i64" if is_val_int else "f64"
+    force_pandas_sort = (
+        False if ignore_force_pandas_sort else bool(sort) and force_pandas_sort_enabled()
+    )
+
+    if agg == "median" and not groupby_accel.has_rust_groupby_func(
+        rust,
+        f"{prefix}_{agg}_{suffix}",
+        sort=sort,
+        n_rows=len(df),
+        force_pandas_sort=force_pandas_sort,
+    ):
         return {
             "execution": f"booster->pandas.groupby.{agg}",
             "rust_func": None,
@@ -344,17 +357,12 @@ def resolve_booster_benchmark_dispatch(
             "needs_python_sort": False,
         }
 
-    is_val_int = pd.api.types.is_integer_dtype(val_col)
-    prefix = "groupby_multi" if len(key_cols) > 1 else "groupby"
-    suffix = "i64" if is_val_int else "f64"
     rust_func, needs_python_sort = groupby_accel.select_rust_groupby_func(
         rust,
         f"{prefix}_{agg}_{suffix}",
         sort=sort,
         n_rows=len(df),
-        force_pandas_sort=(
-            False if ignore_force_pandas_sort else bool(sort) and force_pandas_sort_enabled()
-        ),
+        force_pandas_sort=force_pandas_sort,
         context="benchmark",
     )
     execution = f"booster->rust.{rust_func.__name__}"
