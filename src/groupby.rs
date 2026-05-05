@@ -29,9 +29,9 @@ const STD_VAR_ENGINE_SAMPLE_SIZE: usize = 16_384;
 const STD_VAR_ENGINE_MIN_SAMPLE_UNIQUES: usize = 4_096;
 
 use crate::aggregation::{
-    Aggregator, CountAggF64, CountAggI64, MaxAggF64, MaxAggI64, MeanAggF64, MeanAggI64, MinAggF64,
-    MinAggI64, ProdAggF64, ProdAggI64, StdAggF64, StdAggI64, SumAggF64, SumAggI64, VarAggF64,
-    VarAggI64,
+    Aggregator, CountAggF64, CountAggI64, MaxAggF64, MaxAggI64, MeanAggF64, MeanAggI64,
+    MedianAggF64, MedianAggI64, MinAggF64, MinAggI64, ProdAggF64, ProdAggI64, StdAggF64, StdAggI64,
+    SumAggF64, SumAggI64, VarAggF64, VarAggI64,
 };
 
 /// Result container for groupby operations, holding key-value pairs.
@@ -1261,6 +1261,33 @@ pub fn parallel_groupby_mean_f64_firstseen_u64(
     parallel_groupby_firstseen_u64_deterministic::<f64, MeanAggF64, f64>(keys, values)
 }
 
+pub fn parallel_groupby_median_f64(keys: &[i64], values: &[f64]) -> PyResult<GroupByResultF64> {
+    parallel_groupby::<f64, MedianAggF64, f64>(keys, values)
+}
+
+pub fn parallel_groupby_median_f64_sorted(
+    keys: &[i64],
+    values: &[f64],
+) -> PyResult<GroupByResultF64> {
+    let mut result = parallel_groupby_median_f64(keys, values)?;
+    reorder_single_result_by_key(&mut result);
+    Ok(result)
+}
+
+pub fn parallel_groupby_median_f64_firstseen_u32(
+    keys: &[i64],
+    values: &[f64],
+) -> PyResult<GroupByResultF64> {
+    parallel_groupby_firstseen_u32::<f64, MedianAggF64, f64>(keys, values)
+}
+
+pub fn parallel_groupby_median_f64_firstseen_u64(
+    keys: &[i64],
+    values: &[f64],
+) -> PyResult<GroupByResultF64> {
+    parallel_groupby_firstseen_u64::<f64, MedianAggF64, f64>(keys, values)
+}
+
 pub fn parallel_groupby_var_f64(keys: &[i64], values: &[f64]) -> PyResult<GroupByResultF64> {
     parallel_groupby_std_var_impl::<f64, VarAggF64, f64>(keys, values)
 }
@@ -1483,6 +1510,33 @@ pub fn parallel_groupby_mean_i64_firstseen_u64(
     values: &[i64],
 ) -> PyResult<GroupByResultF64> {
     parallel_groupby_firstseen_u64::<i64, MeanAggI64, f64>(keys, values)
+}
+
+pub fn parallel_groupby_median_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultF64> {
+    parallel_groupby::<i64, MedianAggI64, f64>(keys, values)
+}
+
+pub fn parallel_groupby_median_i64_sorted(
+    keys: &[i64],
+    values: &[i64],
+) -> PyResult<GroupByResultF64> {
+    let mut result = parallel_groupby_median_i64(keys, values)?;
+    reorder_single_result_by_key(&mut result);
+    Ok(result)
+}
+
+pub fn parallel_groupby_median_i64_firstseen_u32(
+    keys: &[i64],
+    values: &[i64],
+) -> PyResult<GroupByResultF64> {
+    parallel_groupby_firstseen_u32::<i64, MedianAggI64, f64>(keys, values)
+}
+
+pub fn parallel_groupby_median_i64_firstseen_u64(
+    keys: &[i64],
+    values: &[i64],
+) -> PyResult<GroupByResultF64> {
+    parallel_groupby_firstseen_u64::<i64, MedianAggI64, f64>(keys, values)
 }
 
 pub fn parallel_groupby_var_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultF64> {
