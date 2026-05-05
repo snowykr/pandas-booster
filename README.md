@@ -157,7 +157,7 @@ To ensure predictable performance and correctness, the following rules define wh
 |---------|-------------------------|--------------------------|
 | Keys | Single or Multi-key (up to 10), integer dtypes | Non-integer keys, custom objects |
 | Values | Numeric (`int64`, `float64`) | `uint64`, object, bool, datetime, category |
-| Semantics | `ddof=1` (default) | Custom `ddof`, `numeric_only`, `skipna=False` |
+| Semantics | pandas defaults (`std`/`var`: `ddof=1`; `median`: skip `NaN` values) | Custom `ddof`, `numeric_only`, `skipna=False` |
 | Dtypes | Primitive NumPy arrays | Extension dtypes (nullable `Int64`, `Float64`, `pd.NA`) |
 
 #### Determinism and Precision
@@ -170,7 +170,7 @@ To ensure predictable performance and correctness, the following rules define wh
 
 To ensure correctness and performance, the following constraints apply:
 
-- **Minimum dataset size**: 100,000 rows for legacy aggregations (`sum`, `mean`, `prod`, `min`, `max`, `count`). For smaller datasets on these operations, the library automatically falls back to native Pandas. **Note**: Supported `std` and `var` operations are Rust-first by default within their certified dispatch domain regardless of dataset size.
+- **Minimum dataset size**: 100,000 rows for legacy aggregations (`sum`, `mean`, `prod`, `min`, `max`, `count`). For smaller datasets on these operations, the library automatically falls back to native Pandas. **Note**: Supported `std`, `var`, and `median` operations are Rust-first by default within their certified dispatch domain regardless of dataset size.
 - **Key column(s)**: Must be integer dtype (e.g., `int64`, `int32`). For multi-column groupby, all key columns must be integers. The accelerated path preserves Pandas' index dtype (e.g., `int32` on numpy-backend pandas).
 - **Maximum key columns**: Up to 10 columns for multi-column groupby.
 - **Value column**: Must be a numeric dtype (integers or floats).

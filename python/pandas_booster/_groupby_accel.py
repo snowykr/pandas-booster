@@ -56,16 +56,6 @@ def select_rust_groupby_func(
         return _lookup(func_base), True
 
 
-def has_any_rust_groupby_func(rust: Any, agg: str) -> bool:
-    """Return whether any Rust symbol exists for an aggregation family."""
-    for prefix in ("groupby", "groupby_multi"):
-        for kernel in ("f64", "i64"):
-            for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
-                if hasattr(rust, f"{prefix}_{agg}_{kernel}{suffix}"):
-                    return True
-    return False
-
-
 def has_rust_groupby_func(
     rust: Any,
     func_base: str,

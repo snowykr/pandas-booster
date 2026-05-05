@@ -981,7 +981,7 @@ fn parallel_groupby<T, A, O>(keys: &[i64], values: &[T]) -> PyResult<GroupByResu
 where
     T: Copy + Send + Sync,
     O: Copy,
-    A: Aggregator<T, O> + Clone + Default,
+    A: Aggregator<T, O>,
 {
     let chunk_size = (keys.len() / rayon::current_num_threads()).max(10_000);
 
@@ -999,9 +999,14 @@ where
         )
         .reduce(AHashMap::default, |mut map1, map2| {
             for (k, v) in map2 {
-                map1.entry(k)
-                    .and_modify(|existing| existing.merge(v.clone()))
-                    .or_insert(v);
+                match map1.entry(k) {
+                    Entry::Occupied(mut e) => {
+                        e.get_mut().merge(v);
+                    }
+                    Entry::Vacant(e) => {
+                        e.insert(v);
+                    }
+                }
             }
             map1
         });
@@ -1694,6 +1699,28 @@ mod tests {
     use super::*;
     use rayon::ThreadPoolBuilder;
 
+    struct NonCloneVecAgg {
+        values: Vec<i64>,
+    }
+
+    impl Aggregator<i64, usize> for NonCloneVecAgg {
+        fn init() -> Self {
+            Self { values: Vec::new() }
+        }
+
+        fn update(&mut self, value: i64) {
+            self.values.push(value);
+        }
+
+        fn merge(&mut self, other: Self) {
+            self.values.extend(other.values);
+        }
+
+        fn finalize(&self) -> usize {
+            self.values.len()
+        }
+    }
+
     fn make_sensitive_single_key_float_data() -> (Vec<i64>, Vec<f64>) {
         let n = 260_000usize;
         let mut keys = Vec::with_capacity(n);
@@ -1768,6 +1795,21 @@ mod tests {
                 "bitwise mismatch at thread count {threads}"
             );
         }
+    }
+
+    #[test]
+    fn test_parallel_groupby_reduce_merges_owned_aggregators_without_clone() {
+        let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+        pool.install(|| {
+            let n = 80_000usize;
+            let keys = vec![7_i64; n];
+            let values: Vec<i64> = (0..n as i64).collect();
+
+            let result = parallel_groupby::<i64, NonCloneVecAgg, usize>(&keys, &values).unwrap();
+
+            assert_eq!(result.keys, vec![7]);
+            assert_eq!(result.values, vec![n]);
+        });
     }
 
     #[test]

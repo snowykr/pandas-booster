@@ -617,7 +617,7 @@ def _patch_all_numeric_kernels_for_agg_to_raise(
                 monkeypatch.setattr(rust, f"{prefix}_{agg}_{kernel}{suffix}", _boom, raising=False)
 
 
-def _delete_std_var_kernel_symbols(
+def _delete_groupby_kernel_symbols(
     monkeypatch: pytest.MonkeyPatch,
     rust: object,
     agg: str,
@@ -1045,7 +1045,7 @@ class TestStdVarContracts:
         )
         expected = getattr(df.groupby("key", sort=True)["val"], agg)()
 
-        _delete_std_var_kernel_symbols(monkeypatch, rust, agg, kernel="f64", multi=False)
+        _delete_groupby_kernel_symbols(monkeypatch, rust, agg, kernel="f64", multi=False)
         monkeypatch.setattr(abi, "_WARNED_ABI_SKEW", False)
 
         booster = df.booster
@@ -1101,7 +1101,7 @@ class TestStdVarContracts:
         by_cols = ["k1", "k2"]
         expected = getattr(df.groupby(by_cols, sort=True)["val"], agg)()
 
-        _delete_std_var_kernel_symbols(monkeypatch, rust, agg, kernel="f64", multi=True)
+        _delete_groupby_kernel_symbols(monkeypatch, rust, agg, kernel="f64", multi=True)
         monkeypatch.setattr(abi, "_WARNED_ABI_SKEW", False)
 
         booster = df.booster
@@ -1155,7 +1155,7 @@ class TestStdVarContracts:
             }
         )
 
-        _delete_std_var_kernel_symbols(monkeypatch, rust, agg, kernel="f64", multi=False)
+        _delete_groupby_kernel_symbols(monkeypatch, rust, agg, kernel="f64", multi=False)
         monkeypatch.setattr(abi, "_WARNED_ABI_SKEW", False)
 
         with pytest.raises(
@@ -1196,7 +1196,7 @@ class TestStdVarContracts:
         )
         by_cols = ["k1", "k2"]
 
-        _delete_std_var_kernel_symbols(monkeypatch, rust, agg, kernel="f64", multi=True)
+        _delete_groupby_kernel_symbols(monkeypatch, rust, agg, kernel="f64", multi=True)
         monkeypatch.setattr(abi, "_WARNED_ABI_SKEW", False)
 
         with pytest.raises(
@@ -1591,7 +1591,7 @@ class TestMedianDispatchContracts:
         )
         expected = df.groupby("key", sort=True)["val"].median()
 
-        _delete_std_var_kernel_symbols(monkeypatch, rust, "median", kernel="f64", multi=False)
+        _delete_groupby_kernel_symbols(monkeypatch, rust, "median", kernel="f64", multi=False)
         monkeypatch.setattr(rust, "groupby_median_i64", lambda *_args: None, raising=False)
         monkeypatch.setattr(abi, "_WARNED_ABI_SKEW", False)
 
@@ -1646,7 +1646,7 @@ class TestMedianDispatchContracts:
         by_cols = ["k1", "k2"]
         expected = df.groupby(by_cols, sort=True)["val"].median()
 
-        _delete_std_var_kernel_symbols(monkeypatch, rust, "median", kernel="f64", multi=True)
+        _delete_groupby_kernel_symbols(monkeypatch, rust, "median", kernel="f64", multi=True)
         monkeypatch.setattr(rust, "groupby_multi_median_i64", lambda *_args: None, raising=False)
         monkeypatch.setattr(abi, "_WARNED_ABI_SKEW", False)
 
@@ -1708,7 +1708,7 @@ class TestMedianDispatchContracts:
                     "val": np.array([1.0, 2.0, 4.0, 8.0, 2.5, 3.5, 6.5, 7.5, 5.0, 6.0, 9.0, 10.0]),
                 }
             )
-            _delete_std_var_kernel_symbols(monkeypatch, rust, "median", kernel="f64", multi=False)
+            _delete_groupby_kernel_symbols(monkeypatch, rust, "median", kernel="f64", multi=False)
             monkeypatch.setattr(rust, "groupby_median_i64", lambda *_args: None, raising=False)
         else:
             df = pd.DataFrame(
@@ -1718,7 +1718,7 @@ class TestMedianDispatchContracts:
                     "val": [1.0, 5.0, 9.0, 2.0, 6.0, 10.0],
                 }
             )
-            _delete_std_var_kernel_symbols(monkeypatch, rust, "median", kernel="f64", multi=True)
+            _delete_groupby_kernel_symbols(monkeypatch, rust, "median", kernel="f64", multi=True)
             monkeypatch.setattr(
                 rust, "groupby_multi_median_i64", lambda *_args: None, raising=False
             )
