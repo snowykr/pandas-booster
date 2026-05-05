@@ -1040,7 +1040,9 @@ class TestStdVarContracts:
         df = pd.DataFrame(
             {
                 "key": np.repeat([1, 2, 3], 4),
-                "val": np.array([1.0, 2.0, 4.0, 8.0, 2.5, 3.5, 6.5, 7.5, 5.0, 6.0, 9.0, 10.0]),
+                "val": np.array(
+                    [1.0, 2.0, 4.0, 8.0, 2.5, 3.5, 6.5, 7.5, 5.0, 6.0, 9.0, 10.0]
+                ),
             }
         )
         expected = getattr(df.groupby("key", sort=True)["val"], agg)()
@@ -1586,7 +1588,9 @@ class TestMedianDispatchContracts:
         df = pd.DataFrame(
             {
                 "key": np.repeat([1, 2, 3], 4),
-                "val": np.array([1.0, 2.0, 4.0, 8.0, 2.5, 3.5, 6.5, 7.5, 5.0, 6.0, 9.0, 10.0]),
+                "val": np.array(
+                    [1.0, 2.0, 4.0, 8.0, 2.5, 3.5, 6.5, 7.5, 5.0, 6.0, 9.0, 10.0]
+                ),
             }
         )
         expected = df.groupby("key", sort=True)["val"].median()
