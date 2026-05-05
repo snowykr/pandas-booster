@@ -479,9 +479,13 @@ def test_render_stats_evidence_section_skips_unavailable_breakdowns(benchmark_mo
     assert "No Rust-only Booster breakdown rows were available" in rendered
 
 
-def test_prod_is_supported_benchmark_aggregation(benchmark_module):
+def test_prod_and_median_are_supported_benchmark_aggregations(benchmark_module):
     assert "prod" in benchmark_module.SUPPORTED_AGGS
-    assert benchmark_module.resolve_selected_aggs(["prod", "sum", "prod"]) == ["prod", "sum"]
+    assert "median" in benchmark_module.SUPPORTED_AGGS
+    assert benchmark_module.resolve_selected_aggs(["median", "sum", "median"]) == [
+        "median",
+        "sum",
+    ]
 
 
 def test_build_polars_agg_expr_supports_prod(benchmark_module):
@@ -492,9 +496,18 @@ def test_build_polars_agg_expr_supports_prod(benchmark_module):
     assert "value" in repr(expr)
 
 
-def test_benchmark_worker_type_surface_mentions_prod():
+def test_build_polars_agg_expr_supports_median(benchmark_module):
+    if benchmark_module.pl is None:
+        pytest.skip("Polars is not installed")
+
+    expr = benchmark_module.build_polars_agg_expr("value", "median")
+    assert "value" in repr(expr)
+
+
+def test_benchmark_worker_type_surface_mentions_median():
     source = _BENCHMARK_PATH.read_text()
-    assert 'Literal["sum", "mean", "prod", "std", "var", "min", "max", "count"]' in source
+    assert "agg: Literal[" in source
+    assert '"median"' in source
     assert '"prod"' in source
 
 
