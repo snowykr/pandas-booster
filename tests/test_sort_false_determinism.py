@@ -61,6 +61,8 @@ res_float = df.booster.groupby(["k1", "k2"], "v_float", "sum", sort=False)
 res_int = df.booster.groupby(["k1", "k2"], "v_int", "sum", sort=False)
 res_prod_float = df.booster.groupby(["k1", "k2"], "v_float", "prod", sort=False)
 res_prod_int = df.booster.groupby(["k1", "k2"], "v_int", "prod", sort=False)
+res_median_sorted = df.booster.groupby(["k1", "k2"], "v_float", "median", sort=True)
+res_median_firstseen = df.booster.groupby(["k1", "k2"], "v_float", "median", sort=False)
 
 print(
     json.dumps(
@@ -69,6 +71,8 @@ print(
             "int_sum": series_fingerprint(res_int),
             "float_prod": series_fingerprint(res_prod_float),
             "int_prod": series_fingerprint(res_prod_int),
+            "median_sorted": series_fingerprint(res_median_sorted),
+            "median_firstseen": series_fingerprint(res_median_firstseen),
         },
         sort_keys=True,
     )
@@ -124,6 +128,8 @@ res = {
     "std_firstseen": series_fingerprint(df.booster.groupby("k", "v", "std", sort=False)),
     "var_sorted": series_fingerprint(df.booster.groupby("k", "v", "var", sort=True)),
     "var_firstseen": series_fingerprint(df.booster.groupby("k", "v", "var", sort=False)),
+    "median_sorted": series_fingerprint(df.booster.groupby("k", "v", "median", sort=True)),
+    "median_firstseen": series_fingerprint(df.booster.groupby("k", "v", "median", sort=False)),
     "prod_sorted": series_fingerprint(df.booster.groupby("k", "v", "prod", sort=True)),
     "prod_firstseen": series_fingerprint(df.booster.groupby("k", "v", "prod", sort=False)),
 }
@@ -175,6 +181,8 @@ res = {
     "std_firstseen": series_fingerprint(df.booster.groupby("k", "v", "std", sort=False)),
     "var_sorted": series_fingerprint(df.booster.groupby("k", "v", "var", sort=True)),
     "var_firstseen": series_fingerprint(df.booster.groupby("k", "v", "var", sort=False)),
+    "median_sorted": series_fingerprint(df.booster.groupby("k", "v", "median", sort=True)),
+    "median_firstseen": series_fingerprint(df.booster.groupby("k", "v", "median", sort=False)),
     "prod_sorted": series_fingerprint(df.booster.groupby("k", "v", "prod", sort=True)),
     "prod_firstseen": series_fingerprint(df.booster.groupby("k", "v", "prod", sort=False)),
 }
@@ -231,7 +239,7 @@ multi_df = pd.DataFrame(
 )
 
 payload = {}
-for agg in ("std", "var"):
+for agg in ("std", "var", "median"):
     payload[f"float_{agg}"] = encode_series(float_df.booster.groupby("key", "val", agg, sort=False))
     payload[f"int_{agg}"] = encode_series(int_df.booster.groupby("key", "val", agg, sort=False))
     payload[f"multi_{agg}"] = encode_series(
@@ -270,6 +278,36 @@ EXPECTED_ORDER_CONTRACT_PAYLOAD = {
     "multi_var": {
         "index": [[2, 9], [1, 8], [1, 7], [2, 8], [3, 7]],
         "values": ["0x1.0000000000000p+1", "0x1.9000000000000p+3", "nan", "nan", "nan"],
+    },
+    "float_median": {
+        "index": [5, 2, 4, 7, 8, 1],
+        "values": [
+            "0x1.0000000000000p+1",
+            "0x1.4000000000000p+2",
+            "nan",
+            "0x1.6000000000000p+3",
+            "0x1.0000000000000p+1",
+            "nan",
+        ],
+    },
+    "int_median": {
+        "index": [8, 3, 5, 4],
+        "values": [
+            "0x1.8000000000000p+1",
+            "0x1.4000000000000p+3",
+            "0x1.4000000000000p+3",
+            "0x1.8000000000000p+3",
+        ],
+    },
+    "multi_median": {
+        "index": [[2, 9], [1, 8], [1, 7], [2, 8], [3, 7]],
+        "values": [
+            "0x1.0000000000000p+1",
+            "0x1.2000000000000p+2",
+            "0x1.0000000000000p+2",
+            "0x1.4000000000000p+2",
+            "0x1.8000000000000p+2",
+        ],
     },
 }
 
@@ -372,7 +410,14 @@ def test_run_script_once_surfaces_timeout_output(
 def test_multi_key_template_uses_threshold_relative_row_count() -> None:
     payload = json.loads(_run_multi_key_once(1, 1))
 
-    assert set(payload) == {"float_sum", "int_sum", "float_prod", "int_prod"}
+    assert set(payload) == {
+        "float_sum",
+        "int_sum",
+        "float_prod",
+        "int_prod",
+        "median_sorted",
+        "median_firstseen",
+    }
     assert all(isinstance(value, str) and value for value in payload.values())
 
 
@@ -388,6 +433,8 @@ def test_single_key_template_uses_threshold_relative_row_count() -> None:
         "std_firstseen",
         "var_sorted",
         "var_firstseen",
+        "median_sorted",
+        "median_firstseen",
         "prod_sorted",
         "prod_firstseen",
     }
@@ -402,13 +449,15 @@ def test_single_key_partitioned_template_uses_threshold_relative_row_count() -> 
         "std_firstseen",
         "var_sorted",
         "var_firstseen",
+        "median_sorted",
+        "median_firstseen",
         "prod_sorted",
         "prod_firstseen",
     }
     assert all(isinstance(value, str) and value for value in payload.values())
 
 
-def test_sort_false_fingerprint_deterministic_across_threads_and_repeats() -> None:
+def test_multi_key_median_sort_false_fingerprint_deterministic_across_threads_and_repeats() -> None:
     baseline = _run_multi_key_once(1, FAST_MULTI_ROWS)
 
     assert _run_multi_key_once(1, FAST_MULTI_ROWS) == baseline
@@ -417,7 +466,9 @@ def test_sort_false_fingerprint_deterministic_across_threads_and_repeats() -> No
         assert _run_multi_key_once(8, FAST_MULTI_ROWS) == baseline
 
 
-def test_single_key_float_sum_mean_std_var_prod_bitwise_deterministic_across_threads() -> None:
+def test_single_key_float_sum_mean_std_var_median_prod_bitwise_deterministic_across_threads() -> (
+    None
+):
     baseline = _run_single_key_once(1, FAST_SINGLE_ROWS)
 
     assert _run_single_key_once(1, FAST_SINGLE_ROWS) == baseline
@@ -426,7 +477,7 @@ def test_single_key_float_sum_mean_std_var_prod_bitwise_deterministic_across_thr
         assert _run_single_key_once(8, FAST_SINGLE_ROWS) == baseline
 
 
-def test_single_key_partitioned_std_var_bitwise_deterministic_across_threads() -> None:
+def test_single_key_partitioned_std_var_median_bitwise_deterministic_across_threads() -> None:
     baseline = _run_single_key_partitioned_once(1, FAST_SINGLE_ROWS)
 
     assert _run_single_key_partitioned_once(1, FAST_SINGLE_ROWS) == baseline
