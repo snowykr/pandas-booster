@@ -22,6 +22,18 @@ pub trait Aggregator<T, O>: Send + Sync {
     fn merge(&mut self, other: Self);
     /// Computes the final aggregated result.
     fn finalize(&self) -> O;
+    /// Computes the final result when the accumulator is no longer needed.
+    ///
+    /// The default implementation preserves the immutable finalization contract,
+    /// while Vec-backed aggregators can override this to consume their buffers
+    /// and avoid a materialization-time clone. Implementations must return the
+    /// same logical result as [`Aggregator::finalize`] for the same state.
+    fn finalize_owned(self) -> O
+    where
+        Self: Sized,
+    {
+        self.finalize()
+    }
 }
 
 /// Sum aggregator for f64. Skips NaN values.
@@ -132,29 +144,37 @@ impl Aggregator<f64, f64> for MedianAggF64 {
     }
 
     fn merge(&mut self, other: Self) {
+        self.values.reserve(other.values.len());
         self.values.extend(other.values);
     }
 
     fn finalize(&self) -> f64 {
-        if self.values.is_empty() {
-            return f64::NAN;
-        }
+        median_f64_from_values(self.values.clone())
+    }
 
-        let mut values = self.values.clone();
-        let mid = values.len() / 2;
-        let is_odd = values.len() % 2 == 1;
-        let (lower, median, _) = values.select_nth_unstable_by(mid, f64::total_cmp);
+    fn finalize_owned(self) -> f64 {
+        median_f64_from_values(self.values)
+    }
+}
 
-        if is_odd {
-            *median
-        } else {
-            let lower_max = lower
-                .iter()
-                .copied()
-                .max_by(f64::total_cmp)
-                .expect("even-length median requires a lower partition");
-            (lower_max + *median) / 2.0
-        }
+fn median_f64_from_values(mut values: Vec<f64>) -> f64 {
+    if values.is_empty() {
+        return f64::NAN;
+    }
+
+    let mid = values.len() / 2;
+    let is_odd = values.len() % 2 == 1;
+    let (lower, median, _) = values.select_nth_unstable_by(mid, f64::total_cmp);
+
+    if is_odd {
+        *median
+    } else {
+        let lower_max = lower
+            .iter()
+            .copied()
+            .max_by(f64::total_cmp)
+            .expect("even-length median requires a lower partition");
+        (lower_max + *median) / 2.0
     }
 }
 
@@ -460,29 +480,37 @@ impl Aggregator<i64, f64> for MedianAggI64 {
     }
 
     fn merge(&mut self, other: Self) {
+        self.values.reserve(other.values.len());
         self.values.extend(other.values);
     }
 
     fn finalize(&self) -> f64 {
-        if self.values.is_empty() {
-            return f64::NAN;
-        }
+        median_i64_from_values(self.values.clone())
+    }
 
-        let mut values = self.values.clone();
-        let mid = values.len() / 2;
-        let is_odd = values.len() % 2 == 1;
-        let (lower, median, _) = values.select_nth_unstable(mid);
+    fn finalize_owned(self) -> f64 {
+        median_i64_from_values(self.values)
+    }
+}
 
-        if is_odd {
-            *median as f64
-        } else {
-            let lower_max = lower
-                .iter()
-                .copied()
-                .max()
-                .expect("even-length median requires a lower partition");
-            (lower_max as f64 + *median as f64) / 2.0
-        }
+fn median_i64_from_values(mut values: Vec<i64>) -> f64 {
+    if values.is_empty() {
+        return f64::NAN;
+    }
+
+    let mid = values.len() / 2;
+    let is_odd = values.len() % 2 == 1;
+    let (lower, median, _) = values.select_nth_unstable(mid);
+
+    if is_odd {
+        *median as f64
+    } else {
+        let lower_max = lower
+            .iter()
+            .copied()
+            .max()
+            .expect("even-length median requires a lower partition");
+        (lower_max as f64 + *median as f64) / 2.0
     }
 }
 
@@ -796,6 +824,24 @@ mod tests {
     }
 
     #[test]
+    fn test_median_f64_finalize_owned_matches_finalize() {
+        let mut agg = MedianAggF64::init();
+        for value in [10.0, f64::NAN, 2.0, 4.0, 8.0] {
+            agg.update(value);
+        }
+
+        assert_eq!(agg.clone().finalize_owned(), agg.finalize());
+
+        let empty = MedianAggF64::init();
+        assert!(empty.finalize_owned().is_nan());
+
+        let mut all_nan = MedianAggF64::init();
+        all_nan.update(f64::NAN);
+        all_nan.update(f64::NAN);
+        assert!(all_nan.finalize_owned().is_nan());
+    }
+
+    #[test]
     fn test_min_f64_empty_returns_nan() {
         let agg = MinAggF64::init();
         assert!(agg.finalize().is_nan());
@@ -921,6 +967,23 @@ mod tests {
 
         assert_eq!(left_first.finalize(), 10.0);
         assert_eq!(right_first.finalize(), 10.0);
+    }
+
+    #[test]
+    fn test_median_i64_finalize_owned_matches_finalize() {
+        let mut extreme = MedianAggI64::init();
+        extreme.update(i64::MAX - 2);
+        extreme.update(i64::MAX);
+        assert_eq!(extreme.clone().finalize_owned(), extreme.finalize());
+
+        let mut mixed_sign = MedianAggI64::init();
+        for value in [-10_i64, 5, -2, 12] {
+            mixed_sign.update(value);
+        }
+        assert_eq!(mixed_sign.clone().finalize_owned(), mixed_sign.finalize());
+
+        let empty = MedianAggI64::init();
+        assert!(empty.finalize_owned().is_nan());
     }
 
     #[test]

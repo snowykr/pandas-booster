@@ -449,7 +449,7 @@ where
 
     for (key, (agg, first)) in merged {
         result_keys.push(key);
-        result_values.push(agg.finalize());
+        result_values.push(agg.finalize_owned());
         first_seen.push(first);
     }
 
@@ -587,13 +587,19 @@ where
             aggs,
             first_seen: state_first_seen,
         } = state;
+        let mut aggs = aggs.into_iter().map(Some).collect::<Vec<_>>();
 
         debug_assert_eq!(gid_map.len(), aggs.len());
         debug_assert_eq!(gid_map.len(), state_first_seen.len());
 
         for (key, gid) in gid_map {
             result_keys.push(key);
-            result_values.push(aggs[gid].finalize());
+            // Each gid_map entry owns one unique accumulator slot. Taking it
+            // lets Vec-backed aggregators finalize without cloning their state.
+            let agg = aggs[gid]
+                .take()
+                .expect("first-seen group id should reference one accumulator");
+            result_values.push(agg.finalize_owned());
             first_seen.push(state_first_seen[gid]);
         }
     }
@@ -878,7 +884,7 @@ where
 
     for (k, agg) in merged {
         result_keys.push(k);
-        result_values.push(agg.finalize());
+        result_values.push(agg.finalize_owned());
     }
 
     Ok(GroupByResult {
@@ -933,7 +939,7 @@ where
 
     for (k, agg) in merged {
         result_keys.push(k);
-        result_values.push(agg.finalize());
+        result_values.push(agg.finalize_owned());
     }
     let materialize_s = materialize_start.elapsed().as_secs_f64();
 
@@ -1016,7 +1022,7 @@ where
 
     for (k, agg) in merged {
         result_keys.push(k);
-        result_values.push(agg.finalize());
+        result_values.push(agg.finalize_owned());
     }
 
     Ok(GroupByResult {
@@ -1097,7 +1103,7 @@ where
 
     for (k, (agg, first)) in merged {
         result_keys.push(k);
-        result_values.push(agg.finalize());
+        result_values.push(agg.finalize_owned());
         first_seen.push(first);
     }
 
@@ -1176,7 +1182,7 @@ where
 
     for (k, (agg, first)) in merged {
         result_keys.push(k);
-        result_values.push(agg.finalize());
+        result_values.push(agg.finalize_owned());
         first_seen.push(first);
     }
 
@@ -1717,6 +1723,37 @@ mod tests {
         }
 
         fn finalize(&self) -> usize {
+            panic!("materialization should use finalize_owned for NonCloneVecAgg")
+        }
+
+        fn finalize_owned(self) -> usize {
+            self.values.len()
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct OwnedOnlyAgg {
+        values: Vec<i64>,
+    }
+
+    impl Aggregator<i64, usize> for OwnedOnlyAgg {
+        fn init() -> Self {
+            Self::default()
+        }
+
+        fn update(&mut self, value: i64) {
+            self.values.push(value);
+        }
+
+        fn merge(&mut self, other: Self) {
+            self.values.extend(other.values);
+        }
+
+        fn finalize(&self) -> usize {
+            panic!("materialization should use finalize_owned for OwnedOnlyAgg")
+        }
+
+        fn finalize_owned(self) -> usize {
             self.values.len()
         }
     }
@@ -1810,6 +1847,58 @@ mod tests {
             assert_eq!(result.keys, vec![7]);
             assert_eq!(result.values, vec![n]);
         });
+    }
+
+    #[test]
+    fn test_firstseen_materialization_uses_owned_finalize() {
+        let keys = vec![2_i64, 1, 2, 1, 3];
+        let values = vec![10_i64, 20, 30, 40, 50];
+
+        let result =
+            parallel_groupby_firstseen_u32::<i64, OwnedOnlyAgg, usize>(&keys, &values).unwrap();
+
+        assert_eq!(result.keys, vec![2, 1, 3]);
+        assert_eq!(result.values, vec![2, 2, 1]);
+
+        let result =
+            parallel_groupby_firstseen_u64::<i64, OwnedOnlyAgg, usize>(&keys, &values).unwrap();
+
+        assert_eq!(result.keys, vec![2, 1, 3]);
+        assert_eq!(result.values, vec![2, 2, 1]);
+    }
+
+    #[test]
+    fn test_partitioned_firstseen_materialization_uses_owned_finalize() {
+        let keys = vec![5_i64, 4, 5, 3, 4, 2];
+        let values = vec![10_i64, 20, 30, 40, 50, 60];
+        let states =
+            build_partitioned_deterministic_firstseen_states::<i64, usize, OwnedOnlyAgg, u32>(
+                &keys, &values,
+            )
+            .unwrap();
+
+        let materialized = materialize_partitioned_deterministic_firstseen_states::<
+            i64,
+            usize,
+            OwnedOnlyAgg,
+            u32,
+        >(states);
+
+        let mut counts = AHashMap::new();
+        for (key, value) in materialized
+            .result
+            .keys
+            .iter()
+            .copied()
+            .zip(materialized.result.values.iter().copied())
+        {
+            counts.insert(key, value);
+        }
+
+        assert_eq!(counts[&5], 2);
+        assert_eq!(counts[&4], 2);
+        assert_eq!(counts[&3], 1);
+        assert_eq!(counts[&2], 1);
     }
 
     #[test]
