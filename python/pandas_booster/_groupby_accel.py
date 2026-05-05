@@ -8,7 +8,7 @@ import pandas as pd
 
 from ._abi_compat import raise_abi_skew
 
-AggFunc = Literal["sum", "mean", "prod", "min", "max", "count", "std", "var"]
+AggFunc = Literal["sum", "mean", "prod", "min", "max", "count", "std", "var", "median"]
 
 
 class GroupByCompatibility(NamedTuple):
@@ -29,6 +29,7 @@ def select_rust_groupby_func(
 
     Returns (callable, needs_python_sort).
     """
+
     def _lookup(symbol: str) -> Callable[..., Any]:
         try:
             return getattr(rust, symbol)
@@ -37,9 +38,7 @@ def select_rust_groupby_func(
                 raise
             raise_abi_skew(
                 context=context,
-                detail=(
-                    f"missing Rust kernel symbol {symbol!r} while resolving {func_base!r}."
-                ),
+                detail=(f"missing Rust kernel symbol {symbol!r} while resolving {func_base!r}."),
             )
 
     if not sort:
@@ -55,6 +54,41 @@ def select_rust_groupby_func(
         # Python/Rust wheel mismatch (or older extension): fall back to the
         # legacy path and let Python sort_index() handle ordering.
         return _lookup(func_base), True
+
+
+def has_any_rust_groupby_func(rust: Any, agg: str) -> bool:
+    """Return whether any Rust symbol exists for an aggregation family."""
+    for prefix in ("groupby", "groupby_multi"):
+        for kernel in ("f64", "i64"):
+            for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
+                if hasattr(rust, f"{prefix}_{agg}_{kernel}{suffix}"):
+                    return True
+    return False
+
+
+def has_rust_groupby_func(
+    rust: Any,
+    func_base: str,
+    *,
+    sort: bool,
+    n_rows: int,
+    force_pandas_sort: bool,
+) -> bool:
+    """Return whether a Rust groupby kernel is available without warning.
+
+    This mirrors `select_rust_groupby_func` symbol selection but treats missing
+    symbols as a normal negative result. It is used for staged Python dispatch
+    where a compatibility policy can be certified before the matching Rust
+    kernel ships.
+    """
+    if not sort:
+        suffix = firstseen_suffix(sort=False, n_rows=n_rows)
+        return hasattr(rust, f"{func_base}{suffix}")
+
+    if force_pandas_sort:
+        return hasattr(rust, func_base)
+
+    return hasattr(rust, f"{func_base}_sorted") or hasattr(rust, func_base)
 
 
 def firstseen_suffix(*, sort: bool, n_rows: int) -> str:
@@ -142,7 +176,7 @@ def classify_groupby_compatibility(
 
     if (
         len(key_cols) == 1
-        and agg in {"sum", "mean", "prod", "std", "var"}
+        and agg in {"sum", "mean", "prod", "std", "var", "median"}
         and pd.api.types.is_float_dtype(val_col)
         and force_pandas_float_groupby
     ):

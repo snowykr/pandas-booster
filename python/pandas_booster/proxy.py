@@ -22,6 +22,7 @@ from ._groupby_accel import (
     build_series_from_single_result,
     capture_key_numpy_dtype,
     classify_groupby_compatibility,
+    has_rust_groupby_func,
     select_rust_groupby_func,
     to_i64_contiguous,
 )
@@ -45,6 +46,8 @@ class _SeriesGroupByProto(Protocol):
 
     def std(self, *args: Any, **kwargs: Any) -> Series: ...
 
+    def median(self, *args: Any, **kwargs: Any) -> Series: ...
+
     def var(self, *args: Any, **kwargs: Any) -> Series: ...
 
     def __getattr__(self, name: str) -> Any: ...
@@ -60,7 +63,9 @@ class _DataFrameGroupByProto(Protocol):
     def __getattr__(self, name: str) -> Any: ...
 
 
-_ACCELERATED_AGGS = frozenset({"sum", "mean", "prod", "min", "max", "count", "std", "var"})
+_ACCELERATED_AGGS = frozenset(
+    {"sum", "mean", "prod", "min", "max", "count", "std", "var", "median"}
+)
 _FALLBACK_THRESHOLD: int | None = None
 
 
@@ -74,7 +79,7 @@ def _get_fallback_threshold() -> int:
     return _FALLBACK_THRESHOLD
 
 
-AggFunc = Literal["sum", "mean", "prod", "min", "max", "count", "std", "var"]
+AggFunc = Literal["sum", "mean", "prod", "min", "max", "count", "std", "median", "var"]
 
 
 class BoosterSeriesGroupBy:
@@ -97,7 +102,7 @@ class BoosterSeriesGroupBy:
         self._sort = sort
 
     def _can_accelerate(self, agg: AggFunc) -> bool:
-        if agg not in {"std", "var"} and len(self._df) < _get_fallback_threshold():
+        if agg not in {"std", "var", "median"} and len(self._df) < _get_fallback_threshold():
             return False
 
         key_cols: list[pd.Series] = []
@@ -118,7 +123,28 @@ class BoosterSeriesGroupBy:
             agg=agg,
             force_pandas_float_groupby=force_pandas_float_groupby_enabled(),
         )
-        return compatibility.supported and not compatibility.force_pandas
+        if not compatibility.supported or compatibility.force_pandas:
+            return False
+
+        if agg != "median":
+            return True
+
+        import importlib
+
+        _rust = importlib.import_module("pandas_booster._rust")
+        kernel = "i64" if pd.api.types.is_integer_dtype(val_col) else "f64"
+        prefix = "groupby_multi" if len(self._by_cols) > 1 else "groupby"
+        if has_rust_groupby_func(
+            _rust,
+            f"{prefix}_median_{kernel}",
+            sort=self._sort,
+            n_rows=len(self._df),
+            force_pandas_sort=bool(self._sort) and force_pandas_sort_enabled(),
+        ):
+            return True
+        from ._groupby_accel import has_any_rust_groupby_func
+
+        return has_any_rust_groupby_func(_rust, "median")
 
     def _rust_aggregate(self, agg: AggFunc) -> Series:
         import importlib
@@ -304,6 +330,12 @@ class BoosterSeriesGroupBy:
         if args or kwargs:
             return cast("Series", self._obj.std(*args, **kwargs))
         return self._try_accelerate("std")
+
+    def median(self, *args: Any, **kwargs: Any) -> Series:
+        """Compute median, preserving pandas call parity."""
+        if args or kwargs:
+            return cast("Series", self._obj.median(*args, **kwargs))
+        return self._try_accelerate("median")
 
     def var(self, *args: Any, **kwargs: Any) -> Series:
         """Compute var, using Rust acceleration when possible."""
