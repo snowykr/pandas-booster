@@ -193,15 +193,13 @@ class BoosterAccessor:
         force_pandas_sort = bool(sort) and force_pandas_sort_enabled()
         kernel = "i64" if pd.api.types.is_integer_dtype(val_col) else "f64"
         prefix = "groupby_multi" if multi else "groupby"
-        if _groupby_accel_mod.has_rust_groupby_func(
+        return _groupby_accel_mod.has_rust_groupby_func(
             rust,
             f"{prefix}_median_{kernel}",
             sort=sort,
             n_rows=len(self._df),
             force_pandas_sort=force_pandas_sort,
-        ):
-            return True
-        return _groupby_accel_mod.has_any_rust_groupby_func(rust, "median")
+        )
 
     def _pandas_fallback(
         self, by_cols: list[str], target: str, agg: AggFunc, *, sort: bool

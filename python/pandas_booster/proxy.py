@@ -134,17 +134,13 @@ class BoosterSeriesGroupBy:
         _rust = importlib.import_module("pandas_booster._rust")
         kernel = "i64" if pd.api.types.is_integer_dtype(val_col) else "f64"
         prefix = "groupby_multi" if len(self._by_cols) > 1 else "groupby"
-        if has_rust_groupby_func(
+        return has_rust_groupby_func(
             _rust,
             f"{prefix}_median_{kernel}",
             sort=self._sort,
             n_rows=len(self._df),
             force_pandas_sort=bool(self._sort) and force_pandas_sort_enabled(),
-        ):
-            return True
-        from ._groupby_accel import has_any_rust_groupby_func
-
-        return has_any_rust_groupby_func(_rust, "median")
+        )
 
     def _rust_aggregate(self, agg: AggFunc) -> Series:
         import importlib
