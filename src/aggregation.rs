@@ -141,13 +141,19 @@ impl Aggregator<f64, f64> for MedianAggF64 {
         }
 
         let mut values = self.values.clone();
-        values.sort_by(f64::total_cmp);
         let mid = values.len() / 2;
+        let is_odd = values.len() % 2 == 1;
+        let (lower, median, _) = values.select_nth_unstable_by(mid, f64::total_cmp);
 
-        if values.len() % 2 == 1 {
-            values[mid]
+        if is_odd {
+            *median
         } else {
-            (values[mid - 1] + values[mid]) / 2.0
+            let lower_max = lower
+                .iter()
+                .copied()
+                .max_by(f64::total_cmp)
+                .expect("even-length median requires a lower partition");
+            (lower_max + *median) / 2.0
         }
     }
 }
@@ -463,13 +469,19 @@ impl Aggregator<i64, f64> for MedianAggI64 {
         }
 
         let mut values = self.values.clone();
-        values.sort_unstable();
         let mid = values.len() / 2;
+        let is_odd = values.len() % 2 == 1;
+        let (lower, median, _) = values.select_nth_unstable(mid);
 
-        if values.len() % 2 == 1 {
-            values[mid] as f64
+        if is_odd {
+            *median as f64
         } else {
-            (values[mid - 1] as f64 + values[mid] as f64) / 2.0
+            let lower_max = lower
+                .iter()
+                .copied()
+                .max()
+                .expect("even-length median requires a lower partition");
+            (lower_max as f64 + *median as f64) / 2.0
         }
     }
 }
