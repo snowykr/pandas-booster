@@ -114,6 +114,44 @@ impl Aggregator<f64, f64> for MeanAggF64 {
     }
 }
 
+/// Median aggregator for f64. Skips NaN values and returns NaN for empty/all-NaN groups.
+#[derive(Clone, Default)]
+pub struct MedianAggF64 {
+    pub values: Vec<f64>,
+}
+
+impl Aggregator<f64, f64> for MedianAggF64 {
+    fn init() -> Self {
+        Self { values: Vec::new() }
+    }
+
+    fn update(&mut self, value: f64) {
+        if !value.is_nan() {
+            self.values.push(value);
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.values.extend(other.values);
+    }
+
+    fn finalize(&self) -> f64 {
+        if self.values.is_empty() {
+            return f64::NAN;
+        }
+
+        let mut values = self.values.clone();
+        values.sort_by(f64::total_cmp);
+        let mid = values.len() / 2;
+
+        if values.len() % 2 == 1 {
+            values[mid]
+        } else {
+            (values[mid - 1] + values[mid]) / 2.0
+        }
+    }
+}
+
 /// Shared mergeable variance state using a numerically stable mean/M2 update.
 #[derive(Clone, Default)]
 struct VarianceState {
@@ -400,6 +438,42 @@ impl Aggregator<i64, f64> for MeanAggI64 {
     }
 }
 
+/// Median aggregator for i64. Returns f64 and NaN for empty groups.
+#[derive(Clone, Default)]
+pub struct MedianAggI64 {
+    pub values: Vec<i64>,
+}
+
+impl Aggregator<i64, f64> for MedianAggI64 {
+    fn init() -> Self {
+        Self { values: Vec::new() }
+    }
+
+    fn update(&mut self, value: i64) {
+        self.values.push(value);
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.values.extend(other.values);
+    }
+
+    fn finalize(&self) -> f64 {
+        if self.values.is_empty() {
+            return f64::NAN;
+        }
+
+        let mut values = self.values.clone();
+        values.sort_unstable();
+        let mid = values.len() / 2;
+
+        if values.len() % 2 == 1 {
+            values[mid] as f64
+        } else {
+            (values[mid - 1] as f64 + values[mid] as f64) / 2.0
+        }
+    }
+}
+
 /// Variance aggregator for i64. Returns sample variance as f64.
 #[derive(Clone, Default)]
 pub struct VarAggI64 {
@@ -649,6 +723,67 @@ mod tests {
     }
 
     #[test]
+    fn test_median_f64_odd_count_skips_nan() {
+        let mut agg = MedianAggF64::init();
+        for value in [3.0, f64::NAN, 1.0, 2.0] {
+            agg.update(value);
+        }
+
+        assert_eq!(agg.finalize(), 2.0);
+    }
+
+    #[test]
+    fn test_median_f64_even_count_averages_middle_values() {
+        let mut agg = MedianAggF64::init();
+        for value in [10.0, 2.0, 4.0, 8.0] {
+            agg.update(value);
+        }
+
+        assert_eq!(agg.finalize(), 6.0);
+    }
+
+    #[test]
+    fn test_median_f64_empty_and_all_nan_return_nan() {
+        let empty = MedianAggF64::init();
+        assert!(empty.finalize().is_nan());
+
+        let mut all_nan = MedianAggF64::init();
+        all_nan.update(f64::NAN);
+        all_nan.update(f64::NAN);
+        assert!(all_nan.finalize().is_nan());
+    }
+
+    #[test]
+    fn test_median_f64_single_value() {
+        let mut agg = MedianAggF64::init();
+        agg.update(42.5);
+
+        assert_eq!(agg.finalize(), 42.5);
+    }
+
+    #[test]
+    fn test_median_f64_merge_order_is_deterministic() {
+        let mut left = MedianAggF64::init();
+        for value in [9.0, 1.0] {
+            left.update(value);
+        }
+
+        let mut right = MedianAggF64::init();
+        for value in [5.0, f64::NAN, 3.0] {
+            right.update(value);
+        }
+
+        let mut left_first = left.clone();
+        left_first.merge(right.clone());
+
+        let mut right_first = right;
+        right_first.merge(left);
+
+        assert_eq!(left_first.finalize(), 4.0);
+        assert_eq!(right_first.finalize(), 4.0);
+    }
+
+    #[test]
     fn test_min_f64_empty_returns_nan() {
         let agg = MinAggF64::init();
         assert!(agg.finalize().is_nan());
@@ -708,6 +843,72 @@ mod tests {
     fn test_mean_i64_empty_returns_nan() {
         let agg = MeanAggI64::init();
         assert!(agg.finalize().is_nan());
+    }
+
+    #[test]
+    fn test_median_i64_odd_count_returns_middle_as_f64() {
+        let mut agg = MedianAggI64::init();
+        for value in [9_i64, 1, 5] {
+            agg.update(value);
+        }
+
+        assert_eq!(agg.finalize(), 5.0);
+    }
+
+    #[test]
+    fn test_median_i64_even_count_averages_as_f64_without_overflow() {
+        let mut agg = MedianAggI64::init();
+        agg.update(i64::MAX - 2);
+        agg.update(i64::MAX);
+
+        assert_eq!(agg.finalize(), (i64::MAX - 1) as f64);
+    }
+
+    #[test]
+    fn test_median_i64_empty_returns_nan() {
+        let agg = MedianAggI64::init();
+
+        assert!(agg.finalize().is_nan());
+    }
+
+    #[test]
+    fn test_median_i64_single_value() {
+        let mut agg = MedianAggI64::init();
+        agg.update(-7);
+
+        assert_eq!(agg.finalize(), -7.0);
+    }
+
+    #[test]
+    fn test_median_i64_mixed_sign_even_count() {
+        let mut agg = MedianAggI64::init();
+        for value in [-10_i64, 5, -2, 12] {
+            agg.update(value);
+        }
+
+        assert_eq!(agg.finalize(), 1.5);
+    }
+
+    #[test]
+    fn test_median_i64_merge_order_is_deterministic() {
+        let mut left = MedianAggI64::init();
+        for value in [100_i64, -10] {
+            left.update(value);
+        }
+
+        let mut right = MedianAggI64::init();
+        for value in [20_i64, 0, 10] {
+            right.update(value);
+        }
+
+        let mut left_first = left.clone();
+        left_first.merge(right.clone());
+
+        let mut right_first = right;
+        right_first.merge(left);
+
+        assert_eq!(left_first.finalize(), 10.0);
+        assert_eq!(right_first.finalize(), 10.0);
     }
 
     #[test]
