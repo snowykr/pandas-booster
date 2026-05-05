@@ -113,7 +113,7 @@ class TestBoosterGroupBy:
             rtol=1e-10,
         )
 
-    def test_median_matches_pandas_fallback(self, large_df):
+    def test_median_matches_pandas_on_large_supported_input(self, large_df):
         booster_result = cast(BoosterAccessor, large_df.booster).groupby(
             "key", "val_float", "median"
         )
