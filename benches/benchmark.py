@@ -38,6 +38,7 @@ Usage:
 
     # Run only selected aggregation functions
     python benches/benchmark.py --agg std --agg var
+    python benches/benchmark.py --agg median
 
     # Adjust sample count (applies to both cold and warm)
     python benches/benchmark.py --samples 10
@@ -76,7 +77,17 @@ if TYPE_CHECKING:
     from typing import Literal
 
 
-SUPPORTED_AGGS: tuple[str, ...] = ("sum", "mean", "prod", "std", "var", "min", "max", "count")
+SUPPORTED_AGGS: tuple[str, ...] = (
+    "sum",
+    "mean",
+    "median",
+    "prod",
+    "std",
+    "var",
+    "min",
+    "max",
+    "count",
+)
 CORE_BENCHMARK_AGG = "sum"
 STATS_EVIDENCE_AGGS: tuple[str, str] = ("std", "var")
 STATS_EVIDENCE_SORTS: tuple[bool, bool] = (True, False)
@@ -113,9 +124,7 @@ def summarize_profile_cases(cases: list[dict[str, Any]]) -> dict[str, Any] | Non
 
     phase_names = list(profiled_cases[0]["breakdown"]["phases"].keys())
     phase_means = {
-        phase_name: sum(
-            case["breakdown"]["phases"][phase_name].mean for case in profiled_cases
-        )
+        phase_name: sum(case["breakdown"]["phases"][phase_name].mean for case in profiled_cases)
         / len(profiled_cases)
         for phase_name in phase_names
     }
@@ -131,9 +140,7 @@ def summarize_profile_cases(cases: list[dict[str, Any]]) -> dict[str, Any] | Non
         / len(profiled_cases),
         "python_total_s": sum(case["breakdown"]["python_total_s"] for case in profiled_cases)
         / len(profiled_cases),
-        "total_pipeline_s": sum(
-            case["breakdown"]["total_pipeline_s"] for case in profiled_cases
-        )
+        "total_pipeline_s": sum(case["breakdown"]["total_pipeline_s"] for case in profiled_cases)
         / len(profiled_cases),
         "partial_group_total": first_breakdown["partial_group_total"],
         "final_group_count": first_breakdown["final_group_count"],
@@ -247,6 +254,7 @@ def build_polars_agg_expr(value_col: str, agg: str) -> Any:
     agg_map = {
         "sum": pl.col(value_col).sum().alias(value_col),
         "mean": pl.col(value_col).mean().alias(value_col),
+        "median": pl.col(value_col).median().alias(value_col),
         "prod": pl.col(value_col).product().alias(value_col),
         "std": pl.col(value_col).std().alias(value_col),
         "var": pl.col(value_col).var().alias(value_col),
@@ -298,7 +306,7 @@ def resolve_booster_benchmark_dispatch(
     val_col = cast(pd.Series, df[value_col])
     key_series = [cast(pd.Series, df[col]) for col in key_cols]
 
-    if agg not in {"std", "var"} and len(df) < rust.get_fallback_threshold():
+    if agg not in {"std", "var", "median"} and len(df) < rust.get_fallback_threshold():
         return {
             "execution": f"booster->pandas.groupby.{agg}",
             "rust_func": None,
@@ -311,7 +319,26 @@ def resolve_booster_benchmark_dispatch(
         agg=cast(Any, agg),
         force_pandas_float_groupby=force_pandas_float_groupby_enabled(),
     )
+    is_val_int = pd.api.types.is_integer_dtype(val_col)
+    prefix = "groupby_multi" if len(key_cols) > 1 else "groupby"
+    suffix = "i64" if is_val_int else "f64"
+    force_pandas_sort = (
+        False if ignore_force_pandas_sort else bool(sort) and force_pandas_sort_enabled()
+    )
+
     if not compatibility.supported or compatibility.force_pandas:
+        return {
+            "execution": f"booster->pandas.groupby.{agg}",
+            "rust_func": None,
+            "needs_python_sort": False,
+        }
+    if agg == "median" and not groupby_accel.has_rust_groupby_func(
+        rust,
+        f"{prefix}_{agg}_{suffix}",
+        sort=sort,
+        n_rows=len(df),
+        force_pandas_sort=force_pandas_sort,
+    ):
         return {
             "execution": f"booster->pandas.groupby.{agg}",
             "rust_func": None,
@@ -330,19 +357,12 @@ def resolve_booster_benchmark_dispatch(
             "needs_python_sort": False,
         }
 
-    is_val_int = pd.api.types.is_integer_dtype(val_col)
-    prefix = "groupby_multi" if len(key_cols) > 1 else "groupby"
-    suffix = "i64" if is_val_int else "f64"
     rust_func, needs_python_sort = groupby_accel.select_rust_groupby_func(
         rust,
         f"{prefix}_{agg}_{suffix}",
         sort=sort,
         n_rows=len(df),
-        force_pandas_sort=(
-            False
-            if ignore_force_pandas_sort
-            else bool(sort) and force_pandas_sort_enabled()
-        ),
+        force_pandas_sort=force_pandas_sort,
         context="benchmark",
     )
     execution = f"booster->rust.{rust_func.__name__}"
@@ -576,8 +596,10 @@ def render_stats_evidence_section(evidence: list[dict[str, Any]]) -> str:
     lines: list[str] = []
     lines.append(heading)
     lines.append("")
-    agg_phrase = "`std` and `var`" if evidence_aggs == ["std", "var"] else ", ".join(
-        f"`{agg}`" for agg in evidence_aggs
+    agg_phrase = (
+        "`std` and `var`"
+        if evidence_aggs == ["std", "var"]
+        else ", ".join(f"`{agg}`" for agg in evidence_aggs)
     )
     lines.append(
         f"{agg_phrase} scale on the Rust-first path because each worker accumulates "
@@ -645,8 +667,7 @@ def render_stats_evidence_section(evidence: list[dict[str, Any]]) -> str:
     breakdown_separators = ["-" * len(column) for column in breakdown_columns]
     lines.append("| " + " | ".join(breakdown_columns) + " |")
     separator_row = "|" + "|".join(
-        f"{separator:-^{len(separator) + 2}}"
-        for separator in breakdown_separators
+        f"{separator:-^{len(separator) + 2}}" for separator in breakdown_separators
     )
     lines.append(separator_row + "|")
     has_breakdown_rows = False
@@ -687,7 +708,17 @@ def render_stats_evidence_section(evidence: list[dict[str, Any]]) -> str:
 def benchmark_worker(
     preset_name: str,
     backend: str,
-    agg: Literal["sum", "mean", "prod", "std", "var", "min", "max", "count"] = "sum",
+    agg: Literal[
+        "sum",
+        "mean",
+        "prod",
+        "median",
+        "std",
+        "var",
+        "min",
+        "max",
+        "count",
+    ] = "sum",
     sort: bool = True,
     verify_correctness: bool = False,
     mode: Literal["cold", "warm"] = "cold",
@@ -923,6 +954,7 @@ def benchmark_worker(
             "execution": execution,
         }
 
+
 def benchmark_single(
     preset_name: str,
     agg: str = "sum",
@@ -1018,8 +1050,8 @@ def render_standard_table(results: list[dict]) -> str:
         results_by_preset_sort[key] = r
 
     lines = []
-    lines.append("| Operation | Groups | Sort | Type | Pandas | Polars | Booster |")
-    lines.append("|-----------|--------|------|------|--------|--------|---------|")
+    lines.append("| Aggregation | Workload | Groups | Sort | Type | Pandas | Polars | Booster |")
+    lines.append("|-------------|----------|--------|------|------|--------|--------|---------|")
 
     prev_label = None
     prev_groups = None
@@ -1096,14 +1128,16 @@ def render_standard_table(results: list[dict]) -> str:
             display_groups = groups if groups != prev_groups else ""
             display_sort = sort_str if sort_str != prev_sort_str else ""
 
+            agg = f"`{r['agg']}`"
             lines.append(
-                f"| {display_label} | {display_groups} | {display_sort} | Cold | "
+                f"| {agg} | {display_label} | {display_groups} | {display_sort} | Cold | "
                 f"{pandas_cold_str} | {polars_cold_str} | {booster_cold_str} |"
             )
 
-            # Second row (Warm) - always hide label, groups, sort
+            # Second row (Warm) - keep aggregation visible; hide label, groups, sort.
             lines.append(
-                f"|  |  |  | Warm | {pandas_warm_str} | {polars_warm_str} | {booster_warm_str} |"
+                f"| {agg} |  |  |  | Warm | "
+                f"{pandas_warm_str} | {polars_warm_str} | {booster_warm_str} |"
             )
 
             prev_label = label
@@ -1140,8 +1174,8 @@ def render_high_table(results: list[dict]) -> str:
         results_by_preset_sort[key] = r
 
     lines = []
-    lines.append("| Operation | Groups | Sort | Type | Pandas | Polars | Booster |")
-    lines.append("|-----------|--------|------|------|--------|--------|---------|")
+    lines.append("| Aggregation | Workload | Groups | Sort | Type | Pandas | Polars | Booster |")
+    lines.append("|-------------|----------|--------|------|------|--------|--------|---------|")
 
     prev_label = None
     prev_groups = None
@@ -1218,14 +1252,16 @@ def render_high_table(results: list[dict]) -> str:
             display_groups = groups if groups != prev_groups else ""
             display_sort = sort_str if sort_str != prev_sort_str else ""
 
+            agg = f"`{r['agg']}`"
             lines.append(
-                f"| {display_label} | {display_groups} | {display_sort} | Cold | "
+                f"| {agg} | {display_label} | {display_groups} | {display_sort} | Cold | "
                 f"{pandas_cold_str} | {polars_cold_str} | {booster_cold_str} |"
             )
 
-            # Second row (Warm) - always hide label, groups, sort
+            # Second row (Warm) - keep aggregation visible; hide label, groups, sort.
             lines.append(
-                f"|  |  |  | Warm | {pandas_warm_str} | {polars_warm_str} | {booster_warm_str} |"
+                f"| {agg} |  |  |  | Warm | "
+                f"{pandas_warm_str} | {polars_warm_str} | {booster_warm_str} |"
             )
 
             prev_label = label
@@ -1261,8 +1297,8 @@ def render_threshold_table(results: list[dict]) -> str:
         results_by_preset_sort[key] = r
 
     lines = []
-    lines.append("| Operation | Groups | Sort | Type | Pandas | Polars | Booster |")
-    lines.append("|-----------|--------|------|------|--------|--------|---------|")
+    lines.append("| Aggregation | Workload | Groups | Sort | Type | Pandas | Polars | Booster |")
+    lines.append("|-------------|----------|--------|------|------|--------|--------|---------|")
 
     prev_label = None
     prev_groups = None
@@ -1338,12 +1374,14 @@ def render_threshold_table(results: list[dict]) -> str:
             display_groups = groups if groups != prev_groups else ""
             display_sort = sort_str if sort_str != prev_sort_str else ""
 
+            agg = f"`{r['agg']}`"
             lines.append(
-                f"| {display_label} | {display_groups} | {display_sort} | Cold | "
+                f"| {agg} | {display_label} | {display_groups} | {display_sort} | Cold | "
                 f"{pandas_cold_str} | {polars_cold_str} | {booster_cold_str} |"
             )
             lines.append(
-                f"|  |  |  | Warm | {pandas_warm_str} | {polars_warm_str} | {booster_warm_str} |"
+                f"| {agg} |  |  |  | Warm | "
+                f"{pandas_warm_str} | {polars_warm_str} | {booster_warm_str} |"
             )
 
             prev_label = label
@@ -1573,9 +1611,7 @@ def run_benchmarks(
                         cold_corr = backend_data.get("cold_correctness", "not_checked")
                         warm_corr = backend_data.get("warm_correctness", "not_checked")
                         if cold_corr != "not_checked" or warm_corr != "not_checked":
-                            correctness_str = (
-                                f" | Correctness: cold={cold_corr}, warm={warm_corr}"
-                            )
+                            correctness_str = f" | Correctness: cold={cold_corr}, warm={warm_corr}"
 
                     print(
                         f"  {backend_name:8s} | Cold: {cold_str} | "
@@ -1718,6 +1754,7 @@ Examples:
   python benches/benchmark.py --cardinality standard             # Standard only
   python benches/benchmark.py --cardinality high                 # High only
   python benches/benchmark.py --agg std --agg var                # Run only std/var benchmarks
+  python benches/benchmark.py --agg median                       # Run only median benchmarks
   python benches/benchmark.py --agg prod                         # Run only product benchmarks
   python benches/benchmark.py --agg min --agg max               # Run only min/max benchmarks
   python benches/benchmark.py --diagnostic threshold --sort-mode unsorted
