@@ -1,9 +1,114 @@
+import ast
 import re
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _RUST_LIB_PATH = _REPO_ROOT / "src" / "lib.rs"
 _RUST_STUB_PATH = _REPO_ROOT / "python" / "pandas_booster" / "_rust.pyi"
+
+
+def _python_module(path: Path) -> ast.Module:
+    return ast.parse(path.read_text(), filename=str(path))
+
+
+def _literal_strings(node: ast.AST) -> set[str]:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return {node.value}
+    if isinstance(node, ast.Subscript):
+        return _literal_strings(node.slice)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {
+        "frozenset",
+        "set",
+        "tuple",
+        "list",
+    }:
+        return set().union(*(_literal_strings(arg) for arg in node.args))
+    if isinstance(node, ast.Dict):
+        return set().union(*(_literal_strings(key) for key in node.keys if key is not None))
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return set().union(*(_literal_strings(elt) for elt in node.elts))
+    return set()
+
+
+def _assigned_strings(path: Path, name: str) -> set[str]:
+    for node in ast.walk(_python_module(path)):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == name:
+                    return _literal_strings(node.value)
+        if (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == name
+        ):
+            return _literal_strings(node.value) if node.value is not None else set()
+    return set()
+
+
+def _class_assigned_strings(path: Path, class_name: str, attr_name: str) -> set[str]:
+    for node in ast.walk(_python_module(path)):
+        if not isinstance(node, ast.ClassDef) or node.name != class_name:
+            continue
+        for stmt in node.body:
+            if isinstance(stmt, ast.Assign):
+                for target in stmt.targets:
+                    if isinstance(target, ast.Name) and target.id == attr_name:
+                        return _literal_strings(stmt.value)
+            if (
+                isinstance(stmt, ast.AnnAssign)
+                and isinstance(stmt.target, ast.Name)
+                and stmt.target.id == attr_name
+            ):
+                return _literal_strings(stmt.value) if stmt.value is not None else set()
+    return set()
+
+
+def _function_names(path: Path) -> set[str]:
+    return {
+        node.name for node in ast.walk(_python_module(path)) if isinstance(node, ast.FunctionDef)
+    }
+
+
+def _dict_keys_assigned_in_function(path: Path, function_name: str, dict_name: str) -> set[str]:
+    for node in ast.walk(_python_module(path)):
+        if not isinstance(node, ast.FunctionDef) or node.name != function_name:
+            continue
+        for stmt in ast.walk(node):
+            if isinstance(stmt, ast.Assign):
+                for target in stmt.targets:
+                    if isinstance(target, ast.Name) and target.id == dict_name:
+                        return _literal_strings(stmt.value)
+    return set()
+
+
+def _literal_string_collections(path: Path) -> list[set[str]]:
+    collections = []
+    for node in ast.walk(_python_module(path)):
+        if isinstance(node, (ast.List, ast.Tuple, ast.Set, ast.Dict)):
+            strings = _literal_strings(node)
+            if strings:
+                collections.append(strings)
+    return collections
+
+
+def _readme_operation_names() -> set[str]:
+    return set(re.findall(r"(?m)^\|\s*`([^`]+)`\s*\|", (_REPO_ROOT / "README.md").read_text()))
+
+
+def _readme_force_float_groupby_aggs() -> set[str]:
+    text = (_REPO_ROOT / "README.md").read_text()
+    match = re.search(
+        r"(?ms)^- `PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY`.*?(?=^\s*$)",
+        text,
+    )
+    assert match is not None
+    inline_code = re.findall(r"`([^`]+)`", match.group(0))
+    return {
+        token
+        for phrase in inline_code
+        for token in phrase.split("/")
+        if token in {"sum", "mean", "prod", "std", "var", "median"}
+    }
 
 
 def test_rust_pyi_exports_match_pyo3_module_registrations():
@@ -48,64 +153,45 @@ def test_prod_symbols_are_registered_and_stubbed():
 
 def test_prod_surface_mentions_stay_in_sync():
     repo = _REPO_ROOT
-    surface_expectations = {
-        repo / "python" / "pandas_booster" / "_groupby_accel.py": [
-            '"prod"',
-            'and agg in {"sum", "mean", "prod", "std", "var", "median"}',
-            'agg in {"sum", "prod", "min", "max"}',
-        ],
-        repo / "python" / "pandas_booster" / "accessor.py": [
-            '"prod"',
-            "_SUPPORTED_AGGS",
-            "sum/mean/prod/std/var",
-        ],
-        repo / "python" / "pandas_booster" / "proxy.py": [
-            '"prod"',
-            "_ACCELERATED_AGGS",
-            "def prod(",
-        ],
-        repo / "README.md": ["prod", "PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY"],
-        repo / "benches" / "benchmark.py": [
-            '"prod"',
-            "build_polars_agg_expr",
-            "agg: Literal[",
-        ],
-    }
+    groupby_accel = repo / "python" / "pandas_booster" / "_groupby_accel.py"
+    accessor = repo / "python" / "pandas_booster" / "accessor.py"
+    proxy = repo / "python" / "pandas_booster" / "proxy.py"
+    benchmark = repo / "benches" / "benchmark.py"
 
-    missing: list[str] = []
-    for path, needles in surface_expectations.items():
-        text = path.read_text()
-        for needle in needles:
-            if needle not in text:
-                missing.append(f"{path.relative_to(repo)} missing {needle!r}")
-    assert not missing
+    assert "prod" in _assigned_strings(groupby_accel, "AggFunc")
+    assert any(
+        {"sum", "mean", "prod", "std", "var", "median"} <= strings
+        for strings in _literal_string_collections(groupby_accel)
+    )
+    assert any(
+        {"sum", "prod", "min", "max"} <= strings
+        for strings in _literal_string_collections(groupby_accel)
+    )
+    assert "prod" in _class_assigned_strings(accessor, "BoosterAccessor", "_SUPPORTED_AGGS")
+    assert "prod" in _assigned_strings(proxy, "_ACCELERATED_AGGS")
+    assert "prod" in _function_names(proxy)
+    assert "prod" in _assigned_strings(benchmark, "SUPPORTED_AGGS")
+    assert "prod" in _dict_keys_assigned_in_function(benchmark, "build_polars_agg_expr", "agg_map")
+    assert "prod" in _readme_operation_names()
+    assert "prod" in _readme_force_float_groupby_aggs()
 
 
 def test_median_surface_mentions_stay_in_sync():
     repo = _REPO_ROOT
-    surface_expectations = {
-        repo / "README.md": [
-            "| `median` | Median of values in each group |",
-            "single-key float `sum`/`mean`/`prod`/`std`/`var`/`median`",
-            "mean/std/var/median",
-        ],
-        repo / "benches" / "benchmark.py": [
-            '"median"',
-            "pl.col(value_col).median().alias(value_col)",
-            "SUPPORTED_AGGS",
-        ],
-        repo / "python" / "pandas_booster" / "_groupby_accel.py": [
-            'and agg in {"sum", "mean", "prod", "std", "var", "median"}',
-        ],
-    }
+    groupby_accel = repo / "python" / "pandas_booster" / "_groupby_accel.py"
+    benchmark = repo / "benches" / "benchmark.py"
 
-    missing: list[str] = []
-    for path, needles in surface_expectations.items():
-        text = path.read_text()
-        for needle in needles:
-            if needle not in text:
-                missing.append(f"{path.relative_to(repo)} missing {needle!r}")
-    assert not missing
+    assert "median" in _assigned_strings(groupby_accel, "AggFunc")
+    assert any(
+        {"sum", "mean", "prod", "std", "var", "median"} <= strings
+        for strings in _literal_string_collections(groupby_accel)
+    )
+    assert "median" in _assigned_strings(benchmark, "SUPPORTED_AGGS")
+    assert "median" in _dict_keys_assigned_in_function(
+        benchmark, "build_polars_agg_expr", "agg_map"
+    )
+    assert "median" in _readme_operation_names()
+    assert "median" in _readme_force_float_groupby_aggs()
 
 
 def test_prod_exact_dispatch_mapping_selects_expected_symbols():
