@@ -174,7 +174,18 @@ fn median_f64_from_values(mut values: Vec<f64>) -> f64 {
             .copied()
             .max_by(f64::total_cmp)
             .expect("even-length median requires a lower partition");
-        (lower_max + *median) / 2.0
+        average_f64_middle_values(lower_max, *median)
+    }
+}
+
+fn average_f64_middle_values(lower: f64, upper: f64) -> f64 {
+    if lower.is_finite()
+        && upper.is_finite()
+        && lower.is_sign_negative() == upper.is_sign_negative()
+    {
+        lower + (upper - lower) / 2.0
+    } else {
+        (lower + upper) / 2.0
     }
 }
 
@@ -780,6 +791,19 @@ mod tests {
         }
 
         assert_eq!(agg.finalize(), 6.0);
+    }
+
+    #[test]
+    fn test_median_f64_even_count_averages_same_sign_large_finite_values_without_overflow() {
+        let mut positive = MedianAggF64::init();
+        positive.update(f64::MAX);
+        positive.update(f64::MAX);
+        assert_eq!(positive.finalize(), f64::MAX);
+
+        let mut negative = MedianAggF64::init();
+        negative.update(-f64::MAX);
+        negative.update(-f64::MAX);
+        assert_eq!(negative.finalize(), -f64::MAX);
     }
 
     #[test]

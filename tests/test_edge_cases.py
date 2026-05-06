@@ -118,6 +118,42 @@ class TestEmptyData:
         )
 
 
+class TestMedianNumericalExtremes:
+    """Tests for accelerated median arithmetic at f64 boundaries."""
+
+    @pytest.mark.parametrize(
+        ("values", "expected"),
+        [
+            pytest.param(
+                [np.finfo(np.float64).max, np.finfo(np.float64).max],
+                np.finfo(np.float64).max,
+                id="positive-max-equal",
+            ),
+            pytest.param(
+                [-np.finfo(np.float64).max, -np.finfo(np.float64).max],
+                -np.finfo(np.float64).max,
+                id="negative-max-equal",
+            ),
+        ],
+    )
+    def test_single_key_float_median_large_even_middle_values_are_finite(
+        self, values: list[float], expected: float
+    ):
+        import pandas_booster  # noqa: F401
+
+        df = pd.DataFrame(
+            {
+                "key": np.array([1, 1], dtype=np.int64),
+                "val": np.array(values, dtype=np.float64),
+            }
+        )
+
+        actual = df.booster.groupby("key", "val", "median").loc[1]
+
+        assert np.isfinite(actual)
+        assert actual == expected
+
+
 class TestInfiniteValues:
     """Tests for inf and -inf handling in value columns."""
 
