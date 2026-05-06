@@ -19,7 +19,7 @@ from ._config import (
 if TYPE_CHECKING:
     from pandas import DataFrame, Series
 
-AggFunc = Literal["sum", "mean", "prod", "min", "max", "count", "std", "var"]
+AggFunc = Literal["sum", "mean", "prod", "min", "max", "count", "std", "var", "median"]
 
 
 @pd.api.extensions.register_dataframe_accessor("booster")
@@ -33,12 +33,14 @@ class BoosterAccessor:
     - Columns are nullable extension dtypes (e.g. pandas Int64) or contain pd.NA
 
     Note: std and var use pandas-default semantics (ddof=1) and always return float64.
-    Unlike legacy aggs, supported std and var are Rust-first by default regardless of
+    Median is certified only for primitive NumPy-backed integer/float values with
+    integer keys, and otherwise routes through the pandas fallback path.
+    Unlike legacy aggs, supported std, var, and median are Rust-first by default regardless of
     dataset size. This provides significant speedups (up to 1.5x) for high-cardinality
     workloads, though standard-cardinality single-key cases may remain slower than
     pandas. The `PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY` environment toggle
     can be used to force a pandas fallback specifically for single-key float-input
-    sum/mean/prod/std/var operations; it does not broaden to multi-key or int-backed paths.
+    sum/mean/prod/std/var/median operations; it does not broaden to multi-key or int-backed paths.
 
     Examples:
         Single key:
@@ -52,7 +54,17 @@ class BoosterAccessor:
         >>> df.booster.groupby(["k1", "k2"], "val", "sum")
     """
 
-    _SUPPORTED_AGGS: set[str] = {"sum", "mean", "prod", "min", "max", "count", "std", "var"}
+    _SUPPORTED_AGGS: set[str] = {
+        "sum",
+        "mean",
+        "prod",
+        "min",
+        "max",
+        "count",
+        "std",
+        "var",
+        "median",
+    }
     _MAX_MULTI_KEYS: int = 10
 
     def __init__(self, pandas_obj: DataFrame) -> None:
@@ -88,7 +100,7 @@ class BoosterAccessor:
                 All key columns must be integer dtype for acceleration.
             target: Column name to aggregate (must be numeric).
             agg: Aggregation function - one of "sum", "mean", "prod", "min",
-                "max", "count", "std", "var".
+                "max", "count", "std", "var", "median".
             sort: If True (default), sort the result by the group keys to match
                 Pandas default behavior. If False, preserve Pandas' "first-seen"
                 group order (order of appearance in the input).
@@ -125,7 +137,7 @@ class BoosterAccessor:
         key_col = cast(pd.Series, key_col)
         val_col = cast(pd.Series, val_col)
 
-        if agg not in {"std", "var"} and len(self._df) < self._get_fallback_threshold():
+        if agg not in {"std", "var", "median"} and len(self._df) < self._get_fallback_threshold():
             return self._pandas_fallback([by], target, agg, sort=sort)
 
         compatibility = _groupby_accel_mod.classify_groupby_compatibility(
@@ -135,6 +147,9 @@ class BoosterAccessor:
             force_pandas_float_groupby=force_pandas_float_groupby_enabled(),
         )
         if not compatibility.supported or compatibility.force_pandas:
+            return self._pandas_fallback([by], target, agg, sort=sort)
+
+        if agg == "median" and not self._has_median_kernel(val_col, multi=False, sort=sort):
             return self._pandas_fallback([by], target, agg, sort=sort)
 
         return self._rust_groupby_single(by, target, key_col, val_col, agg, sort=sort)
@@ -156,7 +171,7 @@ class BoosterAccessor:
                 return self._pandas_fallback(by_cols, target, agg, sort=sort)
             key_cols[col_name] = cast(pd.Series, col)
 
-        if agg not in {"std", "var"} and len(self._df) < self._get_fallback_threshold():
+        if agg not in {"std", "var", "median"} and len(self._df) < self._get_fallback_threshold():
             return self._pandas_fallback(by_cols, target, agg, sort=sort)
 
         compatibility = _groupby_accel_mod.classify_groupby_compatibility(
@@ -168,7 +183,23 @@ class BoosterAccessor:
         if not compatibility.supported or compatibility.force_pandas:
             return self._pandas_fallback(by_cols, target, agg, sort=sort)
 
+        if agg == "median" and not self._has_median_kernel(val_col, multi=True, sort=sort):
+            return self._pandas_fallback(by_cols, target, agg, sort=sort)
+
         return self._rust_groupby_multi(by_cols, target, key_cols, val_col, agg, sort=sort)
+
+    def _has_median_kernel(self, val_col: Series, *, multi: bool, sort: bool) -> bool:
+        rust = self._get_rust_module()
+        force_pandas_sort = bool(sort) and force_pandas_sort_enabled()
+        kernel = "i64" if pd.api.types.is_integer_dtype(val_col) else "f64"
+        prefix = "groupby_multi" if multi else "groupby"
+        return _groupby_accel_mod.has_rust_groupby_func(
+            rust,
+            f"{prefix}_median_{kernel}",
+            sort=sort,
+            n_rows=len(self._df),
+            force_pandas_sort=force_pandas_sort,
+        )
 
     def _pandas_fallback(
         self, by_cols: list[str], target: str, agg: AggFunc, *, sort: bool

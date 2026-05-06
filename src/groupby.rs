@@ -29,9 +29,9 @@ const STD_VAR_ENGINE_SAMPLE_SIZE: usize = 16_384;
 const STD_VAR_ENGINE_MIN_SAMPLE_UNIQUES: usize = 4_096;
 
 use crate::aggregation::{
-    Aggregator, CountAggF64, CountAggI64, MaxAggF64, MaxAggI64, MeanAggF64, MeanAggI64, MinAggF64,
-    MinAggI64, ProdAggF64, ProdAggI64, StdAggF64, StdAggI64, SumAggF64, SumAggI64, VarAggF64,
-    VarAggI64,
+    Aggregator, CountAggF64, CountAggI64, MaxAggF64, MaxAggI64, MeanAggF64, MeanAggI64,
+    MedianAggF64, MedianAggI64, MinAggF64, MinAggI64, ProdAggF64, ProdAggI64, StdAggF64, StdAggI64,
+    SumAggF64, SumAggI64, VarAggF64, VarAggI64,
 };
 
 /// Result container for groupby operations, holding key-value pairs.
@@ -449,7 +449,7 @@ where
 
     for (key, (agg, first)) in merged {
         result_keys.push(key);
-        result_values.push(agg.finalize());
+        result_values.push(agg.finalize_owned());
         first_seen.push(first);
     }
 
@@ -587,13 +587,19 @@ where
             aggs,
             first_seen: state_first_seen,
         } = state;
+        let mut aggs = aggs.into_iter().map(Some).collect::<Vec<_>>();
 
         debug_assert_eq!(gid_map.len(), aggs.len());
         debug_assert_eq!(gid_map.len(), state_first_seen.len());
 
         for (key, gid) in gid_map {
             result_keys.push(key);
-            result_values.push(aggs[gid].finalize());
+            // Each gid_map entry owns one unique accumulator slot. Taking it
+            // lets Vec-backed aggregators finalize without cloning their state.
+            let agg = aggs[gid]
+                .take()
+                .expect("first-seen group id should reference one accumulator");
+            result_values.push(agg.finalize_owned());
             first_seen.push(state_first_seen[gid]);
         }
     }
@@ -878,7 +884,7 @@ where
 
     for (k, agg) in merged {
         result_keys.push(k);
-        result_values.push(agg.finalize());
+        result_values.push(agg.finalize_owned());
     }
 
     Ok(GroupByResult {
@@ -933,7 +939,7 @@ where
 
     for (k, agg) in merged {
         result_keys.push(k);
-        result_values.push(agg.finalize());
+        result_values.push(agg.finalize_owned());
     }
     let materialize_s = materialize_start.elapsed().as_secs_f64();
 
@@ -981,7 +987,7 @@ fn parallel_groupby<T, A, O>(keys: &[i64], values: &[T]) -> PyResult<GroupByResu
 where
     T: Copy + Send + Sync,
     O: Copy,
-    A: Aggregator<T, O> + Clone + Default,
+    A: Aggregator<T, O>,
 {
     let chunk_size = (keys.len() / rayon::current_num_threads()).max(10_000);
 
@@ -999,9 +1005,14 @@ where
         )
         .reduce(AHashMap::default, |mut map1, map2| {
             for (k, v) in map2 {
-                map1.entry(k)
-                    .and_modify(|existing| existing.merge(v.clone()))
-                    .or_insert(v);
+                match map1.entry(k) {
+                    Entry::Occupied(mut e) => {
+                        e.get_mut().merge(v);
+                    }
+                    Entry::Vacant(e) => {
+                        e.insert(v);
+                    }
+                }
             }
             map1
         });
@@ -1011,7 +1022,7 @@ where
 
     for (k, agg) in merged {
         result_keys.push(k);
-        result_values.push(agg.finalize());
+        result_values.push(agg.finalize_owned());
     }
 
     Ok(GroupByResult {
@@ -1092,7 +1103,7 @@ where
 
     for (k, (agg, first)) in merged {
         result_keys.push(k);
-        result_values.push(agg.finalize());
+        result_values.push(agg.finalize_owned());
         first_seen.push(first);
     }
 
@@ -1171,7 +1182,7 @@ where
 
     for (k, (agg, first)) in merged {
         result_keys.push(k);
-        result_values.push(agg.finalize());
+        result_values.push(agg.finalize_owned());
         first_seen.push(first);
     }
 
@@ -1259,6 +1270,33 @@ pub fn parallel_groupby_mean_f64_firstseen_u64(
     values: &[f64],
 ) -> PyResult<GroupByResultF64> {
     parallel_groupby_firstseen_u64_deterministic::<f64, MeanAggF64, f64>(keys, values)
+}
+
+pub fn parallel_groupby_median_f64(keys: &[i64], values: &[f64]) -> PyResult<GroupByResultF64> {
+    parallel_groupby::<f64, MedianAggF64, f64>(keys, values)
+}
+
+pub fn parallel_groupby_median_f64_sorted(
+    keys: &[i64],
+    values: &[f64],
+) -> PyResult<GroupByResultF64> {
+    let mut result = parallel_groupby_median_f64(keys, values)?;
+    reorder_single_result_by_key(&mut result);
+    Ok(result)
+}
+
+pub fn parallel_groupby_median_f64_firstseen_u32(
+    keys: &[i64],
+    values: &[f64],
+) -> PyResult<GroupByResultF64> {
+    parallel_groupby_firstseen_u32::<f64, MedianAggF64, f64>(keys, values)
+}
+
+pub fn parallel_groupby_median_f64_firstseen_u64(
+    keys: &[i64],
+    values: &[f64],
+) -> PyResult<GroupByResultF64> {
+    parallel_groupby_firstseen_u64::<f64, MedianAggF64, f64>(keys, values)
 }
 
 pub fn parallel_groupby_var_f64(keys: &[i64], values: &[f64]) -> PyResult<GroupByResultF64> {
@@ -1485,6 +1523,33 @@ pub fn parallel_groupby_mean_i64_firstseen_u64(
     parallel_groupby_firstseen_u64::<i64, MeanAggI64, f64>(keys, values)
 }
 
+pub fn parallel_groupby_median_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultF64> {
+    parallel_groupby::<i64, MedianAggI64, f64>(keys, values)
+}
+
+pub fn parallel_groupby_median_i64_sorted(
+    keys: &[i64],
+    values: &[i64],
+) -> PyResult<GroupByResultF64> {
+    let mut result = parallel_groupby_median_i64(keys, values)?;
+    reorder_single_result_by_key(&mut result);
+    Ok(result)
+}
+
+pub fn parallel_groupby_median_i64_firstseen_u32(
+    keys: &[i64],
+    values: &[i64],
+) -> PyResult<GroupByResultF64> {
+    parallel_groupby_firstseen_u32::<i64, MedianAggI64, f64>(keys, values)
+}
+
+pub fn parallel_groupby_median_i64_firstseen_u64(
+    keys: &[i64],
+    values: &[i64],
+) -> PyResult<GroupByResultF64> {
+    parallel_groupby_firstseen_u64::<i64, MedianAggI64, f64>(keys, values)
+}
+
 pub fn parallel_groupby_var_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultF64> {
     parallel_groupby_std_var_impl::<i64, VarAggI64, f64>(keys, values)
 }
@@ -1640,6 +1705,59 @@ mod tests {
     use super::*;
     use rayon::ThreadPoolBuilder;
 
+    struct NonCloneVecAgg {
+        values: Vec<i64>,
+    }
+
+    impl Aggregator<i64, usize> for NonCloneVecAgg {
+        fn init() -> Self {
+            Self { values: Vec::new() }
+        }
+
+        fn update(&mut self, value: i64) {
+            self.values.push(value);
+        }
+
+        fn merge(&mut self, other: Self) {
+            self.values.extend(other.values);
+        }
+
+        fn finalize(&self) -> usize {
+            panic!("materialization should use finalize_owned for NonCloneVecAgg")
+        }
+
+        fn finalize_owned(self) -> usize {
+            self.values.len()
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct OwnedOnlyAgg {
+        values: Vec<i64>,
+    }
+
+    impl Aggregator<i64, usize> for OwnedOnlyAgg {
+        fn init() -> Self {
+            Self::default()
+        }
+
+        fn update(&mut self, value: i64) {
+            self.values.push(value);
+        }
+
+        fn merge(&mut self, other: Self) {
+            self.values.extend(other.values);
+        }
+
+        fn finalize(&self) -> usize {
+            panic!("materialization should use finalize_owned for OwnedOnlyAgg")
+        }
+
+        fn finalize_owned(self) -> usize {
+            self.values.len()
+        }
+    }
+
     fn make_sensitive_single_key_float_data() -> (Vec<i64>, Vec<f64>) {
         let n = 260_000usize;
         let mut keys = Vec::with_capacity(n);
@@ -1714,6 +1832,73 @@ mod tests {
                 "bitwise mismatch at thread count {threads}"
             );
         }
+    }
+
+    #[test]
+    fn test_parallel_groupby_reduce_merges_owned_aggregators_without_clone() {
+        let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+        pool.install(|| {
+            let n = 80_000usize;
+            let keys = vec![7_i64; n];
+            let values: Vec<i64> = (0..n as i64).collect();
+
+            let result = parallel_groupby::<i64, NonCloneVecAgg, usize>(&keys, &values).unwrap();
+
+            assert_eq!(result.keys, vec![7]);
+            assert_eq!(result.values, vec![n]);
+        });
+    }
+
+    #[test]
+    fn test_firstseen_materialization_uses_owned_finalize() {
+        let keys = vec![2_i64, 1, 2, 1, 3];
+        let values = vec![10_i64, 20, 30, 40, 50];
+
+        let result =
+            parallel_groupby_firstseen_u32::<i64, OwnedOnlyAgg, usize>(&keys, &values).unwrap();
+
+        assert_eq!(result.keys, vec![2, 1, 3]);
+        assert_eq!(result.values, vec![2, 2, 1]);
+
+        let result =
+            parallel_groupby_firstseen_u64::<i64, OwnedOnlyAgg, usize>(&keys, &values).unwrap();
+
+        assert_eq!(result.keys, vec![2, 1, 3]);
+        assert_eq!(result.values, vec![2, 2, 1]);
+    }
+
+    #[test]
+    fn test_partitioned_firstseen_materialization_uses_owned_finalize() {
+        let keys = vec![5_i64, 4, 5, 3, 4, 2];
+        let values = vec![10_i64, 20, 30, 40, 50, 60];
+        let states =
+            build_partitioned_deterministic_firstseen_states::<i64, usize, OwnedOnlyAgg, u32>(
+                &keys, &values,
+            )
+            .unwrap();
+
+        let materialized = materialize_partitioned_deterministic_firstseen_states::<
+            i64,
+            usize,
+            OwnedOnlyAgg,
+            u32,
+        >(states);
+
+        let mut counts = AHashMap::new();
+        for (key, value) in materialized
+            .result
+            .keys
+            .iter()
+            .copied()
+            .zip(materialized.result.values.iter().copied())
+        {
+            counts.insert(key, value);
+        }
+
+        assert_eq!(counts[&5], 2);
+        assert_eq!(counts[&4], 2);
+        assert_eq!(counts[&3], 1);
+        assert_eq!(counts[&2], 1);
     }
 
     #[test]

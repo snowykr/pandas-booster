@@ -280,6 +280,113 @@ def test_describe_booster_execution_reports_benchmark_abi_skew_for_missing_kerne
         benchmark_module.describe_booster_execution(df, ["key"], "value", "std", True)
 
 
+def test_describe_booster_execution_treats_small_supported_median_as_rust_first(
+    benchmark_module,
+    monkeypatch,
+):
+    import pandas_booster._groupby_accel as groupby_accel
+
+    class FakeFunc:
+        __name__ = "groupby_median_f64_sorted"
+
+    df = benchmark_module.pd.DataFrame(
+        {
+            "key": [1, 1, 2, 2],
+            "value": benchmark_module.np.array(
+                [1.0, 3.0, 2.0, 8.0], dtype=benchmark_module.np.float64
+            ),
+        }
+    )
+
+    monkeypatch.setattr(
+        groupby_accel,
+        "classify_groupby_compatibility",
+        lambda **_kwargs: groupby_accel.GroupByCompatibility(True, False),
+    )
+    monkeypatch.setattr(groupby_accel, "has_rust_groupby_func", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        groupby_accel,
+        "select_rust_groupby_func",
+        lambda *args, **kwargs: (FakeFunc(), False),
+    )
+
+    assert benchmark_module.describe_booster_execution(df, ["key"], "value", "median", True) == (
+        "booster->rust.groupby_median_f64_sorted"
+    )
+
+
+def test_describe_booster_execution_uses_pandas_label_when_exact_median_kernel_is_missing(
+    benchmark_module,
+    monkeypatch,
+):
+    import pandas_booster._groupby_accel as groupby_accel
+
+    df = benchmark_module.pd.DataFrame(
+        {
+            "key": benchmark_module.np.tile([1, 2], 50_000),
+            "value": benchmark_module.np.linspace(
+                0.0, 1.0, 100_000, dtype=benchmark_module.np.float64
+            ),
+        }
+    )
+
+    monkeypatch.setattr(
+        groupby_accel,
+        "classify_groupby_compatibility",
+        lambda **_kwargs: groupby_accel.GroupByCompatibility(True, False),
+    )
+    monkeypatch.setattr(groupby_accel, "has_rust_groupby_func", lambda *args, **kwargs: False)
+
+    def fail_select(*args, **kwargs):
+        _ = (args, kwargs)
+        raise AssertionError("exact median kernel lookup should gate benchmark dispatch")
+
+    monkeypatch.setattr(groupby_accel, "select_rust_groupby_func", fail_select)
+
+    assert benchmark_module.describe_booster_execution(df, ["key"], "value", "median", False) == (
+        "booster->pandas.groupby.median"
+    )
+
+
+def test_describe_booster_execution_skips_median_kernel_probe_for_unsupported_input(
+    benchmark_module,
+    monkeypatch,
+):
+    import pandas_booster._groupby_accel as groupby_accel
+
+    df = benchmark_module.pd.DataFrame({"key": [1, 2], "value": ["a", "b"]})
+
+    def fail_has_rust_groupby_func(*args, **kwargs):
+        _ = (args, kwargs)
+        raise AssertionError("unsupported benchmark inputs should not probe median kernels")
+
+    monkeypatch.setattr(groupby_accel, "has_rust_groupby_func", fail_has_rust_groupby_func)
+
+    assert benchmark_module.describe_booster_execution(df, ["key"], "value", "median", True) == (
+        "booster->pandas.groupby.median"
+    )
+
+
+def test_describe_booster_execution_skips_median_kernel_probe_when_force_pandas_enabled(
+    benchmark_module,
+    monkeypatch,
+):
+    import pandas_booster._groupby_accel as groupby_accel
+
+    monkeypatch.setenv("PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY", "1")
+    df = benchmark_module.pd.DataFrame({"key": [1, 2], "value": [1.0, 2.0]})
+
+    def fail_has_rust_groupby_func(*args, **kwargs):
+        _ = (args, kwargs)
+        raise AssertionError("forced pandas benchmark inputs should not probe median kernels")
+
+    monkeypatch.setattr(groupby_accel, "has_rust_groupby_func", fail_has_rust_groupby_func)
+
+    assert benchmark_module.describe_booster_execution(df, ["key"], "value", "median", False) == (
+        "booster->pandas.groupby.median"
+    )
+
+
 def test_build_profile_json_payload_handles_unavailable_breakdowns(benchmark_module):
     profiled_case = {
         "preset": "1key",
@@ -479,9 +586,13 @@ def test_render_stats_evidence_section_skips_unavailable_breakdowns(benchmark_mo
     assert "No Rust-only Booster breakdown rows were available" in rendered
 
 
-def test_prod_is_supported_benchmark_aggregation(benchmark_module):
+def test_prod_and_median_are_supported_benchmark_aggregations(benchmark_module):
     assert "prod" in benchmark_module.SUPPORTED_AGGS
-    assert benchmark_module.resolve_selected_aggs(["prod", "sum", "prod"]) == ["prod", "sum"]
+    assert "median" in benchmark_module.SUPPORTED_AGGS
+    assert benchmark_module.resolve_selected_aggs(["median", "sum", "median"]) == [
+        "median",
+        "sum",
+    ]
 
 
 def test_build_polars_agg_expr_supports_prod(benchmark_module):
@@ -492,9 +603,18 @@ def test_build_polars_agg_expr_supports_prod(benchmark_module):
     assert "value" in repr(expr)
 
 
-def test_benchmark_worker_type_surface_mentions_prod():
+def test_build_polars_agg_expr_supports_median(benchmark_module):
+    if benchmark_module.pl is None:
+        pytest.skip("Polars is not installed")
+
+    expr = benchmark_module.build_polars_agg_expr("value", "median")
+    assert "value" in repr(expr)
+
+
+def test_benchmark_worker_type_surface_mentions_median():
     source = _BENCHMARK_PATH.read_text()
-    assert 'Literal["sum", "mean", "prod", "std", "var", "min", "max", "count"]' in source
+    assert "agg: Literal[" in source
+    assert '"median"' in source
     assert '"prod"' in source
 
 

@@ -207,6 +207,69 @@ define_single_prod_i64_wrapper!(
     parallel_groupby_prod_i64_firstseen_u64
 );
 
+macro_rules! define_single_median_f64_wrapper {
+    ($name:ident, $kernel:ident) => {
+        #[pyfunction]
+        fn $name<'py>(
+            py: Python<'py>,
+            keys: PyReadonlyArray1<'py, i64>,
+            values: PyReadonlyArray1<'py, f64>,
+        ) -> PyResult<SingleGroupByReturnF64<'py>> {
+            let keys_slice = zero_copy::get_slice_i64(&keys)?;
+            let values_slice = zero_copy::get_slice_f64(&values)?;
+            validate_inputs_len(keys_slice.len(), values_slice.len())?;
+
+            let result = py.detach(|| groupby::$kernel(keys_slice, values_slice))?;
+            convert_single_result_f64(py, result)
+        }
+    };
+}
+
+macro_rules! define_single_median_i64_wrapper {
+    ($name:ident, $kernel:ident) => {
+        #[pyfunction]
+        fn $name<'py>(
+            py: Python<'py>,
+            keys: PyReadonlyArray1<'py, i64>,
+            values: PyReadonlyArray1<'py, i64>,
+        ) -> PyResult<SingleGroupByReturnF64<'py>> {
+            let keys_slice = zero_copy::get_slice_i64(&keys)?;
+            let values_slice = zero_copy::get_slice_i64(&values)?;
+            validate_inputs_len(keys_slice.len(), values_slice.len())?;
+
+            let result = py.detach(|| groupby::$kernel(keys_slice, values_slice))?;
+            convert_single_result_f64(py, result)
+        }
+    };
+}
+
+define_single_median_f64_wrapper!(groupby_median_f64, parallel_groupby_median_f64);
+define_single_median_f64_wrapper!(
+    groupby_median_f64_sorted,
+    parallel_groupby_median_f64_sorted
+);
+define_single_median_f64_wrapper!(
+    groupby_median_f64_firstseen_u32,
+    parallel_groupby_median_f64_firstseen_u32
+);
+define_single_median_f64_wrapper!(
+    groupby_median_f64_firstseen_u64,
+    parallel_groupby_median_f64_firstseen_u64
+);
+define_single_median_i64_wrapper!(groupby_median_i64, parallel_groupby_median_i64);
+define_single_median_i64_wrapper!(
+    groupby_median_i64_sorted,
+    parallel_groupby_median_i64_sorted
+);
+define_single_median_i64_wrapper!(
+    groupby_median_i64_firstseen_u32,
+    parallel_groupby_median_i64_firstseen_u32
+);
+define_single_median_i64_wrapper!(
+    groupby_median_i64_firstseen_u64,
+    parallel_groupby_median_i64_firstseen_u64
+);
+
 /// Computes parallel groupby sum for f64 values.
 ///
 /// Releases the GIL during computation for true parallelism.
@@ -1310,6 +1373,79 @@ define_multi_prod_i64_wrapper!(
 define_multi_prod_i64_wrapper!(
     groupby_multi_prod_i64_firstseen_u64,
     multi_groupby_prod_i64_firstseen_u64
+);
+
+macro_rules! define_multi_median_f64_wrapper {
+    ($name:ident, $kernel:ident) => {
+        #[pyfunction]
+        fn $name<'py>(
+            py: Python<'py>,
+            key_cols: Vec<PyReadonlyArray1<'py, i64>>,
+            values: PyReadonlyArray1<'py, f64>,
+        ) -> PyResult<MultiGroupByReturnF64<'py>> {
+            let values_slice = zero_copy::get_slice_f64(&values)?;
+            let key_slices: Vec<&[i64]> = key_cols
+                .iter()
+                .map(|col| zero_copy::get_slice_i64(col))
+                .collect::<PyResult<Vec<_>>>()?;
+
+            let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
+            validate_multi_inputs_len(&key_lengths, values_slice.len())?;
+
+            let result = py.detach(|| groupby_multi::$kernel(&key_slices, values_slice))?;
+            convert_multi_result_f64(py, result)
+        }
+    };
+}
+
+macro_rules! define_multi_median_i64_wrapper {
+    ($name:ident, $kernel:ident) => {
+        #[pyfunction]
+        fn $name<'py>(
+            py: Python<'py>,
+            key_cols: Vec<PyReadonlyArray1<'py, i64>>,
+            values: PyReadonlyArray1<'py, i64>,
+        ) -> PyResult<MultiGroupByReturnF64<'py>> {
+            let values_slice = zero_copy::get_slice_i64(&values)?;
+            let key_slices: Vec<&[i64]> = key_cols
+                .iter()
+                .map(|col| zero_copy::get_slice_i64(col))
+                .collect::<PyResult<Vec<_>>>()?;
+
+            let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
+            validate_multi_inputs_len(&key_lengths, values_slice.len())?;
+
+            let result = py.detach(|| groupby_multi::$kernel(&key_slices, values_slice))?;
+            convert_multi_result_f64(py, result)
+        }
+    };
+}
+
+define_multi_median_f64_wrapper!(groupby_multi_median_f64, multi_groupby_median_f64);
+define_multi_median_f64_wrapper!(
+    groupby_multi_median_f64_sorted,
+    multi_groupby_median_f64_sorted
+);
+define_multi_median_f64_wrapper!(
+    groupby_multi_median_f64_firstseen_u32,
+    multi_groupby_median_f64_firstseen_u32
+);
+define_multi_median_f64_wrapper!(
+    groupby_multi_median_f64_firstseen_u64,
+    multi_groupby_median_f64_firstseen_u64
+);
+define_multi_median_i64_wrapper!(groupby_multi_median_i64, multi_groupby_median_i64);
+define_multi_median_i64_wrapper!(
+    groupby_multi_median_i64_sorted,
+    multi_groupby_median_i64_sorted
+);
+define_multi_median_i64_wrapper!(
+    groupby_multi_median_i64_firstseen_u32,
+    multi_groupby_median_i64_firstseen_u32
+);
+define_multi_median_i64_wrapper!(
+    groupby_multi_median_i64_firstseen_u64,
+    multi_groupby_median_i64_firstseen_u64
 );
 
 /// Multi-column groupby sum for f64 values.
@@ -2630,6 +2766,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(groupby_sum_f64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_prod_f64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_mean_f64, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_median_f64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_var_f64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_std_f64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_min_f64, m)?)?;
@@ -2637,6 +2774,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(groupby_sum_i64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_prod_i64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_mean_i64, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_median_i64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_var_i64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_std_i64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_min_i64, m)?)?;
@@ -2648,6 +2786,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(groupby_sum_f64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_prod_f64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_mean_f64_sorted, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_median_f64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_var_f64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_std_f64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(profile_groupby_var_f64_sorted, m)?)?;
@@ -2658,6 +2797,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(groupby_sum_i64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_prod_i64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_mean_i64_sorted, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_median_i64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_var_i64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_std_i64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_min_i64_sorted, m)?)?;
@@ -2671,6 +2811,8 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(groupby_prod_f64_firstseen_u64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_mean_f64_firstseen_u32, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_mean_f64_firstseen_u64, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_median_f64_firstseen_u32, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_median_f64_firstseen_u64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_var_f64_firstseen_u32, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_var_f64_firstseen_u64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_std_f64_firstseen_u32, m)?)?;
@@ -2692,6 +2834,8 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(groupby_prod_i64_firstseen_u64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_mean_i64_firstseen_u32, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_mean_i64_firstseen_u64, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_median_i64_firstseen_u32, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_median_i64_firstseen_u64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_var_i64_firstseen_u32, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_var_i64_firstseen_u64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_std_i64_firstseen_u32, m)?)?;
@@ -2706,6 +2850,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(groupby_multi_sum_f64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_prod_f64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_mean_f64, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_multi_median_f64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_var_f64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_std_f64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_min_f64, m)?)?;
@@ -2713,6 +2858,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(groupby_multi_sum_i64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_prod_i64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_mean_i64, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_multi_median_i64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_var_i64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_std_i64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_min_i64, m)?)?;
@@ -2724,6 +2870,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(groupby_multi_sum_f64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_prod_f64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_mean_f64_sorted, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_multi_median_f64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_var_f64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_std_f64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_min_f64_sorted, m)?)?;
@@ -2732,6 +2879,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(groupby_multi_sum_i64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_prod_i64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_mean_i64_sorted, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_multi_median_i64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_var_i64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_std_i64_sorted, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_min_i64_sorted, m)?)?;
@@ -2745,6 +2893,8 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(groupby_multi_prod_f64_firstseen_u64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_mean_f64_firstseen_u32, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_mean_f64_firstseen_u64, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_multi_median_f64_firstseen_u32, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_multi_median_f64_firstseen_u64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_var_f64_firstseen_u32, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_var_f64_firstseen_u64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_std_f64_firstseen_u32, m)?)?;
@@ -2762,6 +2912,8 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(groupby_multi_prod_i64_firstseen_u64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_mean_i64_firstseen_u32, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_mean_i64_firstseen_u64, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_multi_median_i64_firstseen_u32, m)?)?;
+    m.add_function(wrap_pyfunction!(groupby_multi_median_i64_firstseen_u64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_var_i64_firstseen_u32, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_var_i64_firstseen_u64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_multi_std_i64_firstseen_u32, m)?)?;

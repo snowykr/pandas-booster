@@ -23,9 +23,9 @@ use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 
 use crate::aggregation::{
-    Aggregator, CountAggF64, CountAggI64, MaxAggF64, MaxAggI64, MeanAggF64, MeanAggI64, MinAggF64,
-    MinAggI64, ProdAggF64, ProdAggI64, StdAggF64, StdAggI64, SumAggF64, SumAggI64, VarAggF64,
-    VarAggI64,
+    Aggregator, CountAggF64, CountAggI64, MaxAggF64, MaxAggI64, MeanAggF64, MeanAggI64,
+    MedianAggF64, MedianAggI64, MinAggF64, MinAggI64, ProdAggF64, ProdAggI64, StdAggF64, StdAggI64,
+    SumAggF64, SumAggI64, VarAggF64, VarAggI64,
 };
 use crate::radix_sort::{
     i64_to_sortable_u64, radix_sort_perm_by_u32, radix_sort_perm_by_u64,
@@ -461,7 +461,7 @@ where
 
             local_map
                 .into_iter()
-                .map(|(k, agg)| (k, agg.finalize()))
+                .map(|(k, agg)| (k, agg.finalize_owned()))
                 .collect()
         })
         .collect();
@@ -577,9 +577,15 @@ where
 
             let mut out_pairs: Vec<(Ops::Key, O)> = Vec::with_capacity(aggs.len());
             let mut out_first_seen: Vec<u32> = Vec::with_capacity(aggs.len());
+            let mut aggs = aggs.into_iter().map(Some).collect::<Vec<_>>();
             for (k, gid) in gid_map {
                 let g = gid as usize;
-                out_pairs.push((k, aggs[g].finalize()));
+                // Each gid_map entry owns one unique accumulator slot. Taking it
+                // lets Vec-backed aggregators finalize without cloning their state.
+                let agg = aggs[g]
+                    .take()
+                    .expect("first-seen group id should reference one accumulator");
+                out_pairs.push((k, agg.finalize_owned()));
                 out_first_seen.push(first_seen[g]);
             }
 
@@ -694,9 +700,15 @@ where
 
             let mut out_pairs: Vec<(Ops::Key, O)> = Vec::with_capacity(aggs.len());
             let mut out_first_seen: Vec<u64> = Vec::with_capacity(aggs.len());
+            let mut aggs = aggs.into_iter().map(Some).collect::<Vec<_>>();
             for (k, gid) in gid_map {
                 let g = gid as usize;
-                out_pairs.push((k, aggs[g].finalize()));
+                // Each gid_map entry owns one unique accumulator slot. Taking it
+                // lets Vec-backed aggregators finalize without cloning their state.
+                let agg = aggs[g]
+                    .take()
+                    .expect("first-seen group id should reference one accumulator");
+                out_pairs.push((k, agg.finalize_owned()));
                 out_first_seen.push(first_seen[g]);
             }
 
@@ -1018,6 +1030,7 @@ macro_rules! impl_radix_dispatch {
 impl_radix_dispatch!(radix_groupby_sum_f64, f64, SumAggF64, f64);
 impl_radix_dispatch!(radix_groupby_prod_f64, f64, ProdAggF64, f64);
 impl_radix_dispatch!(radix_groupby_mean_f64, f64, MeanAggF64, f64);
+impl_radix_dispatch!(radix_groupby_median_f64, f64, MedianAggF64, f64);
 impl_radix_dispatch!(radix_groupby_var_f64, f64, VarAggF64, f64);
 impl_radix_dispatch!(radix_groupby_std_f64, f64, StdAggF64, f64);
 impl_radix_dispatch!(radix_groupby_min_f64, f64, MinAggF64, f64);
@@ -1026,6 +1039,7 @@ impl_radix_dispatch!(radix_groupby_max_f64, f64, MaxAggF64, f64);
 impl_radix_dispatch!(radix_groupby_sum_i64, i64, SumAggI64, i64);
 impl_radix_dispatch!(radix_groupby_prod_i64, i64, ProdAggI64, i64);
 impl_radix_dispatch!(radix_groupby_mean_i64, i64, MeanAggI64, f64);
+impl_radix_dispatch!(radix_groupby_median_i64, i64, MedianAggI64, f64);
 impl_radix_dispatch!(radix_groupby_var_i64, i64, VarAggI64, f64);
 impl_radix_dispatch!(radix_groupby_std_i64, i64, StdAggI64, f64);
 impl_radix_dispatch!(radix_groupby_min_i64, i64, MinAggI64, i64);
@@ -1061,6 +1075,12 @@ macro_rules! impl_radix_firstseen_u64 {
 impl_radix_firstseen_u32!(radix_groupby_sum_f64_firstseen_u32, f64, SumAggF64, f64);
 impl_radix_firstseen_u32!(radix_groupby_prod_f64_firstseen_u32, f64, ProdAggF64, f64);
 impl_radix_firstseen_u32!(radix_groupby_mean_f64_firstseen_u32, f64, MeanAggF64, f64);
+impl_radix_firstseen_u32!(
+    radix_groupby_median_f64_firstseen_u32,
+    f64,
+    MedianAggF64,
+    f64
+);
 impl_radix_firstseen_u32!(radix_groupby_var_f64_firstseen_u32, f64, VarAggF64, f64);
 impl_radix_firstseen_u32!(radix_groupby_std_f64_firstseen_u32, f64, StdAggF64, f64);
 impl_radix_firstseen_u32!(radix_groupby_min_f64_firstseen_u32, f64, MinAggF64, f64);
@@ -1070,6 +1090,12 @@ impl_radix_firstseen_u32!(radix_groupby_count_f64_firstseen_u32, f64, CountAggF6
 impl_radix_firstseen_u32!(radix_groupby_sum_i64_firstseen_u32, i64, SumAggI64, i64);
 impl_radix_firstseen_u32!(radix_groupby_prod_i64_firstseen_u32, i64, ProdAggI64, i64);
 impl_radix_firstseen_u32!(radix_groupby_mean_i64_firstseen_u32, i64, MeanAggI64, f64);
+impl_radix_firstseen_u32!(
+    radix_groupby_median_i64_firstseen_u32,
+    i64,
+    MedianAggI64,
+    f64
+);
 impl_radix_firstseen_u32!(radix_groupby_var_i64_firstseen_u32, i64, VarAggI64, f64);
 impl_radix_firstseen_u32!(radix_groupby_std_i64_firstseen_u32, i64, StdAggI64, f64);
 impl_radix_firstseen_u32!(radix_groupby_min_i64_firstseen_u32, i64, MinAggI64, i64);
@@ -1079,6 +1105,12 @@ impl_radix_firstseen_u32!(radix_groupby_count_i64_firstseen_u32, i64, CountAggI6
 impl_radix_firstseen_u64!(radix_groupby_sum_f64_firstseen_u64, f64, SumAggF64, f64);
 impl_radix_firstseen_u64!(radix_groupby_prod_f64_firstseen_u64, f64, ProdAggF64, f64);
 impl_radix_firstseen_u64!(radix_groupby_mean_f64_firstseen_u64, f64, MeanAggF64, f64);
+impl_radix_firstseen_u64!(
+    radix_groupby_median_f64_firstseen_u64,
+    f64,
+    MedianAggF64,
+    f64
+);
 impl_radix_firstseen_u64!(radix_groupby_var_f64_firstseen_u64, f64, VarAggF64, f64);
 impl_radix_firstseen_u64!(radix_groupby_std_f64_firstseen_u64, f64, StdAggF64, f64);
 impl_radix_firstseen_u64!(radix_groupby_min_f64_firstseen_u64, f64, MinAggF64, f64);
@@ -1088,6 +1120,12 @@ impl_radix_firstseen_u64!(radix_groupby_count_f64_firstseen_u64, f64, CountAggF6
 impl_radix_firstseen_u64!(radix_groupby_sum_i64_firstseen_u64, i64, SumAggI64, i64);
 impl_radix_firstseen_u64!(radix_groupby_prod_i64_firstseen_u64, i64, ProdAggI64, i64);
 impl_radix_firstseen_u64!(radix_groupby_mean_i64_firstseen_u64, i64, MeanAggI64, f64);
+impl_radix_firstseen_u64!(
+    radix_groupby_median_i64_firstseen_u64,
+    i64,
+    MedianAggI64,
+    f64
+);
 impl_radix_firstseen_u64!(radix_groupby_var_i64_firstseen_u64, i64, VarAggI64, f64);
 impl_radix_firstseen_u64!(radix_groupby_std_i64_firstseen_u64, i64, StdAggI64, f64);
 impl_radix_firstseen_u64!(radix_groupby_min_i64_firstseen_u64, i64, MinAggI64, i64);
@@ -1115,6 +1153,13 @@ pub fn radix_groupby_mean_f64_sorted(
     values: &[f64],
 ) -> Result<GroupByMultiResult<f64>, String> {
     radix_groupby_sorted::<f64, MeanAggF64, f64>(key_slices, values)
+}
+
+pub fn radix_groupby_median_f64_sorted(
+    key_slices: &[&[i64]],
+    values: &[f64],
+) -> Result<GroupByMultiResult<f64>, String> {
+    radix_groupby_sorted::<f64, MedianAggF64, f64>(key_slices, values)
 }
 
 pub fn radix_groupby_var_f64_sorted(
@@ -1166,6 +1211,13 @@ pub fn radix_groupby_mean_i64_sorted(
     radix_groupby_sorted::<i64, MeanAggI64, f64>(key_slices, values)
 }
 
+pub fn radix_groupby_median_i64_sorted(
+    key_slices: &[&[i64]],
+    values: &[i64],
+) -> Result<GroupByMultiResult<f64>, String> {
+    radix_groupby_sorted::<i64, MedianAggI64, f64>(key_slices, values)
+}
+
 pub fn radix_groupby_var_i64_sorted(
     key_slices: &[&[i64]],
     values: &[i64],
@@ -1212,6 +1264,33 @@ pub fn radix_groupby_count_i64_sorted(
 mod tests {
     use super::*;
 
+    #[derive(Clone, Default)]
+    struct OwnedOnlyAgg {
+        values: Vec<i64>,
+    }
+
+    impl Aggregator<i64, usize> for OwnedOnlyAgg {
+        fn init() -> Self {
+            Self::default()
+        }
+
+        fn update(&mut self, value: i64) {
+            self.values.push(value);
+        }
+
+        fn merge(&mut self, other: Self) {
+            self.values.extend(other.values);
+        }
+
+        fn finalize(&self) -> usize {
+            panic!("radix materialization should use finalize_owned for OwnedOnlyAgg")
+        }
+
+        fn finalize_owned(self) -> usize {
+            self.values.len()
+        }
+    }
+
     #[inline]
     fn src_group_for_out<V>(res: &GroupByMultiResult<V>, out_g: usize) -> usize {
         match &res.perm {
@@ -1253,6 +1332,52 @@ mod tests {
 
         assert!((groups[&(1, 10)] - 9.0).abs() < 1e-10);
         assert!((groups[&(2, 20)] - 6.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_radix_groupby_materialization_uses_owned_finalize() {
+        let col1 = vec![1i64, 2, 1, 2, 1];
+        let col2 = vec![10i64, 20, 10, 20, 10];
+        let values = vec![100_i64, 200, 300, 400, 500];
+        let key_slices: Vec<&[i64]> = vec![&col1, &col2];
+
+        let result = radix_groupby::<i64, OwnedOnlyAgg, usize>(&key_slices, &values).unwrap();
+
+        let mut groups: AHashMap<(i64, i64), usize> = AHashMap::new();
+        for i in 0..result.values.len() {
+            let k0 = result.keys_flat[i * 2];
+            let k1 = result.keys_flat[i * 2 + 1];
+            groups.insert((k0, k1), result.values[i]);
+        }
+
+        assert_eq!(groups[&(1, 10)], 3);
+        assert_eq!(groups[&(2, 20)], 2);
+    }
+
+    #[test]
+    fn test_radix_firstseen_materialization_uses_owned_finalize() {
+        let col1 = vec![2i64, 1, 2, 1, 3];
+        let col2 = vec![20i64, 10, 20, 10, 30];
+        let values = vec![100_i64, 200, 300, 400, 500];
+        let key_slices: Vec<&[i64]> = vec![&col1, &col2];
+
+        let result =
+            radix_groupby_firstseen_u32::<i64, OwnedOnlyAgg, usize>(&key_slices, &values).unwrap();
+        assert_eq!(key_at_out(&result, 0, 0), 2);
+        assert_eq!(value_at_out(&result, 0), 2);
+        assert_eq!(key_at_out(&result, 1, 0), 1);
+        assert_eq!(value_at_out(&result, 1), 2);
+        assert_eq!(key_at_out(&result, 2, 0), 3);
+        assert_eq!(value_at_out(&result, 2), 1);
+
+        let result =
+            radix_groupby_firstseen_u64::<i64, OwnedOnlyAgg, usize>(&key_slices, &values).unwrap();
+        assert_eq!(key_at_out(&result, 0, 0), 2);
+        assert_eq!(value_at_out(&result, 0), 2);
+        assert_eq!(key_at_out(&result, 1, 0), 1);
+        assert_eq!(value_at_out(&result, 1), 2);
+        assert_eq!(key_at_out(&result, 2, 0), 3);
+        assert_eq!(value_at_out(&result, 2), 1);
     }
 
     #[test]

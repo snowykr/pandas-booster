@@ -109,10 +109,10 @@ Emergency toggle (panic button):
   - truthy (`1/true/yes/on`, case-insensitive): force Python `Series.sort_index()` after Rust aggregation for `sort=True`.
   - anything else (including `0/false/no/off`): keep Rust-side sorting.
 - `PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY` (default: OFF when unset):
-  - truthy (`1/true/yes/on`, case-insensitive): force pandas fallback for **single-key float** `sum`/`mean`/`prod`/`std`/`var`.
+  - truthy (`1/true/yes/on`, case-insensitive): force pandas fallback for **single-key float** `sum`/`mean`/`prod`/`std`/`var`/`median`.
   - anything else (including `0/false/no/off`): use Rust deterministic reduction kernels.
 
-These toggles are intended for quick rollback if a Rust ordering or deterministic-float reduction issue is discovered. Forcing Python sort moves the `sort=True` cost to Pandas and is slower. Forcing pandas float groupby rolls single-key float `sum`/`mean`/`prod`/`std`/`var` back to pandas semantics/performance.
+These toggles are intended for quick rollback if a Rust ordering or deterministic-float reduction issue is discovered. Forcing Python sort moves the `sort=True` cost to Pandas and is slower. Forcing pandas float groupby rolls single-key float `sum`/`mean`/`prod`/`std`/`var`/`median` back to pandas semantics/performance.
 
 Note: the Rust-side `sort=True` kernels allocate a permutation vector and perform an `O(G log G)` comparison sort over groups (G = number of groups). This can increase memory usage at very high cardinality.
 
@@ -139,6 +139,7 @@ The following aggregation functions are currently supported:
 |-----------|-------------|
 | `sum` | Sum of values in each group |
 | `mean` | Arithmetic mean of values in each group |
+| `median` | Median of values in each group |
 | `prod` | Product of values in each group |
 | `std` | Sample standard deviation (ddof=1) |
 | `var` | Sample variance (ddof=1) |
@@ -150,33 +151,33 @@ The following aggregation functions are currently supported:
 
 To ensure predictable performance and correctness, the following rules define where Rust-first dispatch is certified.
 
-#### Certified Rust Dispatch Domain (`std`/`var`)
+#### Certified Rust Dispatch Domain (`std`/`var`/`median`)
 
 | Feature | Supported (Rust-first) | Mandatory pandas Fallback |
 |---------|-------------------------|--------------------------|
 | Keys | Single or Multi-key (up to 10), integer dtypes | Non-integer keys, custom objects |
 | Values | Numeric (`int64`, `float64`) | `uint64`, object, bool, datetime, category |
-| Semantics | `ddof=1` (default) | Custom `ddof`, `numeric_only`, `skipna=False` |
+| Semantics | pandas defaults (`std`/`var`: `ddof=1`; `median`: skip `NaN` values) | Custom `ddof`, `numeric_only`, `skipna=False` |
 | Dtypes | Primitive NumPy arrays | Extension dtypes (nullable `Int64`, `Float64`, `pd.NA`) |
 
 #### Determinism and Precision
 
-- **Determinism**: Accelerated float aggregations (`sum`, `mean`, `prod`, `std`, `var`) are bitwise-identical across thread counts for identical inputs in the same environment.
+- **Determinism**: Accelerated float aggregations (`sum`, `mean`, `prod`, `std`, `var`, `median`) are bitwise-identical across thread counts for identical inputs in the same environment.
 - **Precision**: Results are semantically pandas-compatible but not guaranteed to be bit-for-bit identical to pandas. `std` and `var` follow this same policy.
-- **Escape Hatch**: `PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY=1` forces pandas execution for single-key float-input `sum`/`mean`/`prod`/`std`/`var` if bit-for-bit identity is required.
+- **Escape Hatch**: `PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY=1` forces pandas execution for single-key float-input `sum`/`mean`/`prod`/`std`/`var`/`median` if bit-for-bit identity is required.
 
 ## Requirements and Constraints
 
 To ensure correctness and performance, the following constraints apply:
 
-- **Minimum dataset size**: 100,000 rows for legacy aggregations (`sum`, `mean`, `prod`, `min`, `max`, `count`). For smaller datasets on these operations, the library automatically falls back to native Pandas. **Note**: Supported `std` and `var` operations are Rust-first by default within their certified dispatch domain regardless of dataset size.
+- **Minimum dataset size**: 100,000 rows for legacy aggregations (`sum`, `mean`, `prod`, `min`, `max`, `count`). For smaller datasets on these operations, the library automatically falls back to native Pandas. **Note**: Supported `std`, `var`, and `median` operations are Rust-first by default within their certified dispatch domain regardless of dataset size.
 - **Key column(s)**: Must be integer dtype (e.g., `int64`, `int32`). For multi-column groupby, all key columns must be integers. The accelerated path preserves Pandas' index dtype (e.g., `int32` on numpy-backend pandas).
 - **Maximum key columns**: Up to 10 columns for multi-column groupby.
 - **Value column**: Must be a numeric dtype (integers or floats).
 - **Extension dtypes**: Pandas extension dtypes (e.g., nullable `Int64` / `Float64` using `pd.NA`) are not supported and will trigger a fallback to Pandas.
 - **NaN handling**: `NaN` values in the target column are skipped in aggregations, matching standard Pandas behavior.
-- **Determinism policy (single-key float `sum`/`mean`/`prod`/`std`/`var`)**: For identical inputs in the same runtime environment, pandas-booster returns bitwise-identical results across thread counts. `NaN` inputs are skipped; all-`NaN` groups follow existing semantics (`sum -> +0.0`, `prod -> 1.0`, `mean -> NaN`, `std/var -> NaN`). Compared with pandas, outputs may differ at the last-bit level (including `+0.0` vs `-0.0`) because pandas-booster uses an implementation-defined deterministic reduction order.
-- **Return types**: Integer aggregations follow Pandas-style dtypes: `sum/prod/min/max/count` return integer results for signed integer inputs; all unsigned `prod` inputs always fall back to pandas; `mean/std/var` return `float64`. Standard deviation and variance always use `ddof=1`.
+- **Determinism policy (single-key float `sum`/`mean`/`prod`/`std`/`var`/`median`)**: For identical inputs in the same runtime environment, pandas-booster returns bitwise-identical results across thread counts. `NaN` inputs are skipped; all-`NaN` groups follow existing semantics (`sum -> +0.0`, `prod -> 1.0`, `mean -> NaN`, `std/var/median -> NaN`). Compared with pandas, outputs may differ at the last-bit level (including `+0.0` vs `-0.0`) because pandas-booster uses an implementation-defined deterministic reduction order.
+- **Return types**: Integer aggregations follow Pandas-style dtypes: `sum/prod/min/max/count` return integer results for signed integer inputs; all unsigned `prod` inputs always fall back to pandas; `mean/std/var/median` return `float64`. Standard deviation and variance always use `ddof=1`.
 
 ## Performance
 
@@ -187,6 +188,7 @@ The library is designed for large datasets where multi-core parallelism can be f
 
 **Benchmark methodology:**
 - **Process Isolation:** Benchmarks use rigorous process isolation to ensure accurate results.
+- **Host machine:** MacBook Pro (Mac15,6), Apple M3 Pro, 11 CPU cores (5 Performance + 6 Efficiency), 18 GB RAM, macOS 26.4.1.
 - **Samples:** The tables below were generated with `--samples 20` (default: 5). Each sample runs in a fresh Python process.
 - **Cold:** Average of 20 fresh process executions (1st run measured immediately).
 - **Warm:** Average of 20 fresh process executions. Each process runs Cold once and a Warmup once (both discarded), then measures the next run (steady state).
@@ -200,49 +202,54 @@ The library is designed for large datasets where multi-core parallelism can be f
 
 | Operation | Groups | Sort | Type | Pandas | Polars | Booster |
 |-----------|--------|------|------|--------|--------|---------|
-| Single-key | 1,000 | True | Cold | 31.3±4.5ms (1.0x) | 22.2±5.5ms (**1.4x**) | 4.7±0.8ms (**6.6x**) |
-|  |  |  | Warm | 23.9±0.9ms (1.0x) | 18.0±1.4ms (**1.3x**) | 2.4±0.5ms (**10.1x**) |
-|  |  | False | Cold | 30.4±5.2ms (1.0x) | 23.7±8.3ms (**1.3x**) | 5.3±0.8ms (**5.7x**) |
-|  |  |  | Warm | 22.6±1.0ms (1.0x) | 20.3±7.2ms (**1.1x**) | 2.7±0.4ms (**8.3x**) |
-| 2-key | 5,000 | True | Cold | 84.4±6.1ms (1.0x) | 46.9±5.4ms (**1.8x**) | 31.0±3.2ms (**2.7x**) |
-|  |  |  | Warm | 68.7±2.2ms (1.0x) | 38.8±2.6ms (**1.8x**) | 29.6±2.7ms (**2.3x**) |
-|  |  | False | Cold | 70.7±7.4ms (1.0x) | 49.0±7.6ms (**1.4x**) | 32.0±4.3ms (**2.2x**) |
-|  |  |  | Warm | 55.4±4.6ms (1.0x) | 56.0±41.4ms (1.0x) | 29.5±5.4ms (**1.9x**) |
-| 3-key | 25,000 | True | Cold | 123.8±7.9ms (1.0x) | 59.2±3.7ms (**2.1x**) | 44.9±4.9ms (**2.8x**) |
-|  |  |  | Warm | 108.6±3.6ms (1.0x) | 55.5±4.5ms (**2.0x**) | 39.5±2.4ms (**2.7x**) |
-|  |  | False | Cold | 104.2±10.5ms (1.0x) | 67.5±14.3ms (**1.5x**) | 45.8±2.3ms (**2.3x**) |
-|  |  |  | Warm | 89.9±3.7ms (1.0x) | 62.2±9.0ms (**1.4x**) | 43.3±1.9ms (**2.1x**) |
-| 4-key | 100,000 | True | Cold | 151.7±15.7ms (1.0x) | 104.5±18.2ms (**1.5x**) | 56.3±3.1ms (**2.7x**) |
-|  |  |  | Warm | 132.8±4.7ms (1.0x) | 86.9±6.4ms (**1.5x**) | 51.4±4.0ms (**2.6x**) |
-|  |  | False | Cold | 123.1±12.6ms (1.0x) | 100.1±20.8ms (**1.2x**) | 55.4±2.1ms (**2.2x**) |
-|  |  |  | Warm | 106.6±1.6ms (1.0x) | 89.0±5.6ms (**1.2x**) | 52.4±2.8ms (**2.0x**) |
-| 5-key | 993,138 | True | Cold | 302.5±23.4ms (1.0x) | 241.1±36.1ms (**1.3x**) | 175.5±4.7ms (**1.7x**) |
-|  |  |  | Warm | 305.1±14.7ms (1.0x) | 221.0±26.1ms (**1.4x**) | 167.2±4.5ms (**1.8x**) |
-|  |  | False | Cold | 206.7±24.2ms (1.0x) | 173.2±15.6ms (**1.2x**) | 102.0±5.2ms (**2.0x**) |
-|  |  |  | Warm | 169.4±5.2ms (1.0x) | 165.4±7.4ms (1.0x) | 93.0±2.6ms (**1.8x**) |
+| Single-key | 1,000 | True | Cold | 85.9±49.3ms (1.0x) | 37.4±10.1ms (**2.3x**) | 4.5±1.4ms (**19.0x**) |
+|  |  |  | Warm | 58.4±43.5ms (1.0x) | 26.5±5.5ms (**2.2x**) | 3.6±1.5ms (**16.2x**) |
+|  |  | False | Cold | 28.8±1.4ms (1.0x) | 23.6±2.6ms (**1.2x**) | 3.3±0.8ms (**8.6x**) |
+|  |  |  | Warm | 23.9±1.0ms (1.0x) | 20.2±1.5ms (**1.2x**) | 2.8±0.6ms (**8.7x**) |
+| 2-key | 5,000 | True | Cold | 124.6±29.6ms (1.0x) | 109.1±46.3ms (**1.1x**) | 41.2±8.7ms (**3.0x**) |
+|  |  |  | Warm | 102.1±38.9ms (1.0x) | 91.3±34.2ms (**1.1x**) | 39.5±4.8ms (**2.6x**) |
+|  |  | False | Cold | 67.0±6.8ms (1.0x) | 55.0±11.6ms (**1.2x**) | 30.4±3.0ms (**2.2x**) |
+|  |  |  | Warm | 59.9±7.9ms (1.0x) | 44.7±5.1ms (**1.3x**) | 31.7±3.3ms (**1.9x**) |
+| 3-key | 25,000 | True | Cold | 149.5±31.1ms (1.0x) | 150.1±50.4ms (1.0x) | 57.2±15.4ms (**2.6x**) |
+|  |  |  | Warm | 142.5±26.2ms (1.0x) | 128.8±42.6ms (**1.1x**) | 138.4±48.6ms (1.0x) |
+|  |  | False | Cold | 104.9±6.2ms (1.0x) | 72.5±17.3ms (**1.4x**) | 68.0±16.1ms (**1.5x**) |
+|  |  |  | Warm | 91.1±1.3ms (1.0x) | 79.3±24.5ms (**1.1x**) | 74.8±17.5ms (**1.2x**) |
+| 4-key | 100,000 | True | Cold | 263.6±71.1ms (1.0x) | 132.0±28.3ms (**2.0x**) | 132.8±53.1ms (**2.0x**) |
+|  |  |  | Warm | 150.5±18.9ms (1.0x) | 138.4±28.8ms (1.1x) | 108.5±38.9ms (**1.4x**) |
+|  |  | False | Cold | 185.3±39.7ms (1.0x) | 208.0±62.9ms (0.9x) | 71.3±19.6ms (**2.6x**) |
+|  |  |  | Warm | 135.5±18.3ms (1.0x) | 104.8±22.2ms (**1.3x**) | 105.7±28.0ms (**1.3x**) |
+| 5-key | 993,138 | True | Cold | 346.9±30.2ms (1.0x) | 254.0±72.0ms (**1.4x**) | 204.9±57.1ms (**1.7x**) |
+|  |  |  | Warm | 387.4±109.0ms (1.0x) | 289.8±79.9ms (**1.3x**) | 209.3±44.0ms (**1.9x**) |
+|  |  | False | Cold | 351.9±63.9ms (1.0x) | 306.8±161.1ms (**1.1x**) | 125.6±35.3ms (**2.8x**) |
+|  |  |  | Warm | 437.8±104.2ms (1.0x) | 207.3±33.2ms (**2.1x**) | 151.1±25.0ms (**2.9x**) |
 
 ### High Cardinality (5M rows, ~5M unique groups)
 
 | Operation | Groups | Sort | Type | Pandas | Polars | Booster |
 |-----------|--------|------|------|--------|--------|---------|
-| Single-key | 3,160,983 | True | Cold | 855.9±86.2ms (1.0x) | 135.6±11.6ms (**6.3x**) | 246.7±22.9ms (**3.5x**) |
-|  |  |  | Warm | 785.4±70.2ms (1.0x) | 130.1±24.0ms (**6.0x**) | 227.7±14.3ms (**3.5x**) |
-|  |  | False | Cold | 231.9±8.0ms (1.0x) | 173.4±3.1ms (**1.3x**) | 225.2±14.4ms (1.0x) |
-|  |  |  | Warm | 224.8±3.7ms (1.0x) | 176.8±8.6ms (**1.3x**) | 199.9±4.1ms (**1.1x**) |
-| 2-key | 4,532,339 | True | Cold | 879.0±23.3ms (1.0x) | 261.6±21.2ms (**3.4x**) | 369.4±25.4ms (**2.4x**) |
-|  |  |  | Warm | 904.2±64.9ms (1.0x) | 241.7±24.6ms (**3.7x**) | 355.3±38.5ms (**2.5x**) |
-|  |  | False | Cold | 375.9±8.7ms (1.0x) | 248.5±6.3ms (**1.5x**) | 170.1±7.3ms (**2.2x**) |
-|  |  |  | Warm | 354.1±4.0ms (1.0x) | 245.1±11.0ms (**1.4x**) | 151.4±5.3ms (**2.3x**) |
-| 3-key | 4,901,309 | True | Cold | 1004.5±95.8ms (1.0x) | 355.6±26.5ms (**2.8x**) | 541.5±16.1ms (**1.9x**) |
-|  |  |  | Warm | 911.4±22.5ms (1.0x) | 334.1±18.6ms (**2.7x**) | 513.6±44.1ms (**1.8x**) |
-|  |  | False | Cold | 399.6±16.6ms (1.0x) | 259.9±15.6ms (**1.5x**) | 220.7±11.8ms (**1.8x**) |
-|  |  |  | Warm | 388.4±40.0ms (1.0x) | 252.4±5.3ms (**1.5x**) | 194.2±4.5ms (**2.0x**) |
+| Single-key | 3,160,983 | True | Cold | 868.9±23.3ms (1.0x) | 156.5±18.1ms (**5.6x**) | 345.5±107.0ms (**2.5x**) |
+|  |  |  | Warm | 887.7±70.5ms (1.0x) | 148.9±22.1ms (**6.0x**) | 322.4±67.7ms (**2.8x**) |
+|  |  | False | Cold | 252.0±10.4ms (1.0x) | 217.5±13.5ms (**1.2x**) | 348.5±44.2ms (0.7x) |
+|  |  |  | Warm | 268.5±44.0ms (1.0x) | 191.3±13.2ms (**1.4x**) | 377.2±111.8ms (0.7x) |
+| 2-key | 4,532,339 | True | Cold | 999.4±47.5ms (1.0x) | 308.0±49.0ms (**3.2x**) | 416.2±25.7ms (**2.4x**) |
+|  |  |  | Warm | 1000.4±55.6ms (1.0x) | 307.6±124.1ms (**3.3x**) | 441.6±143.9ms (**2.3x**) |
+|  |  | False | Cold | 510.5±70.3ms (1.0x) | 259.9±17.0ms (**2.0x**) | 382.1±128.2ms (**1.3x**) |
+|  |  |  | Warm | 376.3±20.6ms (1.0x) | 334.0±57.8ms (**1.1x**) | 319.3±74.2ms (**1.2x**) |
+| 3-key | 4,901,309 | True | Cold | 993.1±24.9ms (1.0x) | 353.7±14.8ms (**2.8x**) | 683.0±77.4ms (**1.5x**) |
+|  |  |  | Warm | 980.0±28.8ms (1.0x) | 374.0±34.4ms (**2.6x**) | 670.1±82.8ms (**1.5x**) |
+|  |  | False | Cold | 601.6±96.9ms (1.0x) | 433.0±42.0ms (**1.4x**) | 258.2±16.1ms (**2.3x**) |
+|  |  |  | Warm | 725.9±69.7ms (1.0x) | 415.8±78.8ms (**1.7x**) | 221.2±29.4ms (**3.3x**) |
+
+### Correctness
+
+- Polars: pass (32/32)
+- Booster: pass (32/32)
 
 **Performance characteristics**:
-- **Single-key (standard cardinality)**: Warm state shows **8.3-10.1x** speedup over Pandas baseline (cold: **5.7-6.6x**). Booster also outperforms Polars on these single-key standard-cardinality runs.
-- **Multi-key (standard cardinality)**: Booster is consistently faster than Pandas across 2-5 keys for both `sort=True` and `sort=False` (warm: **1.8-2.7x**, cold: **1.7-2.8x**), and also faster than Polars in these standard-cardinality multi-key runs.
-- **High cardinality (~5M unique groups)**: With `sort=True`, Booster remains faster than Pandas (warm: **1.8-3.5x**), but Polars is faster on the sorted path. With `sort=False`, Booster ranges from near-parity on single-key (**1.1x**) to clear gains on multi-key (**2.0-2.3x** warm).
-- **Sort overhead**: For Pandas, `sort=False` is a strong win on high-cardinality workloads (about **2.3-3.5x** warm) and still beneficial on standard multi-key (**1.2-1.8x** warm). For Booster, `sort=False` impact is workload-dependent: near parity (or slightly slower) on most standard cases, but much faster on high-cardinality multi-key (**~2.3-2.6x** warm) and on standard 5-key (**~1.8x** warm).
+- **Single-key (standard cardinality)**: Warm state shows **8.7-16.2x** speedup over Pandas baseline (cold: **8.6-19.0x**). Booster also outperforms Polars across these single-key standard-cardinality runs.
+- **Multi-key (standard cardinality)**: Booster stays faster than Pandas across 2-5 keys in both sort modes, with warm gains ranging from **1.0-2.9x** and cold gains from **1.5-3.0x**. Relative to Polars, Booster wins most standard-cardinality multi-key cases, but some higher-key warm paths narrow to near parity.
+- **High cardinality (~5M unique groups)**: With `sort=True`, Booster remains faster than Pandas by **1.5-2.8x** warm, while Polars still leads the sorted path. With `sort=False`, single-key performance falls behind Pandas (**0.7x** warm), but multi-key workloads recover to **1.2-3.3x** warm gains over Pandas.
+- **Sort overhead**: For Pandas, `sort=False` is often a substantial win on high-cardinality workloads and still usually helps on standard-cardinality runs. For Booster, `sort=False` is highly workload-dependent: it helps clearly on standard 5-key and high-cardinality multi-key cases, but can be neutral or worse on single-key/high-cardinality paths.
 
 ### Sorted vs Appearance-Ordered Results
 
@@ -270,6 +277,7 @@ python benches/benchmark.py --samples 20 --output results.md
 
 # Run only selected aggregation functions
 python benches/benchmark.py --agg std --agg var --samples 20 --output results.md
+python benches/benchmark.py --agg median --samples 20 --output results.md
 
 # Save single-key std/var phase-profile evidence as JSON
 python benches/benchmark.py --agg std --agg var --samples 20 --profile-json profile.json
@@ -283,11 +291,12 @@ The following environment was used to generate the benchmark results above.
 (Note: These are **not** the minimum requirements for using the library, but strictly the environment used for reproduction).
 
 - **Build Mode**: Release (`maturin develop --release`)
+- **Machine**: MacBook Pro (`Mac15,6`), Apple M3 Pro, 11 CPU cores (5 Performance + 6 Efficiency), 18 GB RAM
 - **Threading**: Default Rayon behavior (uses all available logical cores)
-- **OS**: macOS (Darwin)
-- **Python**: 3.11.14
-- **Pandas**: 2.2.3
-- **Polars**: 1.37.1
+- **OS**: macOS 26.4.1 (Darwin 25.4.0, arm64)
+- **Python**: 3.11.15
+- **Pandas**: 2.3.3
+- **Polars**: 1.40.1
 
 **Note**: The benchmark scripts use rigorous process isolation (fresh process per sample) for both Cold and Warm measurements to ensure accurate results.
 
@@ -389,6 +398,7 @@ python benches/benchmark.py --cardinality high
 
 # Run only selected aggregation functions
 python benches/benchmark.py --agg std --agg var
+python benches/benchmark.py --agg median
 python benches/benchmark.py --agg prod
 python benches/benchmark.py --agg min --agg max --cardinality high --sort-mode sorted
 
@@ -415,6 +425,9 @@ python benches/benchmark.py --samples 20
 Note: `--agg` is repeatable and filters the benchmark to only the selected aggregation functions.
 If omitted, the current default behavior is preserved: the core performance tables benchmark `sum`,
 while the extra single-key evidence section benchmarks `std` and `var`.
+
+Note: `median` is fully supported by `--agg` selection for benchmark runs and correctness checks.
+The dedicated `--profile-json` diagnostics remain focused on the single-key `std`/`var` evidence lane.
 
 Note: `--profile-json` is an internal benchmark diagnostics output. It includes the same
 single-key `std`/`var` evidence cases used by the Markdown report, plus phase breakdowns when a
