@@ -326,6 +326,12 @@ def resolve_booster_benchmark_dispatch(
         False if ignore_force_pandas_sort else bool(sort) and force_pandas_sort_enabled()
     )
 
+    if not compatibility.supported or compatibility.force_pandas:
+        return {
+            "execution": f"booster->pandas.groupby.{agg}",
+            "rust_func": None,
+            "needs_python_sort": False,
+        }
     if agg == "median" and not groupby_accel.has_rust_groupby_func(
         rust,
         f"{prefix}_{agg}_{suffix}",
@@ -333,12 +339,6 @@ def resolve_booster_benchmark_dispatch(
         n_rows=len(df),
         force_pandas_sort=force_pandas_sort,
     ):
-        return {
-            "execution": f"booster->pandas.groupby.{agg}",
-            "rust_func": None,
-            "needs_python_sort": False,
-        }
-    if not compatibility.supported or compatibility.force_pandas:
         return {
             "execution": f"booster->pandas.groupby.{agg}",
             "rust_func": None,

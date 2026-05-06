@@ -348,6 +348,45 @@ def test_describe_booster_execution_uses_pandas_label_when_exact_median_kernel_i
     )
 
 
+def test_describe_booster_execution_skips_median_kernel_probe_for_unsupported_input(
+    benchmark_module,
+    monkeypatch,
+):
+    import pandas_booster._groupby_accel as groupby_accel
+
+    df = benchmark_module.pd.DataFrame({"key": [1, 2], "value": ["a", "b"]})
+
+    def fail_has_rust_groupby_func(*args, **kwargs):
+        _ = (args, kwargs)
+        raise AssertionError("unsupported benchmark inputs should not probe median kernels")
+
+    monkeypatch.setattr(groupby_accel, "has_rust_groupby_func", fail_has_rust_groupby_func)
+
+    assert benchmark_module.describe_booster_execution(df, ["key"], "value", "median", True) == (
+        "booster->pandas.groupby.median"
+    )
+
+
+def test_describe_booster_execution_skips_median_kernel_probe_when_force_pandas_enabled(
+    benchmark_module,
+    monkeypatch,
+):
+    import pandas_booster._groupby_accel as groupby_accel
+
+    monkeypatch.setenv("PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY", "1")
+    df = benchmark_module.pd.DataFrame({"key": [1, 2], "value": [1.0, 2.0]})
+
+    def fail_has_rust_groupby_func(*args, **kwargs):
+        _ = (args, kwargs)
+        raise AssertionError("forced pandas benchmark inputs should not probe median kernels")
+
+    monkeypatch.setattr(groupby_accel, "has_rust_groupby_func", fail_has_rust_groupby_func)
+
+    assert benchmark_module.describe_booster_execution(df, ["key"], "value", "median", False) == (
+        "booster->pandas.groupby.median"
+    )
+
+
 def test_build_profile_json_payload_handles_unavailable_breakdowns(benchmark_module):
     profiled_case = {
         "preset": "1key",
