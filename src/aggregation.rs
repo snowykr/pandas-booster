@@ -1,7 +1,8 @@
 //! Aggregation primitives for parallel groupby operations.
 //!
 //! This module defines the [`Aggregator`] trait and implementations for common
-//! statistical operations (sum, prod, mean, min, max) on both `f64` and `i64` types.
+//! groupby aggregations including sum, product, mean, median, variance, standard
+//! deviation, min, max, and count on primitive numeric types.
 //!
 //! ## Design Decisions
 //!

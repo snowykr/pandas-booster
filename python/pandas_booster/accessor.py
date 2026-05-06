@@ -38,9 +38,12 @@ class BoosterAccessor:
     Unlike legacy aggs, supported std, var, and median are Rust-first by default regardless of
     dataset size. This provides significant speedups (up to 1.5x) for high-cardinality
     workloads, though standard-cardinality single-key cases may remain slower than
-    pandas. The `PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY` environment toggle
-    can be used to force a pandas fallback specifically for single-key float-input
-    sum/mean/prod/std/var/median operations; it does not broaden to multi-key or int-backed paths.
+    pandas. Single-key float-input `prod` always uses pandas to preserve
+    row-order IEEE-754 overflow/underflow semantics. The
+    `PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY` environment toggle can be used
+    to force a pandas fallback specifically for the remaining single-key
+    float-input sum/mean/std/var/median operations; it does not broaden to
+    multi-key or int-backed paths.
 
     Examples:
         Single key:

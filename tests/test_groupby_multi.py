@@ -1082,6 +1082,47 @@ class TestProdMultiKey:
                 atol=0.0,
             )
 
+    @pytest.mark.parametrize("sort", [True, False])
+    def test_multi_key_float_prod_order_sensitive_chunks_remains_rust_eligible(
+        self, monkeypatch: pytest.MonkeyPatch, sort: bool
+    ):
+        import pandas_booster._rust as rust
+
+        threshold = rust.get_fallback_threshold()
+        n = threshold
+        df = pd.DataFrame(
+            {
+                "k1": np.ones(n, dtype=np.int64),
+                "k2": np.ones(n, dtype=np.int64),
+                "val": np.r_[
+                    np.full(n // 2, 0.5),
+                    np.full(n - n // 2, 2.0),
+                ].astype(np.float64),
+            }
+        )
+        expected = df.groupby(["k1", "k2"], sort=sort)["val"].prod()
+        calls: list[str] = []
+
+        symbol = (
+            "groupby_multi_prod_f64_sorted"
+            if sort
+            else "groupby_multi_prod_f64_firstseen_u32"
+        )
+        original = getattr(rust, symbol)
+
+        def wrapped(*args, **kwargs):
+            calls.append(symbol)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(rust, symbol, wrapped, raising=False)
+
+        result = cast(BoosterAccessor, df.booster).groupby(
+            ["k1", "k2"], "val", "prod", sort=sort
+        )
+
+        assert calls == [symbol]
+        pd.testing.assert_series_equal(result, expected, check_exact=True)
+
     def test_multi_key_prod_int_exactness_sort_modes(self):
         n = 200_000
         df = pd.DataFrame(

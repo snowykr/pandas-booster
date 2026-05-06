@@ -662,7 +662,9 @@ def test_main_accepts_prod_agg(benchmark_module, monkeypatch):
     ]
 
 
-def test_describe_booster_execution_reports_prod_dispatch(benchmark_module, monkeypatch):
+def test_describe_booster_execution_reports_single_key_float_prod_fallback(
+    benchmark_module, monkeypatch
+):
     import pandas_booster._rust as rust
 
     threshold = rust.get_fallback_threshold()
@@ -677,14 +679,11 @@ def test_describe_booster_execution_reports_prod_dispatch(benchmark_module, monk
         }
     )
 
-    def fake_prod(_keys, _values):
-        return benchmark_module.np.array(
-            [1, 2], dtype=benchmark_module.np.int64
-        ), benchmark_module.np.array([1.0, 2.0], dtype=benchmark_module.np.float64)
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("single-key float prod should not resolve a Rust kernel")
 
-    fake_prod.__name__ = "groupby_prod_f64_sorted"
-    monkeypatch.setattr(rust, "groupby_prod_f64_sorted", fake_prod, raising=False)
+    monkeypatch.setattr(rust, "groupby_prod_f64_sorted", _boom, raising=False)
 
     assert benchmark_module.describe_booster_execution(df, ["key"], "value", "prod", True) == (
-        "booster->rust.groupby_prod_f64_sorted"
+        "booster->pandas.groupby.prod"
     )

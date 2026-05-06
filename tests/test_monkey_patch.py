@@ -546,20 +546,19 @@ class TestProdProxy:
         )
         pd.testing.assert_series_equal(multi_result, multi_expected, check_exact=True)
 
-    def test_prod_no_arg_uses_accelerated_proxy_when_eligible(
+    def test_prod_no_arg_single_key_float_uses_pandas_fallback(
         self, large_df, monkeypatch: pytest.MonkeyPatch
     ):
         import pandas_booster
         import pandas_booster._rust as rust
 
         expected = large_df.groupby("key", sort=True)["val_float"].prod()
-        calls: list[str] = []
 
-        def fake_sorted(_keys, _values):
-            calls.append("prod")
-            return expected.index.to_numpy(dtype=np.int64), expected.to_numpy(dtype=np.float64)
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("single-key float prod should use pandas fallback")
 
-        monkeypatch.setattr(rust, "groupby_prod_f64_sorted", fake_sorted, raising=False)
+        for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
+            monkeypatch.setattr(rust, f"groupby_prod_f64{suffix}", _boom, raising=False)
 
         pandas_booster.activate()
         try:
@@ -567,7 +566,6 @@ class TestProdProxy:
         finally:
             pandas_booster.deactivate()
 
-        assert calls == ["prod"]
         pd.testing.assert_series_equal(
             result.sort_index(), expected.sort_index(), check_exact=False, rtol=1e-10
         )

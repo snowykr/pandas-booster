@@ -1967,15 +1967,9 @@ class TestProdEdgeCases:
         expected = df.groupby("key")["val"].prod()
         self._assert_float_prod_equal(result, expected)
 
-    @pytest.mark.parametrize(
-        ("sort", "symbol"),
-        [
-            pytest.param(True, "groupby_prod_f64_sorted", id="sorted"),
-            pytest.param(False, "groupby_prod_f64_firstseen_u32", id="firstseen-u32"),
-        ],
-    )
-    def test_at_threshold_prod_invokes_expected_single_key_rust_symbol(
-        self, monkeypatch: pytest.MonkeyPatch, sort: bool, symbol: str
+    @pytest.mark.parametrize("sort", [True, False])
+    def test_at_threshold_single_key_float_prod_uses_pandas_fallback(
+        self, monkeypatch: pytest.MonkeyPatch, sort: bool
     ):
         import pandas_booster._rust as rust
 
@@ -1988,16 +1982,15 @@ class TestProdEdgeCases:
             }
         )
         expected = df.groupby("key", sort=sort)["val"].prod()
-        calls: list[str] = []
 
-        def fake_kernel(_keys, _values):
-            calls.append(symbol)
-            return expected.index.to_numpy(dtype=np.int64), expected.to_numpy(dtype=np.float64)
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("single-key float prod should use pandas fallback")
 
-        monkeypatch.setattr(rust, symbol, fake_kernel, raising=False)
+        for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
+            monkeypatch.setattr(rust, f"groupby_prod_f64{suffix}", _boom, raising=False)
+
         result = df.booster.groupby("key", "val", "prod", sort=sort)
 
-        assert calls == [symbol]
         self._assert_float_prod_equal(result, expected)
 
     @pytest.mark.parametrize("sort", [True, False])

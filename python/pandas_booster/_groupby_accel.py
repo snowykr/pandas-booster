@@ -166,9 +166,18 @@ def classify_groupby_compatibility(
     if not is_supported_value_dtype(val_col, agg=agg):
         return GroupByCompatibility(False, False)
 
+    if len(key_cols) == 1 and agg == "prod" and pd.api.types.is_float_dtype(val_col):
+        # Floating-point product is not associative under IEEE-754. The single-key
+        # Rust kernels aggregate fixed row chunks and merge per-chunk products,
+        # which can change observable overflow/underflow results compared with
+        # pandas' row-order accumulator (for example, 0.0 * inf becomes NaN).
+        # Keep this path on pandas until an order-preserving Rust implementation
+        # is available. Multi-key radix product is merge-free and remains eligible.
+        return GroupByCompatibility(True, True)
+
     if (
         len(key_cols) == 1
-        and agg in {"sum", "mean", "prod", "std", "var", "median"}
+        and agg in {"sum", "mean", "std", "var", "median"}
         and pd.api.types.is_float_dtype(val_col)
         and force_pandas_float_groupby
     ):

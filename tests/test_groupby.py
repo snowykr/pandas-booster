@@ -881,6 +881,37 @@ class TestProdSingleKey:
             pandas_result = df.groupby("key", sort=sort)["val"].prod()
             _assert_prod_series_matches_pandas(booster_result, pandas_result)
 
+    @pytest.mark.parametrize("sort", [True, False])
+    def test_single_key_float_prod_order_sensitive_chunks_use_pandas_fallback(
+        self, monkeypatch: pytest.MonkeyPatch, sort: bool
+    ):
+        import pandas_booster._rust as rust
+
+        monkeypatch.delenv("PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY", raising=False)
+        monkeypatch.delenv("PANDAS_BOOSTER_FORCE_PANDAS_SORT", raising=False)
+
+        n = rust.get_fallback_threshold()
+        df = pd.DataFrame(
+            {
+                "key": np.ones(n, dtype=np.int64),
+                "val": np.r_[
+                    np.full(n // 2, 0.5),
+                    np.full(n - n // 2, 2.0),
+                ].astype(np.float64),
+            }
+        )
+        expected = df.groupby("key", sort=sort)["val"].prod()
+
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("single-key float prod must use pandas fallback")
+
+        for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
+            monkeypatch.setattr(rust, f"groupby_prod_f64{suffix}", _boom, raising=False)
+
+        result = cast(BoosterAccessor, df.booster).groupby("key", "val", "prod", sort=sort)
+
+        pd.testing.assert_series_equal(result, expected, check_exact=True)
+
     def test_prod_i64_matches_pandas_sort_modes(self):
         n = 200_000
         vals = np.tile(np.array([-2, -1, 1, 2, 3], dtype=np.int64), n // 5)

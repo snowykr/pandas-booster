@@ -348,7 +348,7 @@ def resolve_booster_benchmark_dispatch(
     if (
         len(key_cols) == 1
         and pd.api.types.is_float_dtype(val_col)
-        and agg in {"sum", "mean", "prod"}
+        and agg in {"sum", "mean"}
         and force_pandas_float_groupby_enabled()
     ):
         return {

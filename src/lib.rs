@@ -13,7 +13,8 @@
 //!
 //! The module is structured as follows:
 //! - [`aggregation`]: Defines the [`Aggregator`](aggregation::Aggregator) trait and implementations
-//!   for sum, product, mean, variance, standard deviation, min, max, and count operations.
+//!   for common groupby operations including sum, product, mean, median, variance,
+//!   standard deviation, min, max, and count.
 //! - [`groupby`]: Implements parallel map-reduce groupby using Rayon's `par_chunks`.
 //! - [`zero_copy`]: Utilities for safely borrowing NumPy arrays as Rust slices.
 //!

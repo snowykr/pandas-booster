@@ -160,7 +160,7 @@ def test_prod_surface_mentions_stay_in_sync():
 
     assert "prod" in _assigned_strings(groupby_accel, "AggFunc")
     assert any(
-        {"sum", "mean", "prod", "std", "var", "median"} <= strings
+        {"sum", "mean", "std", "var", "median"} <= strings
         for strings in _literal_string_collections(groupby_accel)
     )
     assert any(
@@ -173,7 +173,7 @@ def test_prod_surface_mentions_stay_in_sync():
     assert "prod" in _assigned_strings(benchmark, "SUPPORTED_AGGS")
     assert "prod" in _dict_keys_assigned_in_function(benchmark, "build_polars_agg_expr", "agg_map")
     assert "prod" in _readme_operation_names()
-    assert "prod" in _readme_force_float_groupby_aggs()
+    assert "prod" not in _readme_force_float_groupby_aggs()
 
 
 def test_median_surface_mentions_stay_in_sync():
@@ -337,3 +337,22 @@ def test_median_exact_dispatch_mapping_selects_expected_symbols():
         )
         assert func.__name__ == expected_name
         assert needs_python_sort is expected_python_sort
+
+
+def test_rust_module_docs_mention_supported_groupby_aggs():
+    expected_terms = {
+        "sum": ("sum",),
+        "prod": ("prod", "product"),
+        "mean": ("mean",),
+        "median": ("median",),
+        "std": ("std", "standard deviation"),
+        "var": ("var", "variance"),
+        "min": ("min",),
+        "max": ("max",),
+        "count": ("count",),
+    }
+
+    for path in (_REPO_ROOT / "src" / "lib.rs", _REPO_ROOT / "src" / "aggregation.rs"):
+        text = path.read_text().lower()
+        for token, terms in expected_terms.items():
+            assert any(term in text for term in terms), f"{path} missing {token!r}"
