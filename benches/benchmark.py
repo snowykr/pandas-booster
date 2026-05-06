@@ -1050,8 +1050,8 @@ def render_standard_table(results: list[dict]) -> str:
         results_by_preset_sort[key] = r
 
     lines = []
-    lines.append("| Operation | Groups | Sort | Type | Pandas | Polars | Booster |")
-    lines.append("|-----------|--------|------|------|--------|--------|---------|")
+    lines.append("| Aggregation | Workload | Groups | Sort | Type | Pandas | Polars | Booster |")
+    lines.append("|-------------|----------|--------|------|------|--------|--------|---------|")
 
     prev_label = None
     prev_groups = None
@@ -1128,14 +1128,16 @@ def render_standard_table(results: list[dict]) -> str:
             display_groups = groups if groups != prev_groups else ""
             display_sort = sort_str if sort_str != prev_sort_str else ""
 
+            agg = f"`{r['agg']}`"
             lines.append(
-                f"| {display_label} | {display_groups} | {display_sort} | Cold | "
+                f"| {agg} | {display_label} | {display_groups} | {display_sort} | Cold | "
                 f"{pandas_cold_str} | {polars_cold_str} | {booster_cold_str} |"
             )
 
-            # Second row (Warm) - always hide label, groups, sort
+            # Second row (Warm) - keep aggregation visible; hide label, groups, sort.
             lines.append(
-                f"|  |  |  | Warm | {pandas_warm_str} | {polars_warm_str} | {booster_warm_str} |"
+                f"| {agg} |  |  |  | Warm | "
+                f"{pandas_warm_str} | {polars_warm_str} | {booster_warm_str} |"
             )
 
             prev_label = label
@@ -1172,8 +1174,8 @@ def render_high_table(results: list[dict]) -> str:
         results_by_preset_sort[key] = r
 
     lines = []
-    lines.append("| Operation | Groups | Sort | Type | Pandas | Polars | Booster |")
-    lines.append("|-----------|--------|------|------|--------|--------|---------|")
+    lines.append("| Aggregation | Workload | Groups | Sort | Type | Pandas | Polars | Booster |")
+    lines.append("|-------------|----------|--------|------|------|--------|--------|---------|")
 
     prev_label = None
     prev_groups = None
@@ -1250,14 +1252,16 @@ def render_high_table(results: list[dict]) -> str:
             display_groups = groups if groups != prev_groups else ""
             display_sort = sort_str if sort_str != prev_sort_str else ""
 
+            agg = f"`{r['agg']}`"
             lines.append(
-                f"| {display_label} | {display_groups} | {display_sort} | Cold | "
+                f"| {agg} | {display_label} | {display_groups} | {display_sort} | Cold | "
                 f"{pandas_cold_str} | {polars_cold_str} | {booster_cold_str} |"
             )
 
-            # Second row (Warm) - always hide label, groups, sort
+            # Second row (Warm) - keep aggregation visible; hide label, groups, sort.
             lines.append(
-                f"|  |  |  | Warm | {pandas_warm_str} | {polars_warm_str} | {booster_warm_str} |"
+                f"| {agg} |  |  |  | Warm | "
+                f"{pandas_warm_str} | {polars_warm_str} | {booster_warm_str} |"
             )
 
             prev_label = label
@@ -1293,8 +1297,8 @@ def render_threshold_table(results: list[dict]) -> str:
         results_by_preset_sort[key] = r
 
     lines = []
-    lines.append("| Operation | Groups | Sort | Type | Pandas | Polars | Booster |")
-    lines.append("|-----------|--------|------|------|--------|--------|---------|")
+    lines.append("| Aggregation | Workload | Groups | Sort | Type | Pandas | Polars | Booster |")
+    lines.append("|-------------|----------|--------|------|------|--------|--------|---------|")
 
     prev_label = None
     prev_groups = None
@@ -1370,12 +1374,14 @@ def render_threshold_table(results: list[dict]) -> str:
             display_groups = groups if groups != prev_groups else ""
             display_sort = sort_str if sort_str != prev_sort_str else ""
 
+            agg = f"`{r['agg']}`"
             lines.append(
-                f"| {display_label} | {display_groups} | {display_sort} | Cold | "
+                f"| {agg} | {display_label} | {display_groups} | {display_sort} | Cold | "
                 f"{pandas_cold_str} | {polars_cold_str} | {booster_cold_str} |"
             )
             lines.append(
-                f"|  |  |  | Warm | {pandas_warm_str} | {polars_warm_str} | {booster_warm_str} |"
+                f"| {agg} |  |  |  | Warm | "
+                f"{pandas_warm_str} | {polars_warm_str} | {booster_warm_str} |"
             )
 
             prev_label = label

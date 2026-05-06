@@ -141,7 +141,13 @@ def test_format_performance_section_separates_multiple_aggs(benchmark_module):
 
     assert "### Aggregation: `sum`" in rendered
     assert "### Aggregation: `std`" in rendered
-    assert rendered.count("| Single-key |") == 2
+    assert (
+        "| Aggregation | Workload | Groups | Sort | Type | Pandas | Polars | Booster |" in rendered
+    )
+    assert rendered.count("| `sum` | Single-key |") == 1
+    assert rendered.count("| `std` | Single-key |") == 1
+    assert "| `sum` |  |  |  | Warm |" in rendered
+    assert "| `std` |  |  |  | Warm |" in rendered
 
 
 def test_render_stats_evidence_section_is_empty_when_no_selected_stats_aggs(benchmark_module):
