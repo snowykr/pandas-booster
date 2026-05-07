@@ -180,14 +180,10 @@ fn median_f64_from_values(mut values: Vec<f64>) -> f64 {
 }
 
 fn average_f64_middle_values(lower: f64, upper: f64) -> f64 {
-    if lower.is_finite()
-        && upper.is_finite()
-        && lower.is_sign_negative() == upper.is_sign_negative()
-    {
-        lower + (upper - lower) / 2.0
-    } else {
-        (lower + upper) / 2.0
-    }
+    // Keep pandas/NumPy observable semantics for even-length float medians:
+    // very large same-sign finite middle values intentionally overflow to
+    // +/-inf instead of using a numerically stable midpoint formula.
+    (lower + upper) / 2.0
 }
 
 /// Shared mergeable variance state using a numerically stable mean/M2 update.
@@ -795,16 +791,36 @@ mod tests {
     }
 
     #[test]
-    fn test_median_f64_even_count_averages_same_sign_large_finite_values_without_overflow() {
+    fn test_median_f64_even_count_uses_pandas_overflow_semantics() {
         let mut positive = MedianAggF64::init();
         positive.update(f64::MAX);
         positive.update(f64::MAX);
-        assert_eq!(positive.finalize(), f64::MAX);
+        assert_eq!(positive.finalize(), f64::INFINITY);
+
+        let mut positive_mixed = MedianAggF64::init();
+        positive_mixed.update(f64::MAX / 2.0);
+        positive_mixed.update(f64::MAX);
+        assert_eq!(positive_mixed.finalize(), f64::INFINITY);
 
         let mut negative = MedianAggF64::init();
         negative.update(-f64::MAX);
         negative.update(-f64::MAX);
-        assert_eq!(negative.finalize(), -f64::MAX);
+        assert_eq!(negative.finalize(), f64::NEG_INFINITY);
+
+        let mut negative_mixed = MedianAggF64::init();
+        negative_mixed.update(-f64::MAX);
+        negative_mixed.update(-f64::MAX / 2.0);
+        assert_eq!(negative_mixed.finalize(), f64::NEG_INFINITY);
+
+        let mut opposite_sign = MedianAggF64::init();
+        opposite_sign.update(-f64::MAX);
+        opposite_sign.update(f64::MAX);
+        assert_eq!(opposite_sign.finalize(), 0.0);
+
+        let mut finite = MedianAggF64::init();
+        finite.update(f64::MAX / 2.0);
+        finite.update(f64::MAX / 2.0);
+        assert_eq!(finite.finalize(), f64::MAX / 2.0);
     }
 
     #[test]
