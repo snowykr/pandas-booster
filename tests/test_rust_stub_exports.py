@@ -151,6 +151,20 @@ def test_prod_symbols_are_registered_and_stubbed():
     assert expected <= stubbed_exports
 
 
+def test_ordered_single_key_float_prod_abi_marker_is_registered_and_stubbed():
+    registered_exports = set(
+        re.findall(
+            r"m\.add_function\(wrap_pyfunction!\((\w+), m\)\?\)\?;",
+            _RUST_LIB_PATH.read_text(),
+        )
+    )
+    stubbed_exports = set(re.findall(r"^def (\w+)\(", _RUST_STUB_PATH.read_text(), re.MULTILINE))
+
+    marker = "has_ordered_single_key_float_prod_abi"
+    assert marker in registered_exports
+    assert marker in stubbed_exports
+
+
 def test_prod_surface_mentions_stay_in_sync():
     repo = _REPO_ROOT
     groupby_accel = repo / "python" / "pandas_booster" / "_groupby_accel.py"
@@ -173,7 +187,7 @@ def test_prod_surface_mentions_stay_in_sync():
     assert "prod" in _assigned_strings(benchmark, "SUPPORTED_AGGS")
     assert "prod" in _dict_keys_assigned_in_function(benchmark, "build_polars_agg_expr", "agg_map")
     assert "prod" in _readme_operation_names()
-    assert "prod" not in _readme_force_float_groupby_aggs()
+    assert "prod" in _readme_force_float_groupby_aggs()
 
 
 def test_median_surface_mentions_stay_in_sync():
@@ -198,7 +212,9 @@ def test_prod_exact_dispatch_mapping_selects_expected_symbols():
     from pandas_booster._groupby_accel import select_rust_groupby_func
 
     class FakeRust:
-        pass
+        @staticmethod
+        def has_ordered_single_key_float_prod_abi() -> bool:
+            return True
 
     rust = FakeRust()
     expected = _prod_expected_symbols()
@@ -245,6 +261,45 @@ def test_prod_exact_dispatch_mapping_selects_expected_symbols():
         assert func.__name__ == expected_name
         assert needs_python_sort is expected_python_sort
         assert "sum" not in func.__name__
+
+
+def test_single_key_float_prod_requires_ordered_abi_marker():
+    from pandas_booster._groupby_accel import has_rust_groupby_func, select_rust_groupby_func
+
+    class FakeRust:
+        @staticmethod
+        def groupby_prod_f64_sorted(*_args, **_kwargs):
+            raise AssertionError("stale groupby_prod_f64 symbol must not be selected")
+
+        @staticmethod
+        def groupby_prod_f64_firstseen_u32(*_args, **_kwargs):
+            raise AssertionError("stale groupby_prod_f64 symbol must not be selected")
+
+    rust = FakeRust()
+
+    assert (
+        has_rust_groupby_func(
+            rust,
+            "groupby_prod_f64",
+            sort=True,
+            n_rows=100_000,
+            force_pandas_sort=False,
+        )
+        is False
+    )
+
+    try:
+        select_rust_groupby_func(
+            rust,
+            "groupby_prod_f64",
+            sort=True,
+            n_rows=100_000,
+            force_pandas_sort=False,
+        )
+    except AttributeError as exc:
+        assert exc.args == ("has_ordered_single_key_float_prod_abi",)
+    else:
+        raise AssertionError("missing ordered prod ABI marker should block symbol resolution")
 
 
 def _median_expected_symbols() -> set[str]:

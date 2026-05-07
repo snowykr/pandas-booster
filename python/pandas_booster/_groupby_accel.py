@@ -9,6 +9,7 @@ import pandas as pd
 from ._abi_compat import raise_abi_skew
 
 AggFunc = Literal["sum", "mean", "prod", "min", "max", "count", "std", "var", "median"]
+ORDERED_SINGLE_KEY_FLOAT_PROD_ABI_MARKER = "has_ordered_single_key_float_prod_abi"
 
 
 class GroupByCompatibility(NamedTuple):
@@ -29,6 +30,19 @@ def select_rust_groupby_func(
 
     Returns (callable, needs_python_sort).
     """
+    if func_base == "groupby_prod_f64" and not hasattr(
+        rust, ORDERED_SINGLE_KEY_FLOAT_PROD_ABI_MARKER
+    ):
+        if context is None:
+            raise AttributeError(ORDERED_SINGLE_KEY_FLOAT_PROD_ABI_MARKER)
+        raise_abi_skew(
+            context=context,
+            detail=(
+                "missing Rust capability marker "
+                f"{ORDERED_SINGLE_KEY_FLOAT_PROD_ABI_MARKER!r} while resolving "
+                "ordered single-key float 'prod'."
+            ),
+        )
 
     def _lookup(symbol: str) -> Callable[..., Any]:
         try:
@@ -71,6 +85,11 @@ def has_rust_groupby_func(
     where a compatibility policy can be certified before the matching Rust
     kernel ships.
     """
+    if func_base == "groupby_prod_f64" and not hasattr(
+        rust, ORDERED_SINGLE_KEY_FLOAT_PROD_ABI_MARKER
+    ):
+        return False
+
     if not sort:
         suffix = firstseen_suffix(sort=False, n_rows=n_rows)
         return hasattr(rust, f"{func_base}{suffix}")
@@ -166,18 +185,9 @@ def classify_groupby_compatibility(
     if not is_supported_value_dtype(val_col, agg=agg):
         return GroupByCompatibility(False, False)
 
-    if len(key_cols) == 1 and agg == "prod" and pd.api.types.is_float_dtype(val_col):
-        # Floating-point product is not associative under IEEE-754. The single-key
-        # Rust kernels aggregate fixed row chunks and merge per-chunk products,
-        # which can change observable overflow/underflow results compared with
-        # pandas' row-order accumulator (for example, 0.0 * inf becomes NaN).
-        # Keep this path on pandas until an order-preserving Rust implementation
-        # is available. Multi-key radix product is merge-free and remains eligible.
-        return GroupByCompatibility(True, True)
-
     if (
         len(key_cols) == 1
-        and agg in {"sum", "mean", "std", "var", "median"}
+        and agg in {"sum", "mean", "prod", "std", "var", "median"}
         and pd.api.types.is_float_dtype(val_col)
         and force_pandas_float_groupby
     ):

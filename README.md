@@ -109,10 +109,10 @@ Emergency toggle (panic button):
   - truthy (`1/true/yes/on`, case-insensitive): force Python `Series.sort_index()` after Rust aggregation for `sort=True`.
   - anything else (including `0/false/no/off`): keep Rust-side sorting.
 - `PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY` (default: OFF when unset):
-  - truthy (`1/true/yes/on`, case-insensitive): force pandas fallback for **single-key float** `sum`/`mean`/`std`/`var`/`median`.
+  - truthy (`1/true/yes/on`, case-insensitive): force pandas fallback for **single-key float** `sum`/`mean`/`prod`/`std`/`var`/`median`.
   - anything else (including `0/false/no/off`): use Rust deterministic reduction kernels for those eligible operations.
 
-Single-key float `prod` always falls back to pandas to preserve pandas' row-order IEEE-754 overflow/underflow semantics; multi-key float `prod` remains Rust-eligible. These toggles are intended for quick rollback if a Rust ordering or deterministic-float reduction issue is discovered. Forcing Python sort moves the `sort=True` cost to Pandas and is slower. Forcing pandas float groupby rolls single-key float `sum`/`mean`/`std`/`var`/`median` back to pandas semantics/performance.
+Single-key float `prod` uses a verified Rust path that preserves per-key row-order IEEE-754 overflow/underflow semantics without merging partial products; multi-key float `prod` remains Rust-eligible. These toggles are intended for quick rollback if a Rust ordering or deterministic-float reduction issue is discovered. Forcing Python sort moves the `sort=True` cost to Pandas and is slower. Forcing pandas float groupby rolls single-key float `sum`/`mean`/`prod`/`std`/`var`/`median` back to pandas semantics/performance.
 
 Note: the Rust-side `sort=True` kernels allocate a permutation vector and perform an `O(G log G)` comparison sort over groups (G = number of groups). This can increase memory usage at very high cardinality.
 
@@ -151,7 +151,7 @@ The following aggregation functions are currently supported:
 
 To ensure predictable performance and correctness, the following rules define where Rust-first dispatch is certified.
 
-#### Certified Rust Dispatch Domain (`std`/`var`/`median`)
+#### Certified Rust Dispatch Domain (`std`/`var`/`median` and single-key float `prod`)
 
 | Feature | Supported (Rust-first) | Mandatory pandas Fallback |
 |---------|-------------------------|--------------------------|
@@ -162,9 +162,9 @@ To ensure predictable performance and correctness, the following rules define wh
 
 #### Determinism and Precision
 
-- **Determinism**: Accelerated float aggregations (`sum`, `mean`, `prod`, `std`, `var`, `median`) are bitwise-identical across thread counts for identical inputs in the same environment. Single-key float `prod` is not accelerated and uses pandas row-order semantics.
+- **Determinism**: Accelerated float aggregations (`sum`, `mean`, `prod`, `std`, `var`, `median`) are bitwise-identical across thread counts for identical inputs in the same environment. Single-key float `prod` is accelerated with a no-merge path that preserves pandas row-order product semantics per key.
 - **Precision**: Results are semantically pandas-compatible but not guaranteed to be bit-for-bit identical to pandas. `std` and `var` follow this same policy.
-- **Escape Hatch**: `PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY=1` forces pandas execution for single-key float-input `sum`/`mean`/`std`/`var`/`median` if bit-for-bit identity is required.
+- **Escape Hatch**: `PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY=1` forces pandas execution for single-key float-input `sum`/`mean`/`prod`/`std`/`var`/`median` if bit-for-bit identity is required.
 
 ## Requirements and Constraints
 
@@ -176,7 +176,7 @@ To ensure correctness and performance, the following constraints apply:
 - **Value column**: Must be a numeric dtype (integers or floats).
 - **Extension dtypes**: Pandas extension dtypes (e.g., nullable `Int64` / `Float64` using `pd.NA`) are not supported and will trigger a fallback to Pandas.
 - **NaN handling**: `NaN` values in the target column are skipped in aggregations, matching standard Pandas behavior.
-- **Determinism policy (single-key float `sum`/`mean`/`std`/`var`/`median`)**: For identical inputs in the same runtime environment, pandas-booster returns bitwise-identical results across thread counts. `NaN` inputs are skipped; all-`NaN` groups follow existing semantics (`sum -> +0.0`, `mean -> NaN`, `std/var/median -> NaN`). Compared with pandas, accelerated outputs may differ at the last-bit level (including `+0.0` vs `-0.0`) because pandas-booster uses an implementation-defined deterministic reduction order. Single-key float `prod` uses pandas instead.
+- **Determinism policy (single-key float `sum`/`mean`/`prod`/`std`/`var`/`median`)**: For identical inputs in the same runtime environment, pandas-booster returns bitwise-identical results across thread counts. `NaN` inputs are skipped; all-`NaN` groups follow existing semantics (`sum -> +0.0`, `prod -> 1.0`, `mean -> NaN`, `std/var/median -> NaN`). Compared with pandas, accelerated `sum`/`mean`/`std`/`var` outputs may differ at the last-bit level (including `+0.0` vs `-0.0`) because pandas-booster uses an implementation-defined deterministic reduction order; single-key float `prod` preserves pandas row-order product semantics per key.
 - **Return types**: Integer aggregations follow Pandas-style dtypes: `sum/prod/min/max/count` return integer results for signed integer inputs; all unsigned `prod` inputs always fall back to pandas; `mean/std/var/median` return `float64`. Standard deviation and variance always use `ddof=1`.
 
 ## Performance

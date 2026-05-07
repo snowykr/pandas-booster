@@ -1269,6 +1269,12 @@ fn get_thread_count() -> usize {
     rayon::current_num_threads()
 }
 
+/// Marker certifying the ordered single-key float product ABI is available.
+#[pyfunction]
+fn has_ordered_single_key_float_prod_abi() -> bool {
+    true
+}
+
 // =============================================================================
 // Multi-column groupby functions
 // =============================================================================
@@ -2782,6 +2788,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(groupby_max_i64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_count_f64, m)?)?;
     m.add_function(wrap_pyfunction!(groupby_count_i64, m)?)?;
+    m.add_function(wrap_pyfunction!(has_ordered_single_key_float_prod_abi, m)?)?;
 
     // Single-key groupby (sorted, for sort=True)
     m.add_function(wrap_pyfunction!(groupby_sum_f64_sorted, m)?)?;
