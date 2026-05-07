@@ -546,19 +546,55 @@ class TestProdProxy:
         )
         pd.testing.assert_series_equal(multi_result, multi_expected, check_exact=True)
 
-    def test_prod_no_arg_single_key_float_uses_pandas_fallback(
+    def test_prod_no_arg_single_key_float_uses_rust_path(
         self, large_df, monkeypatch: pytest.MonkeyPatch
     ):
         import pandas_booster
         import pandas_booster._rust as rust
 
         expected = large_df.groupby("key", sort=True)["val_float"].prod()
+        calls: list[str] = []
 
-        def _boom(*_args, **_kwargs):
-            raise AssertionError("single-key float prod should use pandas fallback")
+        def fake_sorted(_keys, _values):
+            calls.append("groupby_prod_f64_sorted")
+            return expected.index.to_numpy(dtype=np.int64), expected.to_numpy(dtype=np.float64)
 
-        for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
-            monkeypatch.setattr(rust, f"groupby_prod_f64{suffix}", _boom, raising=False)
+        monkeypatch.setattr(rust, "groupby_prod_f64_sorted", fake_sorted, raising=False)
+
+        pandas_booster.activate()
+        try:
+            result = large_df.groupby("key", sort=True)["val_float"].prod()
+        finally:
+            pandas_booster.deactivate()
+
+        pd.testing.assert_series_equal(
+            result.sort_index(), expected.sort_index(), check_exact=False, rtol=1e-10
+        )
+        assert calls == ["groupby_prod_f64_sorted"]
+
+    def test_prod_no_arg_single_key_float_without_ordered_abi_marker_delegates_to_pandas(
+        self, large_df, monkeypatch: pytest.MonkeyPatch
+    ):
+        import sys
+        from types import ModuleType
+
+        import pandas_booster
+        import pandas_booster._abi_compat as abi
+
+        class StaleRustModule(ModuleType):
+            def get_fallback_threshold(self) -> int:
+                return 100_000
+
+            def groupby_prod_f64_sorted(self, *_args, **_kwargs):
+                raise AssertionError("stale proxy single-key float prod kernel must not be called")
+
+        stale_rust = StaleRustModule("pandas_booster._rust")
+        monkeypatch.setitem(sys.modules, "pandas_booster._rust", stale_rust)
+        monkeypatch.delenv("PANDAS_BOOSTER_STRICT_ABI", raising=False)
+        monkeypatch.delenv("PANDAS_BOOSTER_ABI_SKEW_NOTICE", raising=False)
+        monkeypatch.setattr(abi, "_WARNED_ABI_SKEW", False)
+
+        expected = large_df.groupby("key", sort=True)["val_float"].prod()
 
         pandas_booster.activate()
         try:
