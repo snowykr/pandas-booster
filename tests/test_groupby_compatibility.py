@@ -21,7 +21,7 @@ def test_groupby_compatibility_result_supports_named_and_tuple_access() -> None:
     assert force_pandas is True
 
 
-def test_single_key_float_prod_always_forces_pandas_for_ordered_ieee_semantics() -> None:
+def test_single_key_float_prod_is_rust_eligible_by_default() -> None:
     df = pd.DataFrame({"key": [1, 1], "val": [0.5, 2.0]})
 
     compatibility = classify_groupby_compatibility(
@@ -29,6 +29,20 @@ def test_single_key_float_prod_always_forces_pandas_for_ordered_ieee_semantics()
         val_col=df["val"],
         agg="prod",
         force_pandas_float_groupby=False,
+    )
+
+    assert compatibility.supported is True
+    assert compatibility.force_pandas is False
+
+
+def test_single_key_float_prod_force_pandas_escape_hatch_still_applies() -> None:
+    df = pd.DataFrame({"key": [1, 1], "val": [0.5, 2.0]})
+
+    compatibility = classify_groupby_compatibility(
+        key_cols=[df["key"]],
+        val_col=df["val"],
+        agg="prod",
+        force_pandas_float_groupby=True,
     )
 
     assert compatibility.supported is True
