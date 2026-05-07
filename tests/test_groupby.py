@@ -882,7 +882,7 @@ class TestProdSingleKey:
             _assert_prod_series_matches_pandas(booster_result, pandas_result)
 
     @pytest.mark.parametrize("sort", [True, False])
-    def test_single_key_float_prod_order_sensitive_chunks_use_pandas_fallback(
+    def test_single_key_float_prod_order_sensitive_chunks_use_rust_path(
         self, monkeypatch: pytest.MonkeyPatch, sort: bool
     ):
         import pandas_booster._rust as rust
@@ -901,16 +901,20 @@ class TestProdSingleKey:
             }
         )
         expected = df.groupby("key", sort=sort)["val"].prod()
+        called = False
 
-        def _boom(*_args, **_kwargs):
-            raise AssertionError("single-key float prod must use pandas fallback")
+        def _fake_rust_prod(*_args, **_kwargs):
+            nonlocal called
+            called = True
+            return expected.index.to_numpy(dtype=np.int64), expected.to_numpy(dtype=np.float64)
 
-        for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
-            monkeypatch.setattr(rust, f"groupby_prod_f64{suffix}", _boom, raising=False)
+        suffix = "_sorted" if sort else "_firstseen_u32"
+        monkeypatch.setattr(rust, f"groupby_prod_f64{suffix}", _fake_rust_prod, raising=False)
 
         result = cast(BoosterAccessor, df.booster).groupby("key", "val", "prod", sort=sort)
 
         pd.testing.assert_series_equal(result, expected, check_exact=True)
+        assert called is True
 
     def test_prod_i64_matches_pandas_sort_modes(self):
         n = 200_000
@@ -991,3 +995,85 @@ class TestProdSingleKey:
 
         result = cast(BoosterAccessor, df.booster).groupby("key", "val", "prod", sort=True)
         pd.testing.assert_series_equal(result, expected)
+
+    @pytest.mark.parametrize("sort", [True, False])
+    def test_single_key_float_prod_without_ordered_abi_marker_falls_back_to_pandas(
+        self, monkeypatch: pytest.MonkeyPatch, sort: bool
+    ):
+        import pandas_booster._abi_compat as abi
+        import pandas_booster.accessor as accessor_mod
+
+        class StaleRust:
+            @staticmethod
+            def get_fallback_threshold() -> int:
+                return 100_000
+
+            @staticmethod
+            def groupby_prod_f64_sorted(*_args, **_kwargs):
+                raise AssertionError("stale single-key float prod kernel must not be called")
+
+            @staticmethod
+            def groupby_prod_f64_firstseen_u32(*_args, **_kwargs):
+                raise AssertionError("stale single-key float prod kernel must not be called")
+
+        monkeypatch.setattr(
+            accessor_mod.BoosterAccessor,
+            "_get_rust_module",
+            staticmethod(lambda: StaleRust),
+        )
+        monkeypatch.delenv("PANDAS_BOOSTER_STRICT_ABI", raising=False)
+        monkeypatch.delenv("PANDAS_BOOSTER_ABI_SKEW_NOTICE", raising=False)
+        monkeypatch.setattr(abi, "_WARNED_ABI_SKEW", False)
+
+        n = 100_000
+        df = pd.DataFrame(
+            {
+                "key": np.resize(np.array([1, 2], dtype=np.int64), n),
+                "val": np.resize(
+                    np.array([1e308, 1e308, 1e-308, 1e-308], dtype=np.float64), n
+                ),
+            }
+        )
+        expected = df.groupby("key", sort=sort)["val"].prod()
+
+        result = cast(BoosterAccessor, df.booster).groupby("key", "val", "prod", sort=sort)
+
+        pd.testing.assert_series_equal(result, expected, check_exact=True)
+
+    def test_single_key_float_prod_without_ordered_abi_marker_hard_fails_in_strict_abi(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        import pandas_booster._abi_compat as abi
+        import pandas_booster.accessor as accessor_mod
+
+        class StaleRust:
+            @staticmethod
+            def get_fallback_threshold() -> int:
+                return 100_000
+
+            @staticmethod
+            def groupby_prod_f64_sorted(*_args, **_kwargs):
+                raise AssertionError("stale single-key float prod kernel must not be called")
+
+        monkeypatch.setattr(
+            accessor_mod.BoosterAccessor,
+            "_get_rust_module",
+            staticmethod(lambda: StaleRust),
+        )
+        monkeypatch.setenv("PANDAS_BOOSTER_STRICT_ABI", "1")
+        monkeypatch.delenv("PANDAS_BOOSTER_ABI_SKEW_NOTICE", raising=False)
+        monkeypatch.setattr(abi, "_WARNED_ABI_SKEW", False)
+
+        n = 100_000
+        df = pd.DataFrame(
+            {
+                "key": np.resize(np.array([1, 2], dtype=np.int64), n),
+                "val": np.linspace(1.001, 1.01, n, dtype=np.float64),
+            }
+        )
+
+        with pytest.raises(
+            abi.PandasBoosterKeyShapeSkewError,
+            match="has_ordered_single_key_float_prod_abi",
+        ):
+            cast(BoosterAccessor, df.booster).groupby("key", "val", "prod", sort=True)

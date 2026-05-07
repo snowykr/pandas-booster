@@ -11,6 +11,8 @@
 //!   `sum/prod/min/max/count` return integer outputs and `mean` returns `f64`.
 //! - **Thread Safety**: All aggregators implement `Send + Sync` for parallel execution.
 
+use smallvec::SmallVec;
+
 /// Core trait for streaming aggregation with support for parallel merge.
 ///
 /// Implementors must be thread-safe (`Send + Sync`) to support Rayon's parallel fold/reduce.
@@ -130,12 +132,14 @@ impl Aggregator<f64, f64> for MeanAggF64 {
 /// Median aggregator for f64. Skips NaN values and returns NaN for empty/all-NaN groups.
 #[derive(Clone, Default)]
 pub struct MedianAggF64 {
-    pub values: Vec<f64>,
+    pub values: SmallVec<[f64; 4]>,
 }
 
 impl Aggregator<f64, f64> for MedianAggF64 {
     fn init() -> Self {
-        Self { values: Vec::new() }
+        Self {
+            values: SmallVec::new(),
+        }
     }
 
     fn update(&mut self, value: f64) {
@@ -150,11 +154,11 @@ impl Aggregator<f64, f64> for MedianAggF64 {
     }
 
     fn finalize(&self) -> f64 {
-        median_f64_from_values(self.values.clone())
+        median_f64_from_values(self.values.clone().into_vec())
     }
 
     fn finalize_owned(self) -> f64 {
-        median_f64_from_values(self.values)
+        median_f64_from_values(self.values.into_vec())
     }
 }
 
@@ -475,12 +479,14 @@ impl Aggregator<i64, f64> for MeanAggI64 {
 /// Median aggregator for i64. Returns f64 and NaN for empty groups.
 #[derive(Clone, Default)]
 pub struct MedianAggI64 {
-    pub values: Vec<i64>,
+    pub values: SmallVec<[i64; 4]>,
 }
 
 impl Aggregator<i64, f64> for MedianAggI64 {
     fn init() -> Self {
-        Self { values: Vec::new() }
+        Self {
+            values: SmallVec::new(),
+        }
     }
 
     fn update(&mut self, value: i64) {
@@ -493,11 +499,11 @@ impl Aggregator<i64, f64> for MedianAggI64 {
     }
 
     fn finalize(&self) -> f64 {
-        median_i64_from_values(self.values.clone())
+        median_i64_from_values(self.values.clone().into_vec())
     }
 
     fn finalize_owned(self) -> f64 {
-        median_i64_from_values(self.values)
+        median_i64_from_values(self.values.into_vec())
     }
 }
 
