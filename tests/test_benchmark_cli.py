@@ -662,7 +662,7 @@ def test_main_accepts_prod_agg(benchmark_module, monkeypatch):
     ]
 
 
-def test_describe_booster_execution_reports_single_key_float_prod_fallback(
+def test_describe_booster_execution_reports_single_key_float_prod_rust_dispatch(
     benchmark_module, monkeypatch
 ):
     import pandas_booster._rust as rust
@@ -679,10 +679,39 @@ def test_describe_booster_execution_reports_single_key_float_prod_fallback(
         }
     )
 
-    def _boom(*_args, **_kwargs):
-        raise AssertionError("single-key float prod should not resolve a Rust kernel")
+    def _sentinel_prod(*_args, **_kwargs):
+        raise AssertionError("single-key float prod label should resolve this Rust kernel")
 
-    monkeypatch.setattr(rust, "groupby_prod_f64_sorted", _boom, raising=False)
+    monkeypatch.setattr(rust, "groupby_prod_f64_sorted", _sentinel_prod, raising=False)
+
+    assert benchmark_module.describe_booster_execution(df, ["key"], "value", "prod", True) == (
+        "booster->rust._sentinel_prod"
+    )
+
+
+def test_describe_booster_execution_uses_pandas_label_when_ordered_prod_abi_marker_is_missing(
+    benchmark_module, monkeypatch
+):
+    import pandas_booster._rust as rust
+
+    threshold = rust.get_fallback_threshold()
+    df = benchmark_module.pd.DataFrame(
+        {
+            "key": benchmark_module.np.resize(
+                benchmark_module.np.array([1, 2], dtype=benchmark_module.np.int64), threshold
+            ),
+            "value": benchmark_module.np.linspace(
+                1.001, 1.01, threshold, dtype=benchmark_module.np.float64
+            ),
+        }
+    )
+
+    monkeypatch.delattr(rust, "has_ordered_single_key_float_prod_abi", raising=False)
+
+    def _stale_prod(*_args, **_kwargs):
+        raise AssertionError("stale single-key float prod benchmark kernel must not be selected")
+
+    monkeypatch.setattr(rust, "groupby_prod_f64_sorted", _stale_prod, raising=False)
 
     assert benchmark_module.describe_booster_execution(df, ["key"], "value", "prod", True) == (
         "booster->pandas.groupby.prod"

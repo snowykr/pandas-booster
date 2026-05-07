@@ -332,7 +332,7 @@ def resolve_booster_benchmark_dispatch(
             "rust_func": None,
             "needs_python_sort": False,
         }
-    if agg == "median" and not groupby_accel.has_rust_groupby_func(
+    if agg in {"median", "prod"} and not groupby_accel.has_rust_groupby_func(
         rust,
         f"{prefix}_{agg}_{suffix}",
         sort=sort,
