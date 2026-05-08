@@ -4,7 +4,7 @@ import ast
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_SCANNED_DIRS = ("python", "tests", "scripts", "benches")
+_SCANNED_DIRS = ("python", "tests", "scripts", "benchmarks")
 
 
 def _has_future_annotations(module: ast.Module) -> bool:

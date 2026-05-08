@@ -67,6 +67,181 @@ class TestEmptyData:
             result_at.sort_index(), expected_at.sort_index(), check_exact=False, rtol=1e-10
         )
 
+    def test_median_matches_pandas_on_supported_input(self):
+        import pandas_booster  # noqa: F401
+
+        df = pd.DataFrame(
+            {
+                "key": [1, 2, 1, 2, 1, 2],
+                "val": [1.0, 2.0, np.nan, 4.0, 5.0, 6.0],
+            }
+        )
+
+        result = df.booster.groupby("key", "val", "median")
+        expected = df.groupby("key")["val"].median()
+
+        pd.testing.assert_series_equal(
+            result.sort_index(), expected.sort_index(), check_exact=False, rtol=1e-10
+        )
+
+    def test_median_kwargs_delegate_to_pandas(self, monkeypatch: pytest.MonkeyPatch):
+        """Median kwargs should be forwarded to pandas unchanged."""
+        import pandas_booster
+        from pandas.core.groupby.generic import SeriesGroupBy
+        from pandas_booster.proxy import BoosterSeriesGroupBy
+
+        df = pd.DataFrame({"key": [1, 1, 2, 2], "val": [1.0, 3.0, 2.0, 6.0]})
+        expected = df.groupby("key")["val"].median(numeric_only=False)
+        calls: list[dict[str, object]] = []
+
+        original_median = SeriesGroupBy.median
+
+        def wrapped(self, *args, **kwargs):
+            calls.append({"args": args, "kwargs": dict(kwargs)})
+            return original_median(self, *args, **kwargs)
+
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("median with kwargs must delegate to pandas")
+
+        monkeypatch.setattr(SeriesGroupBy, "median", wrapped, raising=True)
+        monkeypatch.setattr(BoosterSeriesGroupBy, "_try_accelerate", _boom, raising=True)
+
+        pandas_booster.activate()
+        try:
+            result = df.groupby("key")["val"].median(numeric_only=False)
+        finally:
+            pandas_booster.deactivate()
+
+        assert calls == [{"args": (), "kwargs": {"numeric_only": False}}]
+        pd.testing.assert_series_equal(
+            result.sort_index(), expected.sort_index(), check_exact=False
+        )
+
+
+class TestMedianNumericalExtremes:
+    """Tests for accelerated median arithmetic at f64 boundaries."""
+
+    @pytest.mark.parametrize("sort", [True, False])
+    @pytest.mark.parametrize(
+        ("values", "expected"),
+        [
+            pytest.param(
+                [np.finfo(np.float64).max, np.finfo(np.float64).max],
+                np.inf,
+                id="positive-max-equal-overflows-like-pandas",
+            ),
+            pytest.param(
+                [np.finfo(np.float64).max / 2.0, np.finfo(np.float64).max],
+                np.inf,
+                id="positive-mixed-large-overflows-like-pandas",
+            ),
+            pytest.param(
+                [-np.finfo(np.float64).max, -np.finfo(np.float64).max],
+                -np.inf,
+                id="negative-max-equal-overflows-like-pandas",
+            ),
+            pytest.param(
+                [-np.finfo(np.float64).max, -np.finfo(np.float64).max / 2.0],
+                -np.inf,
+                id="negative-mixed-large-overflows-like-pandas",
+            ),
+            pytest.param(
+                [-np.finfo(np.float64).max, np.finfo(np.float64).max],
+                0.0,
+                id="opposite-sign-max-stays-zero-like-pandas",
+            ),
+            pytest.param(
+                [np.finfo(np.float64).max / 2.0, np.finfo(np.float64).max / 2.0],
+                np.finfo(np.float64).max / 2.0,
+                id="half-max-equal-stays-finite",
+            ),
+        ],
+    )
+    def test_single_key_float_median_large_even_middle_values_match_pandas(
+        self, values: list[float], expected: float, sort: bool, monkeypatch: pytest.MonkeyPatch
+    ):
+        import pandas_booster  # noqa: F401
+
+        df = pd.DataFrame(
+            {
+                "key": np.array([2, 1, 1, 2], dtype=np.int64),
+                "val": np.array([0.0, values[0], values[1], 0.0], dtype=np.float64),
+            }
+        )
+
+        pandas_expected = df.groupby("key", sort=sort)["val"].median()
+        _patch_pandas_series_groupby_agg_to_raise(
+            monkeypatch,
+            "median",
+            "float median overflow parity must be proven by the Rust accelerator",
+        )
+
+        actual = df.booster.groupby("key", "val", "median", sort=sort)
+
+        pd.testing.assert_series_equal(actual, pandas_expected, check_exact=True)
+        assert actual.loc[1] == expected
+
+    @pytest.mark.parametrize("sort", [True, False])
+    @pytest.mark.parametrize(
+        ("values", "expected"),
+        [
+            pytest.param(
+                [np.finfo(np.float64).max, np.finfo(np.float64).max],
+                np.inf,
+                id="positive-max-equal-overflows-like-pandas",
+            ),
+            pytest.param(
+                [np.finfo(np.float64).max / 2.0, np.finfo(np.float64).max],
+                np.inf,
+                id="positive-mixed-large-overflows-like-pandas",
+            ),
+            pytest.param(
+                [-np.finfo(np.float64).max, -np.finfo(np.float64).max],
+                -np.inf,
+                id="negative-max-equal-overflows-like-pandas",
+            ),
+            pytest.param(
+                [-np.finfo(np.float64).max, -np.finfo(np.float64).max / 2.0],
+                -np.inf,
+                id="negative-mixed-large-overflows-like-pandas",
+            ),
+            pytest.param(
+                [-np.finfo(np.float64).max, np.finfo(np.float64).max],
+                0.0,
+                id="opposite-sign-max-stays-zero-like-pandas",
+            ),
+            pytest.param(
+                [np.finfo(np.float64).max / 2.0, np.finfo(np.float64).max / 2.0],
+                np.finfo(np.float64).max / 2.0,
+                id="half-max-equal-stays-finite",
+            ),
+        ],
+    )
+    def test_multi_key_float_median_large_even_middle_values_match_pandas(
+        self, values: list[float], expected: float, sort: bool, monkeypatch: pytest.MonkeyPatch
+    ):
+        import pandas_booster  # noqa: F401
+
+        df = pd.DataFrame(
+            {
+                "k1": np.array([2, 1, 1, 2], dtype=np.int64),
+                "k2": np.array([20, 10, 10, 20], dtype=np.int64),
+                "val": np.array([0.0, values[0], values[1], 0.0], dtype=np.float64),
+            }
+        )
+
+        pandas_expected = df.groupby(["k1", "k2"], sort=sort)["val"].median()
+        _patch_pandas_series_groupby_agg_to_raise(
+            monkeypatch,
+            "median",
+            "multi-key float median overflow parity must be proven by the Rust accelerator",
+        )
+
+        actual = df.booster.groupby(["k1", "k2"], "val", "median", sort=sort)
+
+        pd.testing.assert_series_equal(actual, pandas_expected, check_exact=True)
+        assert actual.loc[(1, 10)] == expected
+
 
 class TestInfiniteValues:
     """Tests for inf and -inf handling in value columns."""
@@ -555,7 +730,19 @@ def _patch_all_i64_kernels_for_agg_to_raise(
             monkeypatch.setattr(rust, f"{prefix}_{agg}_i64{suffix}", _boom, raising=False)
 
 
-def _delete_std_var_kernel_symbols(
+def _patch_all_numeric_kernels_for_agg_to_raise(
+    monkeypatch: pytest.MonkeyPatch, rust: object, agg: str, message: str
+) -> None:
+    def _boom(*_args, **_kwargs):
+        raise AssertionError(message)
+
+    for kernel in ("f64", "i64"):
+        for prefix in ("groupby", "groupby_multi"):
+            for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
+                monkeypatch.setattr(rust, f"{prefix}_{agg}_{kernel}{suffix}", _boom, raising=False)
+
+
+def _delete_groupby_kernel_symbols(
     monkeypatch: pytest.MonkeyPatch,
     rust: object,
     agg: str,
@@ -847,9 +1034,7 @@ class TestStdVarContracts:
         pd.testing.assert_series_equal(proxy_result, expected, check_exact=False, rtol=1e-12)
 
     @pytest.mark.parametrize("agg", ["std", "var"])
-    def test_multi_key_unsorted_std_var_preserves_existing_first_seen_order(
-        self, agg: str
-    ):
+    def test_multi_key_unsorted_std_var_preserves_existing_first_seen_order(self, agg: str):
         df = pd.DataFrame(
             {
                 "k1": [2, 1, 2, 1, 2, 3, 1],
@@ -980,12 +1165,14 @@ class TestStdVarContracts:
         df = pd.DataFrame(
             {
                 "key": np.repeat([1, 2, 3], 4),
-                "val": np.array([1.0, 2.0, 4.0, 8.0, 2.5, 3.5, 6.5, 7.5, 5.0, 6.0, 9.0, 10.0]),
+                "val": np.array(
+                    [1.0, 2.0, 4.0, 8.0, 2.5, 3.5, 6.5, 7.5, 5.0, 6.0, 9.0, 10.0]
+                ),
             }
         )
         expected = getattr(df.groupby("key", sort=True)["val"], agg)()
 
-        _delete_std_var_kernel_symbols(monkeypatch, rust, agg, kernel="f64", multi=False)
+        _delete_groupby_kernel_symbols(monkeypatch, rust, agg, kernel="f64", multi=False)
         monkeypatch.setattr(abi, "_WARNED_ABI_SKEW", False)
 
         booster = df.booster
@@ -1041,7 +1228,7 @@ class TestStdVarContracts:
         by_cols = ["k1", "k2"]
         expected = getattr(df.groupby(by_cols, sort=True)["val"], agg)()
 
-        _delete_std_var_kernel_symbols(monkeypatch, rust, agg, kernel="f64", multi=True)
+        _delete_groupby_kernel_symbols(monkeypatch, rust, agg, kernel="f64", multi=True)
         monkeypatch.setattr(abi, "_WARNED_ABI_SKEW", False)
 
         booster = df.booster
@@ -1072,9 +1259,8 @@ class TestStdVarContracts:
         abi_warnings = [w for w in rec if issubclass(w.category, abi.PandasBoosterAbiSkewWarning)]
         abi_warnings = [w for w in abi_warnings if abi.ABI_SKEW_PREFIX in str(w.message)]
         assert len(abi_warnings) == 1
-        assert (
-            f"missing Rust kernel symbol 'groupby_multi_{agg}_f64'"
-            in str(abi_warnings[0].message)
+        assert f"missing Rust kernel symbol 'groupby_multi_{agg}_f64'" in str(
+            abi_warnings[0].message
         )
 
     @pytest.mark.parametrize("agg", ["std", "var"])
@@ -1096,7 +1282,7 @@ class TestStdVarContracts:
             }
         )
 
-        _delete_std_var_kernel_symbols(monkeypatch, rust, agg, kernel="f64", multi=False)
+        _delete_groupby_kernel_symbols(monkeypatch, rust, agg, kernel="f64", multi=False)
         monkeypatch.setattr(abi, "_WARNED_ABI_SKEW", False)
 
         with pytest.raises(
@@ -1137,7 +1323,7 @@ class TestStdVarContracts:
         )
         by_cols = ["k1", "k2"]
 
-        _delete_std_var_kernel_symbols(monkeypatch, rust, agg, kernel="f64", multi=True)
+        _delete_groupby_kernel_symbols(monkeypatch, rust, agg, kernel="f64", multi=True)
         monkeypatch.setattr(abi, "_WARNED_ABI_SKEW", False)
 
         with pytest.raises(
@@ -1281,3 +1467,894 @@ class TestStdVarContracts:
 
         with pytest.raises(type(pandas_exc.value)):
             _ = _proxy_groupby_result(df, "key", "val", agg)
+
+
+class TestMedianDispatchContracts:
+    def test_supported_domain_median_fallback_is_warning_free_before_rust_kernels_exist(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        import pandas_booster
+        import pandas_booster._abi_compat as abi
+        import pandas_booster._rust as rust
+
+        monkeypatch.delenv("PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY", raising=False)
+        monkeypatch.setattr(abi, "_WARNED_ABI_SKEW", False)
+        for kernel in ("f64", "i64"):
+            for prefix in ("groupby", "groupby_multi"):
+                for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
+                    monkeypatch.delattr(rust, f"{prefix}_median_{kernel}{suffix}", raising=False)
+
+        df = pd.DataFrame({"key": [1, 1, 2, 2], "val": [1.5, 4.5, 10.0, 14.0]})
+        expected = df.groupby("key", sort=True)["val"].median()
+
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            accessor_result = _accessor_groupby_result(df, "key", "val", "median")
+
+            pandas_booster.activate()
+            try:
+                proxy_result = df.groupby("key", sort=True)["val"].median()
+            finally:
+                pandas_booster.deactivate()
+
+        assert rec == []
+        pd.testing.assert_series_equal(accessor_result, expected, check_exact=False, rtol=1e-12)
+        pd.testing.assert_series_equal(proxy_result, expected, check_exact=False, rtol=1e-12)
+
+    def test_small_single_key_float_median_uses_rust_without_threshold_fallback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        import pandas_booster._rust as rust
+
+        monkeypatch.delenv("PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY", raising=False)
+
+        df = pd.DataFrame(
+            {
+                "key": [1, 1, 1, 2, 2, 2],
+                "val": [1.5, 4.5, 8.5, 10.0, 14.0, 20.0],
+            }
+        )
+        expected = df.groupby("key", sort=True)["val"].median()
+
+        _patch_single_std_var_kernel(
+            monkeypatch, rust, expected, "median", kernel="f64", result_dtype=np.dtype(np.float64)
+        )
+        _patch_pandas_series_groupby_agg_to_raise(
+            monkeypatch,
+            "median",
+            "supported small single-key float median should not use threshold fallback",
+        )
+
+        accessor_result = _accessor_groupby_result(df, "key", "val", "median")
+        proxy_result = _proxy_groupby_result(df, "key", "val", "median")
+
+        assert accessor_result.dtype == np.dtype(np.float64)
+        assert proxy_result.dtype == np.dtype(np.float64)
+        pd.testing.assert_series_equal(accessor_result, expected, check_exact=False, rtol=1e-12)
+        pd.testing.assert_series_equal(proxy_result, expected, check_exact=False, rtol=1e-12)
+
+    def test_integer_backed_median_without_fallback_uses_float64_materialization_path(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        import pandas_booster._rust as rust
+
+        monkeypatch.delenv("PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY", raising=False)
+
+        df = pd.DataFrame(
+            {
+                "key": [1, 1, 1, 2, 2, 2],
+                "val": np.array([1, 5, 9, 10, 14, 20], dtype=np.int64),
+            }
+        )
+        expected = df.groupby("key", sort=True)["val"].median()
+
+        _patch_single_std_var_kernel(
+            monkeypatch, rust, expected, "median", kernel="i64", result_dtype=np.dtype(np.int64)
+        )
+        _patch_pandas_series_groupby_agg_to_raise(
+            monkeypatch,
+            "median",
+            "integer-backed median should dispatch but materialize as float64",
+        )
+
+        accessor_result = _accessor_groupby_result(df, "key", "val", "median")
+        proxy_result = _proxy_groupby_result(df, "key", "val", "median")
+
+        assert expected.dtype == np.dtype(np.float64)
+        assert accessor_result.dtype == np.dtype(np.float64)
+        assert proxy_result.dtype == np.dtype(np.float64)
+        pd.testing.assert_series_equal(accessor_result, expected, check_exact=False, rtol=1e-12)
+        pd.testing.assert_series_equal(proxy_result, expected, check_exact=False, rtol=1e-12)
+
+    def test_single_key_float_median_rollback_env_forces_pandas_fallback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        import pandas_booster._rust as rust
+
+        monkeypatch.setenv("PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY", "1")
+
+        df = pd.DataFrame(
+            {
+                "key": [1, 1, 1, 2, 2, 2],
+                "val": [1.5, 4.5, 8.5, 10.0, 14.0, 20.0],
+            }
+        )
+        expected = df.groupby("key", sort=True)["val"].median()
+
+        _patch_all_numeric_kernels_for_agg_to_raise(
+            monkeypatch,
+            rust,
+            "median",
+            "single-key float median rollback should force pandas fallback",
+        )
+
+        accessor_result = _accessor_groupby_result(df, "key", "val", "median")
+        proxy_result = _proxy_groupby_result(df, "key", "val", "median")
+
+        pd.testing.assert_series_equal(accessor_result, expected, check_exact=False, rtol=1e-12)
+        pd.testing.assert_series_equal(proxy_result, expected, check_exact=False, rtol=1e-12)
+
+    def test_single_key_median_exact_kernel_missing_falls_back_without_abi_warning(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        import pandas_booster
+        import pandas_booster._abi_compat as abi
+        import pandas_booster._rust as rust
+
+        monkeypatch.delenv("PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY", raising=False)
+        monkeypatch.setattr(abi, "_WARNED_ABI_SKEW", False)
+
+        for kernel in ("f64", "i64"):
+            for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
+                monkeypatch.delattr(rust, f"groupby_median_{kernel}{suffix}", raising=False)
+
+        def fake_multi_groupby(_key_arrays, _values_arr):
+            return [np.asarray([1, 2], dtype=np.int64)], np.asarray([2.0, 5.0], dtype=np.float64)
+
+        monkeypatch.setattr(
+            rust, "groupby_multi_median_f64_sorted", fake_multi_groupby, raising=False
+        )
+
+        df = pd.DataFrame(
+            {
+                "key": np.tile([1, 2], 50_000),
+                "val": np.linspace(0.0, 1.0, 100_000, dtype=np.float64),
+            }
+        )
+        expected = df.groupby("key", sort=True)["val"].median()
+
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            accessor_result = _accessor_groupby_result(df, "key", "val", "median")
+
+            pandas_booster.activate()
+            try:
+                proxy_result = df.groupby("key", sort=True)["val"].median()
+            finally:
+                pandas_booster.deactivate()
+
+        assert rec == []
+        pd.testing.assert_series_equal(accessor_result, expected, check_exact=False, rtol=1e-12)
+        pd.testing.assert_series_equal(proxy_result, expected, check_exact=False, rtol=1e-12)
+
+    def test_float_rollback_scope_does_not_broaden_to_int_backed_median(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        import pandas_booster._rust as rust
+
+        monkeypatch.setenv("PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY", "1")
+
+        df = pd.DataFrame(
+            {
+                "key": [1, 1, 1, 2, 2, 2],
+                "val": np.array([1, 5, 9, 10, 14, 20], dtype=np.int64),
+            }
+        )
+        expected = df.groupby("key", sort=True)["val"].median()
+
+        _patch_single_std_var_kernel(
+            monkeypatch, rust, expected, "median", kernel="i64", result_dtype=np.dtype(np.float64)
+        )
+        _patch_pandas_series_groupby_agg_to_raise(
+            monkeypatch,
+            "median",
+            "float rollback env must not broaden to int-backed median fallback",
+        )
+
+        accessor_result = _accessor_groupby_result(df, "key", "val", "median")
+        proxy_result = _proxy_groupby_result(df, "key", "val", "median")
+
+        pd.testing.assert_series_equal(accessor_result, expected, check_exact=False, rtol=1e-12)
+        pd.testing.assert_series_equal(proxy_result, expected, check_exact=False, rtol=1e-12)
+
+    def test_float_rollback_scope_does_not_broaden_to_multi_key_median(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        import pandas_booster._rust as rust
+
+        monkeypatch.setenv("PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY", "1")
+
+        df = pd.DataFrame(
+            {
+                "k1": [1, 1, 1, 2, 2, 2],
+                "k2": [10, 10, 20, 10, 10, 20],
+                "val": [1.0, 5.0, 9.0, 2.0, 6.0, 10.0],
+            }
+        )
+        expected = df.groupby(["k1", "k2"], sort=True)["val"].median()
+
+        _patch_multi_std_var_kernel(
+            monkeypatch, rust, expected, "median", kernel="f64", result_dtype=np.dtype(np.float64)
+        )
+        _patch_pandas_series_groupby_agg_to_raise(
+            monkeypatch,
+            "median",
+            "float rollback env must not broaden to multi-key median fallback",
+        )
+
+        accessor_result = _accessor_groupby_result(df, ["k1", "k2"], "val", "median")
+        proxy_result = _proxy_groupby_result(df, ["k1", "k2"], "val", "median")
+
+        pd.testing.assert_series_equal(accessor_result, expected, check_exact=False, rtol=1e-12)
+        pd.testing.assert_series_equal(proxy_result, expected, check_exact=False, rtol=1e-12)
+
+    def test_missing_single_key_median_symbols_fall_back_without_abi_skew(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        import pandas_booster
+        import pandas_booster._abi_compat as abi
+        import pandas_booster._rust as rust
+        from pandas_booster.accessor import BoosterAccessor
+
+        monkeypatch.delenv("PANDAS_BOOSTER_STRICT_ABI", raising=False)
+        monkeypatch.delenv("PANDAS_BOOSTER_ABI_SKEW_NOTICE", raising=False)
+        monkeypatch.delenv("PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY", raising=False)
+
+        df = pd.DataFrame(
+            {
+                "key": np.repeat([1, 2, 3], 4),
+                "val": np.array(
+                    [1.0, 2.0, 4.0, 8.0, 2.5, 3.5, 6.5, 7.5, 5.0, 6.0, 9.0, 10.0]
+                ),
+            }
+        )
+        expected = df.groupby("key", sort=True)["val"].median()
+
+        _delete_groupby_kernel_symbols(monkeypatch, rust, "median", kernel="f64", multi=False)
+        monkeypatch.setattr(rust, "groupby_median_i64", lambda *_args: None, raising=False)
+        monkeypatch.setattr(abi, "_WARNED_ABI_SKEW", False)
+
+        booster = df.booster
+        assert isinstance(booster, BoosterAccessor)
+        fallback_called = {"n": 0}
+        orig_fallback = booster._pandas_fallback
+
+        def wrapped_fallback(by_cols, target, wrapped_agg, *, sort: bool):
+            fallback_called["n"] += 1
+            return orig_fallback(by_cols, target, wrapped_agg, sort=sort)
+
+        monkeypatch.setattr(booster, "_pandas_fallback", wrapped_fallback)
+
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            accessor_result = _accessor_groupby_result(df, "key", "val", "median")
+
+            pandas_booster.activate()
+            try:
+                proxy_result = df.groupby("key", sort=True)["val"].median()
+            finally:
+                pandas_booster.deactivate()
+
+        assert fallback_called["n"] == 1
+        pd.testing.assert_series_equal(accessor_result, expected, check_exact=False, rtol=1e-12)
+        pd.testing.assert_series_equal(proxy_result, expected, check_exact=False, rtol=1e-12)
+
+        abi_warnings = [w for w in rec if issubclass(w.category, abi.PandasBoosterAbiSkewWarning)]
+        abi_warnings = [w for w in abi_warnings if abi.ABI_SKEW_PREFIX in str(w.message)]
+        assert abi_warnings == []
+
+    def test_missing_multi_key_median_symbols_fall_back_without_abi_skew(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        import pandas_booster
+        import pandas_booster._abi_compat as abi
+        import pandas_booster._rust as rust
+        from pandas_booster.accessor import BoosterAccessor
+
+        monkeypatch.delenv("PANDAS_BOOSTER_STRICT_ABI", raising=False)
+        monkeypatch.delenv("PANDAS_BOOSTER_ABI_SKEW_NOTICE", raising=False)
+        monkeypatch.delenv("PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY", raising=False)
+
+        df = pd.DataFrame(
+            {
+                "k1": [1, 1, 1, 2, 2, 2],
+                "k2": [10, 10, 20, 10, 10, 20],
+                "val": [1.0, 5.0, 9.0, 2.0, 6.0, 10.0],
+            }
+        )
+        by_cols = ["k1", "k2"]
+        expected = df.groupby(by_cols, sort=True)["val"].median()
+
+        _delete_groupby_kernel_symbols(monkeypatch, rust, "median", kernel="f64", multi=True)
+        monkeypatch.setattr(rust, "groupby_multi_median_i64", lambda *_args: None, raising=False)
+        monkeypatch.setattr(abi, "_WARNED_ABI_SKEW", False)
+
+        booster = df.booster
+        assert isinstance(booster, BoosterAccessor)
+        fallback_called = {"n": 0}
+        orig_fallback = booster._pandas_fallback
+
+        def wrapped_fallback(wrapped_by_cols, target, wrapped_agg, *, sort: bool):
+            fallback_called["n"] += 1
+            return orig_fallback(wrapped_by_cols, target, wrapped_agg, sort=sort)
+
+        monkeypatch.setattr(booster, "_pandas_fallback", wrapped_fallback)
+
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            accessor_result = _accessor_groupby_result(df, by_cols, "val", "median")
+
+            pandas_booster.activate()
+            try:
+                proxy_result = df.groupby(by_cols, sort=True)["val"].median()
+            finally:
+                pandas_booster.deactivate()
+
+        assert fallback_called["n"] == 1
+        pd.testing.assert_series_equal(accessor_result, expected, check_exact=False, rtol=1e-12)
+        pd.testing.assert_series_equal(proxy_result, expected, check_exact=False, rtol=1e-12)
+
+        abi_warnings = [w for w in rec if issubclass(w.category, abi.PandasBoosterAbiSkewWarning)]
+        abi_warnings = [w for w in abi_warnings if abi.ABI_SKEW_PREFIX in str(w.message)]
+        assert abi_warnings == []
+
+    @pytest.mark.parametrize(
+        ("by", "target", "missing_symbol"),
+        [
+            pytest.param("key", "val", "groupby_median_f64", id="single-key"),
+            pytest.param(["k1", "k2"], "val", "groupby_multi_median_f64", id="multi-key"),
+        ],
+    )
+    def test_missing_median_symbols_still_fall_back_in_strict_abi_before_dispatch(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        by: str | list[str],
+        target: str,
+        missing_symbol: str,
+    ):
+        import pandas_booster
+        import pandas_booster._abi_compat as abi
+        import pandas_booster._rust as rust
+
+        monkeypatch.setenv("PANDAS_BOOSTER_STRICT_ABI", "1")
+        monkeypatch.delenv("PANDAS_BOOSTER_ABI_SKEW_NOTICE", raising=False)
+        monkeypatch.delenv("PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY", raising=False)
+
+        if isinstance(by, str):
+            df = pd.DataFrame(
+                {
+                    "key": np.repeat([1, 2, 3], 4),
+                    "val": np.array([1.0, 2.0, 4.0, 8.0, 2.5, 3.5, 6.5, 7.5, 5.0, 6.0, 9.0, 10.0]),
+                }
+            )
+            _delete_groupby_kernel_symbols(monkeypatch, rust, "median", kernel="f64", multi=False)
+            monkeypatch.setattr(rust, "groupby_median_i64", lambda *_args: None, raising=False)
+        else:
+            df = pd.DataFrame(
+                {
+                    "k1": [1, 1, 1, 2, 2, 2],
+                    "k2": [10, 10, 20, 10, 10, 20],
+                    "val": [1.0, 5.0, 9.0, 2.0, 6.0, 10.0],
+                }
+            )
+            _delete_groupby_kernel_symbols(monkeypatch, rust, "median", kernel="f64", multi=True)
+            monkeypatch.setattr(
+                rust, "groupby_multi_median_i64", lambda *_args: None, raising=False
+            )
+
+        monkeypatch.setattr(abi, "_WARNED_ABI_SKEW", False)
+
+        expected = df.groupby(by, sort=True)[target].median()
+
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            accessor_result = _accessor_groupby_result(df, by, target, "median")
+
+        pd.testing.assert_series_equal(accessor_result, expected, check_exact=False, rtol=1e-12)
+        abi_warnings = [w for w in rec if issubclass(w.category, abi.PandasBoosterAbiSkewWarning)]
+        abi_warnings = [w for w in abi_warnings if abi.ABI_SKEW_PREFIX in str(w.message)]
+        assert abi_warnings == []
+
+        abi._WARNED_ABI_SKEW = False
+        pandas_booster.activate()
+        try:
+            with warnings.catch_warnings(record=True) as rec:
+                warnings.simplefilter("always")
+                proxy_result = df.groupby(by, sort=True)[target].median()
+        finally:
+            pandas_booster.deactivate()
+
+        pd.testing.assert_series_equal(proxy_result, expected, check_exact=False, rtol=1e-12)
+        abi_warnings = [w for w in rec if issubclass(w.category, abi.PandasBoosterAbiSkewWarning)]
+        abi_warnings = [w for w in abi_warnings if abi.ABI_SKEW_PREFIX in str(w.message)]
+        assert abi_warnings == []
+
+    @pytest.mark.parametrize(
+        ("case_name", "df"),
+        [
+            (
+                "extension_dtype_value",
+                pd.DataFrame(
+                    {
+                        "key": np.repeat([1, 2, 3], 4),
+                        "val": pd.array([1.0, 2.0, 4.0, 8.0] * 3, dtype="Float64"),
+                    }
+                ),
+            ),
+            (
+                "nullable_pd_na_value",
+                pd.DataFrame(
+                    {
+                        "key": np.repeat([1, 2, 3], 4),
+                        "val": pd.array([1.0, pd.NA, 4.0, 8.0] * 3, dtype="Float64"),
+                    }
+                ),
+            ),
+            (
+                "extension_dtype_key",
+                pd.DataFrame(
+                    {
+                        "key": pd.array([1, 1, 2, 2, 3, 3], dtype="Int64"),
+                        "val": [1.0, 2.0, 10.0, 14.0, 5.0, 9.0],
+                    }
+                ),
+            ),
+            (
+                "non_integer_key",
+                pd.DataFrame(
+                    {
+                        "key": ["a", "a", "b", "b", "c", "c"],
+                        "val": [1.0, 2.0, 10.0, 14.0, 5.0, 9.0],
+                    }
+                ),
+            ),
+            (
+                "bool_value",
+                pd.DataFrame(
+                    {
+                        "key": [1, 1, 2, 2, 3, 3],
+                        "val": [True, False, True, True, False, False],
+                    }
+                ),
+            ),
+            (
+                "object_value",
+                pd.DataFrame(
+                    {
+                        "key": [1, 1, 2, 2, 3, 3],
+                        "val": np.array([1.0, 2.0, 10.0, 14.0, 5.0, 9.0], dtype=object),
+                    }
+                ),
+            ),
+            (
+                "string_value",
+                pd.DataFrame(
+                    {
+                        "key": [1, 1, 2, 2],
+                        "val": ["a", "b", "c", "d"],
+                    }
+                ),
+            ),
+            (
+                "category_value",
+                pd.DataFrame(
+                    {
+                        "key": [1, 1, 2, 2],
+                        "val": pd.Categorical(["a", "b", "c", "d"]),
+                    }
+                ),
+            ),
+            (
+                "datetime_value",
+                pd.DataFrame(
+                    {
+                        "key": [1, 1, 2, 2],
+                        "val": pd.date_range("2026-01-01", periods=4),
+                    }
+                ),
+            ),
+            (
+                "uint64_value",
+                pd.DataFrame(
+                    {
+                        "key": [1, 1, 2, 2, 3, 3],
+                        "val": np.array([0, 2**63, 4, 8, 16, 32], dtype=np.uint64),
+                    }
+                ),
+            ),
+            (
+                "uint64_key",
+                pd.DataFrame(
+                    {
+                        "key": np.array([0, 0, 2**63, 2**63], dtype=np.uint64),
+                        "val": [1.0, 2.0, 10.0, 14.0],
+                    }
+                ),
+            ),
+        ],
+    )
+    def test_median_unsupported_domains_fall_back_for_accessor_and_proxy(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        case_name: str,
+        df: pd.DataFrame,
+    ):
+        import pandas_booster._rust as rust
+
+        _patch_all_numeric_kernels_for_agg_to_raise(
+            monkeypatch,
+            rust,
+            "median",
+            f"{case_name} should stay on pandas fallback for median",
+        )
+
+        try:
+            expected = df.groupby("key", sort=True)["val"].median()
+        except Exception as pandas_exc:
+            with pytest.raises(type(pandas_exc)):
+                _ = _accessor_groupby_result(df, "key", "val", "median")
+            with pytest.raises(type(pandas_exc)):
+                _ = _proxy_groupby_result(df, "key", "val", "median")
+            return
+
+        accessor_result = _accessor_groupby_result(df, "key", "val", "median")
+        proxy_result = _proxy_groupby_result(df, "key", "val", "median")
+
+        pd.testing.assert_series_equal(accessor_result, expected, check_exact=False, rtol=1e-12)
+        pd.testing.assert_series_equal(proxy_result, expected, check_exact=False, rtol=1e-12)
+
+
+class TestProdEdgeCases:
+    def _assert_float_prod_equal(self, result: pd.Series, expected: pd.Series) -> None:
+        pd.testing.assert_series_equal(
+            result.sort_index(),
+            expected.sort_index(),
+            check_exact=False,
+            rtol=1e-10,
+            atol=0.0,
+        )
+        result_sorted = result.sort_index()
+        expected_sorted = expected.sort_index()
+        zero_mask = (expected_sorted.to_numpy() == 0.0) & ~pd.isna(expected_sorted.to_numpy())
+        if zero_mask.any():
+            np.testing.assert_array_equal(
+                np.signbit(result_sorted.to_numpy()[zero_mask]),
+                np.signbit(expected_sorted.to_numpy()[zero_mask]),
+            )
+
+    def test_below_threshold_prod_falls_back_without_rust_symbol(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        import pandas_booster._rust as rust
+
+        threshold = rust.get_fallback_threshold()
+        n = max(1, threshold - 1)
+        df = pd.DataFrame(
+            {
+                "key": np.resize(np.array([1, 2], dtype=np.int64), n),
+                "val": np.linspace(1.001, 1.01, n, dtype=np.float64),
+            }
+        )
+
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("below-threshold prod should use pandas fallback")
+
+        for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
+            monkeypatch.setattr(rust, f"groupby_prod_f64{suffix}", _boom, raising=False)
+
+        result = df.booster.groupby("key", "val", "prod")
+        expected = df.groupby("key")["val"].prod()
+        self._assert_float_prod_equal(result, expected)
+
+    @pytest.mark.parametrize("sort", [True, False])
+    def test_at_threshold_single_key_float_prod_invokes_expected_rust_symbol(
+        self, monkeypatch: pytest.MonkeyPatch, sort: bool
+    ):
+        import pandas_booster._rust as rust
+
+        threshold = rust.get_fallback_threshold()
+        n = threshold
+        df = pd.DataFrame(
+            {
+                "key": np.resize(np.array([1, 2], dtype=np.int64), n),
+                "val": np.linspace(1.001, 1.01, n, dtype=np.float64),
+            }
+        )
+        expected = df.groupby("key", sort=sort)["val"].prod()
+        calls: list[str] = []
+
+        symbol = "groupby_prod_f64_sorted" if sort else "groupby_prod_f64_firstseen_u32"
+
+        def fake_kernel(_keys, _values):
+            calls.append(symbol)
+            return expected.index.to_numpy(dtype=np.int64), expected.to_numpy(dtype=np.float64)
+
+        monkeypatch.setattr(rust, symbol, fake_kernel, raising=False)
+
+        result = df.booster.groupby("key", "val", "prod", sort=sort)
+
+        assert calls == [symbol]
+        self._assert_float_prod_equal(result, expected)
+
+    @pytest.mark.parametrize("sort", [True, False])
+    def test_multi_key_below_threshold_prod_falls_back_without_rust_symbol(
+        self, monkeypatch: pytest.MonkeyPatch, sort: bool
+    ):
+        import pandas_booster._rust as rust
+
+        threshold = rust.get_fallback_threshold()
+        n = max(1, threshold - 1)
+        df = pd.DataFrame(
+            {
+                "k1": np.resize(np.array([1, 2], dtype=np.int64), n),
+                "k2": np.resize(np.array([10, 20, 30], dtype=np.int64), n),
+                "val": np.linspace(1.001, 1.01, n, dtype=np.float64),
+            }
+        )
+
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("below-threshold multi-key prod should use pandas fallback")
+
+        for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
+            monkeypatch.setattr(rust, f"groupby_multi_prod_f64{suffix}", _boom, raising=False)
+
+        result = df.booster.groupby(["k1", "k2"], "val", "prod", sort=sort)
+        expected = df.groupby(["k1", "k2"], sort=sort)["val"].prod()
+        self._assert_float_prod_equal(result, expected)
+
+    @pytest.mark.parametrize(
+        ("sort", "symbol"),
+        [
+            pytest.param(True, "groupby_multi_prod_f64_sorted", id="sorted"),
+            pytest.param(False, "groupby_multi_prod_f64_firstseen_u32", id="firstseen-u32"),
+        ],
+    )
+    def test_multi_key_at_threshold_prod_invokes_expected_rust_symbol(
+        self, monkeypatch: pytest.MonkeyPatch, sort: bool, symbol: str
+    ):
+        import pandas_booster._rust as rust
+
+        threshold = rust.get_fallback_threshold()
+        n = threshold
+        df = pd.DataFrame(
+            {
+                "k1": np.resize(np.array([1, 2], dtype=np.int64), n),
+                "k2": np.resize(np.array([10, 20, 30], dtype=np.int64), n),
+                "val": np.linspace(1.001, 1.01, n, dtype=np.float64),
+            }
+        )
+        expected = df.groupby(["k1", "k2"], sort=sort)["val"].prod()
+        calls: list[str] = []
+
+        def fake_kernel(_key_arrays, _values):
+            calls.append(symbol)
+            return [
+                expected.index.get_level_values(0).to_numpy(dtype=np.int64),
+                expected.index.get_level_values(1).to_numpy(dtype=np.int64),
+            ], expected.to_numpy(dtype=np.float64)
+
+        monkeypatch.setattr(rust, symbol, fake_kernel, raising=False)
+        result = df.booster.groupby(["k1", "k2"], "val", "prod", sort=sort)
+
+        assert calls == [symbol]
+        self._assert_float_prod_equal(result, expected)
+
+    @pytest.mark.parametrize("dtype", ["Int64", "boolean"])
+    def test_nullable_and_bool_prod_fallback_avoids_rust(
+        self, monkeypatch: pytest.MonkeyPatch, dtype: str
+    ):
+        import pandas_booster._rust as rust
+
+        n = 120_000
+        if dtype == "Int64":
+            val = pd.array(np.resize(np.array([1, 2, pd.NA], dtype=object), n), dtype="Int64")
+        else:
+            val = pd.array(np.resize(np.array([True, False], dtype=object), n), dtype="boolean")
+        df = pd.DataFrame({"key": np.resize(np.array([1, 2], dtype=np.int64), n), "val": val})
+
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("unsupported prod dtype should use pandas fallback")
+
+        for kernel in ("f64", "i64"):
+            for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
+                monkeypatch.setattr(rust, f"groupby_prod_{kernel}{suffix}", _boom, raising=False)
+
+        result = df.booster.groupby("key", "val", "prod")
+        expected = df.groupby("key")["val"].prod()
+        pd.testing.assert_series_equal(result.sort_index(), expected.sort_index())
+
+    def test_uint64_value_prod_fallback_avoids_unsafe_cast(self, monkeypatch: pytest.MonkeyPatch):
+        import pandas_booster._rust as rust
+
+        n = 120_000
+        df = pd.DataFrame(
+            {
+                "key": np.resize(np.array([1, 2], dtype=np.int64), n),
+                "val": np.resize(np.array([2**63, 3], dtype=np.uint64), n),
+            }
+        )
+
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("uint64 prod should not enter Rust acceleration")
+
+        for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
+            monkeypatch.setattr(rust, f"groupby_prod_i64{suffix}", _boom, raising=False)
+
+        result = df.booster.groupby("key", "val", "prod")
+        expected = df.groupby("key")["val"].prod()
+        pd.testing.assert_series_equal(result.sort_index(), expected.sort_index())
+
+    @pytest.mark.parametrize("dtype", [np.uint8, np.uint16, np.uint32])
+    def test_small_unsigned_prod_is_pandas_compatible(self, dtype):
+        import pandas_booster  # noqa: F401
+
+        n = 120_000
+        df = pd.DataFrame(
+            {
+                "key": np.resize(np.array([1, 2, 3], dtype=np.int64), n),
+                "val": np.resize(np.array([2, 3, 4], dtype=dtype), n),
+            }
+        )
+        result = df.booster.groupby("key", "val", "prod")
+        expected = df.groupby("key")["val"].prod()
+        pd.testing.assert_series_equal(result.sort_index(), expected.sort_index(), check_dtype=True)
+        assert result.dtype == expected.dtype == np.dtype("uint64")
+
+    @pytest.mark.parametrize(
+        ("dtype", "factor", "expected_prod"),
+        [(np.int8, 20, 400), (np.int16, 200, 40_000), (np.int32, 50_000, 2_500_000_000)],
+    )
+    @pytest.mark.parametrize("sort", [True, False])
+    def test_signed_narrow_integer_prod_falls_back_to_pandas_single_key(
+        self, monkeypatch: pytest.MonkeyPatch, dtype, factor: int, expected_prod: int, sort: bool
+    ):
+        import pandas_booster._rust as rust
+
+        n = 120_000
+        values = np.ones(n, dtype=dtype)
+        values[0] = factor
+        values[1] = factor
+        values[n // 2] = 3
+        values[n // 2 + 1] = 4
+        df = pd.DataFrame(
+            {
+                "key": np.repeat(np.array([1, 2], dtype=np.int64), n // 2),
+                "val": values,
+            }
+        )
+
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("narrow signed prod should use pandas fallback")
+
+        for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
+            monkeypatch.setattr(rust, f"groupby_prod_i64{suffix}", _boom, raising=False)
+
+        result = df.booster.groupby("key", "val", "prod", sort=sort)
+        expected = df.groupby("key", sort=sort)["val"].prod()
+        pd.testing.assert_series_equal(result, expected, check_exact=True, check_dtype=True)
+        assert expected.loc[1] == expected_prod
+
+    @pytest.mark.parametrize(
+        ("dtype", "factor", "expected_prod"),
+        [(np.int8, 20, 400), (np.int16, 200, 40_000), (np.int32, 50_000, 2_500_000_000)],
+    )
+    @pytest.mark.parametrize("sort", [True, False])
+    def test_signed_narrow_integer_prod_falls_back_to_pandas_multi_key(
+        self, monkeypatch: pytest.MonkeyPatch, dtype, factor: int, expected_prod: int, sort: bool
+    ):
+        import pandas_booster._rust as rust
+
+        n = 120_000
+        keys = np.repeat(np.array([1, 2], dtype=np.int64), n // 2)
+        values = np.ones(n, dtype=dtype)
+        values[0] = factor
+        values[1] = factor
+        values[n // 2] = 3
+        values[n // 2 + 1] = 4
+        df = pd.DataFrame(
+            {
+                "k1": keys,
+                "k2": np.where(keys == 1, 10, 20).astype(np.int64),
+                "val": values,
+            }
+        )
+
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("narrow signed multi-key prod should use pandas fallback")
+
+        for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
+            monkeypatch.setattr(rust, f"groupby_multi_prod_i64{suffix}", _boom, raising=False)
+
+        result = df.booster.groupby(["k1", "k2"], "val", "prod", sort=sort)
+        expected = df.groupby(["k1", "k2"], sort=sort)["val"].prod()
+        pd.testing.assert_series_equal(result, expected, check_exact=True, check_dtype=True)
+        assert expected.loc[(1, 10)] == expected_prod
+
+    def test_multi_key_proxy_unsigned_prod_falls_back_to_pandas(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        import pandas_booster._rust as rust
+
+        n = 120_000
+        df = pd.DataFrame(
+            {
+                "k1": np.resize(np.array([1, 2, 3], dtype=np.int64), n),
+                "k2": np.resize(np.array([10, 20], dtype=np.int64), n),
+                "val": np.resize(np.array([2, 3, 4], dtype=np.uint32), n),
+            }
+        )
+
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("unsigned multi-key proxy prod should use pandas fallback")
+
+        for kernel in ("f64", "i64"):
+            for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
+                monkeypatch.setattr(
+                    rust, f"groupby_multi_prod_{kernel}{suffix}", _boom, raising=False
+                )
+
+        result = _proxy_groupby_result(df, ["k1", "k2"], "val", "prod", sort=False)
+        expected = df.groupby(["k1", "k2"], sort=False)["val"].prod()
+        pd.testing.assert_series_equal(result, expected, check_dtype=True)
+        assert result.dtype == expected.dtype == np.dtype("uint64")
+
+    def test_int64_prod_overflow_matches_pandas(self):
+        import pandas_booster  # noqa: F401
+
+        n = 120_000
+        df = pd.DataFrame(
+            {
+                "key": np.ones(n, dtype=np.int64),
+                "val": np.resize(np.array([2**62, 4, -3], dtype=np.int64), n),
+            }
+        )
+        result = df.booster.groupby("key", "val", "prod")
+        expected = df.groupby("key")["val"].prod()
+        pd.testing.assert_series_equal(result.sort_index(), expected.sort_index(), check_exact=True)
+
+    def test_float_prod_special_values_match_pandas(self):
+        import pandas_booster  # noqa: F401
+
+        pairs = [
+            (1, np.nan),
+            (1, np.nan),
+            (2, np.nan),
+            (2, 2.0),
+            (3, np.inf),
+            (3, 0.0),
+            (4, -np.inf),
+            (4, 0.0),
+            (5, -0.0),
+            (5, 2.0),
+            (6, 0.0),
+            (6, -2.0),
+            (7, -0.0),
+            (7, -2.0),
+            (8, 1e308),
+            (8, 1e308),
+            (9, 1e-308),
+            (9, 1e-308),
+        ]
+        repeats = 12_500
+        df = pd.DataFrame(
+            {
+                "key": np.array([k for k, _ in pairs] * repeats, dtype=np.int64),
+                "val": np.array([v for _, v in pairs] * repeats, dtype=np.float64),
+            }
+        )
+        result = df.booster.groupby("key", "val", "prod")
+        expected = df.groupby("key")["val"].prod()
+        self._assert_float_prod_equal(result, expected)
+        assert expected.loc[1] == 1.0
+        assert np.isnan(expected.loc[3]) and np.isnan(result.loc[3])
+        assert np.isnan(expected.loc[4]) and np.isnan(result.loc[4])

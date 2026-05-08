@@ -8,7 +8,8 @@ import pandas as pd
 
 from ._abi_compat import raise_abi_skew
 
-AggFunc = Literal["sum", "mean", "min", "max", "count", "std", "var"]
+AggFunc = Literal["sum", "mean", "prod", "min", "max", "count", "std", "var", "median"]
+ORDERED_SINGLE_KEY_FLOAT_PROD_ABI_MARKER = "has_ordered_single_key_float_prod_abi"
 
 
 class GroupByCompatibility(NamedTuple):
@@ -29,6 +30,20 @@ def select_rust_groupby_func(
 
     Returns (callable, needs_python_sort).
     """
+    if func_base == "groupby_prod_f64" and not hasattr(
+        rust, ORDERED_SINGLE_KEY_FLOAT_PROD_ABI_MARKER
+    ):
+        if context is None:
+            raise AttributeError(ORDERED_SINGLE_KEY_FLOAT_PROD_ABI_MARKER)
+        raise_abi_skew(
+            context=context,
+            detail=(
+                "missing Rust capability marker "
+                f"{ORDERED_SINGLE_KEY_FLOAT_PROD_ABI_MARKER!r} while resolving "
+                "ordered single-key float 'prod'."
+            ),
+        )
+
     def _lookup(symbol: str) -> Callable[..., Any]:
         try:
             return getattr(rust, symbol)
@@ -37,9 +52,7 @@ def select_rust_groupby_func(
                 raise
             raise_abi_skew(
                 context=context,
-                detail=(
-                    f"missing Rust kernel symbol {symbol!r} while resolving {func_base!r}."
-                ),
+                detail=(f"missing Rust kernel symbol {symbol!r} while resolving {func_base!r}."),
             )
 
     if not sort:
@@ -55,6 +68,36 @@ def select_rust_groupby_func(
         # Python/Rust wheel mismatch (or older extension): fall back to the
         # legacy path and let Python sort_index() handle ordering.
         return _lookup(func_base), True
+
+
+def has_rust_groupby_func(
+    rust: Any,
+    func_base: str,
+    *,
+    sort: bool,
+    n_rows: int,
+    force_pandas_sort: bool,
+) -> bool:
+    """Return whether a Rust groupby kernel is available without warning.
+
+    This mirrors `select_rust_groupby_func` symbol selection but treats missing
+    symbols as a normal negative result. It is used for staged Python dispatch
+    where a compatibility policy can be certified before the matching Rust
+    kernel ships.
+    """
+    if func_base == "groupby_prod_f64" and not hasattr(
+        rust, ORDERED_SINGLE_KEY_FLOAT_PROD_ABI_MARKER
+    ):
+        return False
+
+    if not sort:
+        suffix = firstseen_suffix(sort=False, n_rows=n_rows)
+        return hasattr(rust, f"{func_base}{suffix}")
+
+    if force_pandas_sort:
+        return hasattr(rust, func_base)
+
+    return hasattr(rust, f"{func_base}_sorted") or hasattr(rust, func_base)
 
 
 def firstseen_suffix(*, sort: bool, n_rows: int) -> str:
@@ -117,6 +160,10 @@ def is_supported_value_dtype(value_col: pd.Series, *, agg: AggFunc) -> bool:
     value_dtype = capture_value_numpy_dtype(value_col)
     if value_dtype.kind == "u" and value_dtype.itemsize == 8:
         return False
+    if agg == "prod" and value_dtype.kind == "u":
+        return False
+    if agg == "prod" and value_dtype.kind == "i" and value_dtype.itemsize < 8:
+        return False
     return not (agg in {"std", "var"} and value_dtype.kind == "u")
 
 
@@ -140,7 +187,7 @@ def classify_groupby_compatibility(
 
     if (
         len(key_cols) == 1
-        and agg in {"std", "var"}
+        and agg in {"sum", "mean", "prod", "std", "var", "median"}
         and pd.api.types.is_float_dtype(val_col)
         and force_pandas_float_groupby
     ):
@@ -182,7 +229,7 @@ def build_series_from_single_result(
             np.int64
             if agg == "count"
             else value_dtype
-            if is_val_int and agg in {"sum", "min", "max"}
+            if is_val_int and agg in {"sum", "prod", "min", "max"}
             else np.float64
         )
         return pd.Series([], index=idx, name=name, dtype=out_dtype)
@@ -193,7 +240,7 @@ def build_series_from_single_result(
     values_arr = np.asarray(result_values)
     if agg == "count":
         values_arr = values_arr.astype(np.int64, copy=False)
-    elif is_val_int and agg in {"sum", "min", "max"}:
+    elif is_val_int and agg in {"sum", "prod", "min", "max"}:
         values_arr = values_arr.astype(value_dtype, copy=False)
     else:
         values_arr = values_arr.astype(np.float64, copy=False)
@@ -238,7 +285,7 @@ def build_series_from_multi_result(
             np.int64
             if agg == "count"
             else value_dtype
-            if is_val_int and agg in {"sum", "min", "max"}
+            if is_val_int and agg in {"sum", "prod", "min", "max"}
             else np.float64
         )
         return pd.Series([], index=idx, name=name, dtype=out_dtype)
@@ -260,7 +307,7 @@ def build_series_from_multi_result(
     values_arr = np.asarray(result_values)
     if agg == "count":
         values_arr = values_arr.astype(np.int64, copy=False)
-    elif is_val_int and agg in {"sum", "min", "max"}:
+    elif is_val_int and agg in {"sum", "prod", "min", "max"}:
         values_arr = values_arr.astype(value_dtype, copy=False)
     else:
         values_arr = values_arr.astype(np.float64, copy=False)
