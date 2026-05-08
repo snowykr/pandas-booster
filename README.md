@@ -189,71 +189,23 @@ The library is designed for large datasets where multi-core parallelism can be f
 **Benchmark methodology:**
 - **Process Isolation:** Benchmarks use rigorous process isolation to ensure accurate results.
 - **Host machine:** MacBook Pro (Mac15,6), Apple M3 Pro, 11 CPU cores (5 Performance + 6 Efficiency), 18 GB RAM, macOS 26.4.1.
-- **Samples:** The tables below were generated with `--samples 20` (default: 5). Each sample runs in a fresh Python process.
-- **Cold:** Average of 20 fresh process executions (1st run measured immediately).
-- **Warm:** Average of 20 fresh process executions. Each process runs Cold once and a Warmup once (both discarded), then measures the next run (steady state).
+- **Samples:** The checked-in benchmark reports are lightweight smoke artifacts generated with `--samples 1 --cardinality standard --sort-mode sorted`. Use `--samples 20` for publication-quality local reports. Each sample runs in a fresh Python process.
+- **Cold:** Average of the requested fresh process executions (1st run measured immediately).
+- **Warm:** Average of the requested fresh process executions. Each process runs Cold once and a Warmup once (both discarded), then measures the next run (steady state).
 - **Correctness:** Booster and Polars outputs are validated against a Pandas baseline. For `sort=False`, benchmarks validate Pandas-compatible appearance order (first-seen group order).
 - **Polars sort handling:** Polars does not have a `sort` parameter in `group_by`. For fair comparison, I define `sort=True` as "groupby+agg followed by sorting the result by keys" (cost included in timing), and `sort=False` as "groupby+agg with Pandas-compatible appearance order (first-seen group order)". This ensures all three engines (Pandas, Polars, Booster) are measured under identical conditions.
 - **Profile evidence:** `--profile-json` writes internal single-key `std`/`var` phase timings for the Rust path (`local_build`, `merge`, `reorder`, `materialize`, and Python post-processing) so benchmark reports can separate kernel time from conversion and Series construction overhead.
 - **Speedup baseline:** All speedup values (`x`) use **Pandas** as the baseline (1.0x) within each sort mode.
 - **Optional Polars:** Polars is included in the benchmarks for comparison if installed. If not installed, the benchmark suite proceeds with Pandas vs Booster only.
 
-### Standard Cardinality (5M rows)
-
-| Aggregation | Workload | Groups | Sort | Type | Pandas | Polars | Booster |
-|-------------|----------|--------|------|------|--------|--------|---------|
-| `sum` | Single-key | 1,000 | True | Cold | 85.9±49.3ms (1.0x) | 37.4±10.1ms (**2.3x**) | 4.5±1.4ms (**19.0x**) |
-| `sum` |  |  |  | Warm | 58.4±43.5ms (1.0x) | 26.5±5.5ms (**2.2x**) | 3.6±1.5ms (**16.2x**) |
-| `sum` |  |  | False | Cold | 28.8±1.4ms (1.0x) | 23.6±2.6ms (**1.2x**) | 3.3±0.8ms (**8.6x**) |
-| `sum` |  |  |  | Warm | 23.9±1.0ms (1.0x) | 20.2±1.5ms (**1.2x**) | 2.8±0.6ms (**8.7x**) |
-| `sum` | 2-key | 5,000 | True | Cold | 124.6±29.6ms (1.0x) | 109.1±46.3ms (**1.1x**) | 41.2±8.7ms (**3.0x**) |
-| `sum` |  |  |  | Warm | 102.1±38.9ms (1.0x) | 91.3±34.2ms (**1.1x**) | 39.5±4.8ms (**2.6x**) |
-| `sum` |  |  | False | Cold | 67.0±6.8ms (1.0x) | 55.0±11.6ms (**1.2x**) | 30.4±3.0ms (**2.2x**) |
-| `sum` |  |  |  | Warm | 59.9±7.9ms (1.0x) | 44.7±5.1ms (**1.3x**) | 31.7±3.3ms (**1.9x**) |
-| `sum` | 3-key | 25,000 | True | Cold | 149.5±31.1ms (1.0x) | 150.1±50.4ms (1.0x) | 57.2±15.4ms (**2.6x**) |
-| `sum` |  |  |  | Warm | 142.5±26.2ms (1.0x) | 128.8±42.6ms (**1.1x**) | 138.4±48.6ms (1.0x) |
-| `sum` |  |  | False | Cold | 104.9±6.2ms (1.0x) | 72.5±17.3ms (**1.4x**) | 68.0±16.1ms (**1.5x**) |
-| `sum` |  |  |  | Warm | 91.1±1.3ms (1.0x) | 79.3±24.5ms (**1.1x**) | 74.8±17.5ms (**1.2x**) |
-| `sum` | 4-key | 100,000 | True | Cold | 263.6±71.1ms (1.0x) | 132.0±28.3ms (**2.0x**) | 132.8±53.1ms (**2.0x**) |
-| `sum` |  |  |  | Warm | 150.5±18.9ms (1.0x) | 138.4±28.8ms (1.1x) | 108.5±38.9ms (**1.4x**) |
-| `sum` |  |  | False | Cold | 185.3±39.7ms (1.0x) | 208.0±62.9ms (0.9x) | 71.3±19.6ms (**2.6x**) |
-| `sum` |  |  |  | Warm | 135.5±18.3ms (1.0x) | 104.8±22.2ms (**1.3x**) | 105.7±28.0ms (**1.3x**) |
-| `sum` | 5-key | 993,138 | True | Cold | 346.9±30.2ms (1.0x) | 254.0±72.0ms (**1.4x**) | 204.9±57.1ms (**1.7x**) |
-| `sum` |  |  |  | Warm | 387.4±109.0ms (1.0x) | 289.8±79.9ms (**1.3x**) | 209.3±44.0ms (**1.9x**) |
-| `sum` |  |  | False | Cold | 351.9±63.9ms (1.0x) | 306.8±161.1ms (**1.1x**) | 125.6±35.3ms (**2.8x**) |
-| `sum` |  |  |  | Warm | 437.8±104.2ms (1.0x) | 207.3±33.2ms (**2.1x**) | 151.1±25.0ms (**2.9x**) |
-
-### High Cardinality (5M rows, ~5M unique groups)
-
-| Aggregation | Workload | Groups | Sort | Type | Pandas | Polars | Booster |
-|-------------|----------|--------|------|------|--------|--------|---------|
-| `sum` | Single-key | 3,160,983 | True | Cold | 868.9±23.3ms (1.0x) | 156.5±18.1ms (**5.6x**) | 345.5±107.0ms (**2.5x**) |
-| `sum` |  |  |  | Warm | 887.7±70.5ms (1.0x) | 148.9±22.1ms (**6.0x**) | 322.4±67.7ms (**2.8x**) |
-| `sum` |  |  | False | Cold | 252.0±10.4ms (1.0x) | 217.5±13.5ms (**1.2x**) | 348.5±44.2ms (0.7x) |
-| `sum` |  |  |  | Warm | 268.5±44.0ms (1.0x) | 191.3±13.2ms (**1.4x**) | 377.2±111.8ms (0.7x) |
-| `sum` | 2-key | 4,532,339 | True | Cold | 999.4±47.5ms (1.0x) | 308.0±49.0ms (**3.2x**) | 416.2±25.7ms (**2.4x**) |
-| `sum` |  |  |  | Warm | 1000.4±55.6ms (1.0x) | 307.6±124.1ms (**3.3x**) | 441.6±143.9ms (**2.3x**) |
-| `sum` |  |  | False | Cold | 510.5±70.3ms (1.0x) | 259.9±17.0ms (**2.0x**) | 382.1±128.2ms (**1.3x**) |
-| `sum` |  |  |  | Warm | 376.3±20.6ms (1.0x) | 334.0±57.8ms (**1.1x**) | 319.3±74.2ms (**1.2x**) |
-| `sum` | 3-key | 4,901,309 | True | Cold | 993.1±24.9ms (1.0x) | 353.7±14.8ms (**2.8x**) | 683.0±77.4ms (**1.5x**) |
-| `sum` |  |  |  | Warm | 980.0±28.8ms (1.0x) | 374.0±34.4ms (**2.6x**) | 670.1±82.8ms (**1.5x**) |
-| `sum` |  |  | False | Cold | 601.6±96.9ms (1.0x) | 433.0±42.0ms (**1.4x**) | 258.2±16.1ms (**2.3x**) |
-| `sum` |  |  |  | Warm | 725.9±69.7ms (1.0x) | 415.8±78.8ms (**1.7x**) | 221.2±29.4ms (**3.3x**) |
-
-### Correctness
-
-- Polars: pass (32/32)
-- Booster: pass (32/32)
-
-**Performance characteristics**:
-- **Single-key (standard cardinality)**: Warm state shows **8.7-16.2x** speedup over Pandas baseline (cold: **8.6-19.0x**). Booster also outperforms Polars across these single-key standard-cardinality runs.
-- **Multi-key (standard cardinality)**: Booster stays faster than Pandas across 2-5 keys in both sort modes, with warm gains ranging from **1.0-2.9x** and cold gains from **1.5-3.0x**. Relative to Polars, Booster wins most standard-cardinality multi-key cases, but some higher-key warm paths narrow to near parity.
-- **High cardinality (~5M unique groups)**: With `sort=True`, Booster remains faster than Pandas by **1.5-2.8x** warm, while Polars still leads the sorted path. With `sort=False`, single-key performance falls behind Pandas (**0.7x** warm), but multi-key workloads recover to **1.2-3.3x** warm gains over Pandas.
-- **Sort overhead**: For Pandas, `sort=False` is often a substantial win on high-cardinality workloads and still usually helps on standard-cardinality runs. For Booster, `sort=False` is highly workload-dependent: it helps clearly on standard 5-key and high-cardinality multi-key cases, but can be neutral or worse on single-key/high-cardinality paths.
+Benchmark tables are stored as per-aggregation reports under [`benchmarks/reports/`](benchmarks/reports/).
+Generated benchmark Markdown files carry a provenance marker, and reruns only overwrite or delete
+files with that marker so custom output directories cannot silently clobber unrelated `README.md`
+or `<agg>.md` files.
 
 ### Sorted vs Appearance-Ordered Results
 
-By default, results are sorted by group keys to match Pandas `sort=True` output. Pass `sort=False` to preserve Pandas' appearance order (first-seen group order). Performance impact depends on workload (see tables above):
+By default, results are sorted by group keys to match Pandas `sort=True` output. Pass `sort=False` to preserve Pandas' appearance order (first-seen group order). Performance impact depends on workload (see the linked benchmark reports above):
 
 ```python
 # Sorted (default) - matches Pandas exactly
@@ -265,29 +217,35 @@ result = df.booster.groupby(by=["a", "b"], target="val", agg="sum", sort=False)
 
 ### Benchmark Reproduction
 
-To reproduce the benchmark results shown above:
+To reproduce the checked-in benchmark reports:
 
 ```bash
 # Install benchmark dependencies and build in release mode
 pip install -e ".[bench,dev]"
 maturin develop --release
 
-# Run default benchmarks (standard + high)
-python benches/benchmark.py --samples 20 --output results.md
+# Run the lightweight checked-in smoke reports for all supported aggregations
+python benchmarks/generate_docs.py --samples 1 --cardinality standard --sort-mode sorted
+
+# Run publication-quality local reports for all supported aggregations
+python benchmarks/generate_docs.py --samples 20
+
+# Run default sum benchmark only (standard + high)
+python benchmarks/benchmark.py --samples 20 --output benchmarks/reports
 
 # Run only selected aggregation functions
-python benches/benchmark.py --agg std --agg var --samples 20 --output results.md
-python benches/benchmark.py --agg median --samples 20 --output results.md
+python benchmarks/benchmark.py --agg std --agg var --samples 20 --output benchmarks/reports
+python benchmarks/benchmark.py --agg median --samples 20 --output benchmarks/reports
 
 # Save single-key std/var phase-profile evidence as JSON
-python benches/benchmark.py --agg std --agg var --samples 20 --profile-json profile.json
+python benchmarks/benchmark.py --agg std --agg var --samples 20 --profile-json profile.json
 
 # Include threshold diagnostics as well
-python benches/benchmark.py --cardinality all --diagnostic threshold --sort-mode unsorted --samples 20 --output results.md
+python benchmarks/benchmark.py --cardinality all --diagnostic threshold --sort-mode unsorted --samples 20 --output benchmarks/reports
 ```
 
 #### Environment & Configuration
-The following environment was used to generate the benchmark results above. 
+The following environment was used to generate the checked-in benchmark reports.
 (Note: These are **not** the minimum requirements for using the library, but strictly the environment used for reproduction).
 
 - **Build Mode**: Release (`maturin develop --release`)
@@ -349,7 +307,7 @@ cargo test
 
 # Python quality and release contract checks
 basedpyright --project pyrightconfig.json
-ruff check python tests scripts
+ruff check python tests scripts benchmarks
 python scripts/check_release_contract.py metadata
 python scripts/check_release_contract.py workflow --file .github/workflows/publish.yml
 
@@ -385,52 +343,55 @@ This installs:
 ```bash
 # Run default benchmarks (cardinality=all, diagnostic=none)
 source .venv/bin/activate
-python benches/benchmark.py
+python benchmarks/benchmark.py
 
 # Run full suite (core + diagnostics)
-python benches/benchmark.py --cardinality all --diagnostic threshold --sort-mode unsorted
+python benchmarks/benchmark.py --cardinality all --diagnostic threshold --sort-mode unsorted
 
 # Run only standard cardinality benchmarks
-python benches/benchmark.py --cardinality standard
+python benchmarks/benchmark.py --cardinality standard
 
 # Run only high cardinality benchmarks
-python benches/benchmark.py --cardinality high
+python benchmarks/benchmark.py --cardinality high
 
 # Run only selected aggregation functions
-python benches/benchmark.py --agg std --agg var
-python benches/benchmark.py --agg median
-python benches/benchmark.py --agg prod
-python benches/benchmark.py --agg min --agg max --cardinality high --sort-mode sorted
+python benchmarks/benchmark.py --agg std --agg var
+python benchmarks/benchmark.py --agg median
+python benchmarks/benchmark.py --agg prod
+python benchmarks/benchmark.py --agg min --agg max --cardinality high --sort-mode sorted
 
 # Add threshold-neighborhood diagnostics (opt-in)
-python benches/benchmark.py --diagnostic threshold --sort-mode unsorted
+python benchmarks/benchmark.py --diagnostic threshold --sort-mode unsorted
 
 # Run only sorted or sort=False benchmarks
-python benches/benchmark.py --sort-mode sorted
-python benches/benchmark.py --sort-mode unsorted
+python benchmarks/benchmark.py --sort-mode sorted
+python benchmarks/benchmark.py --sort-mode unsorted
 
 # Combine options
-python benches/benchmark.py --cardinality high --sort-mode sorted
+python benchmarks/benchmark.py --cardinality high --sort-mode sorted
 
-# Save results to markdown file
-python benches/benchmark.py --output results.md
+# Save per-aggregation benchmark reports
+python benchmarks/benchmark.py --output benchmarks/reports
+
+# Generate benchmark reports for all supported aggregations
+python benchmarks/generate_docs.py
 
 # Save internal single-key std/var profile evidence to JSON
-python benches/benchmark.py --agg std --agg var --profile-json profile.json
+python benchmarks/benchmark.py --agg std --agg var --profile-json profile.json
 
 # Adjust sample count (applies to both cold and warm; default: 5)
-python benches/benchmark.py --samples 20
+python benchmarks/benchmark.py --samples 20
 ```
 
 Note: `--agg` is repeatable and filters the benchmark to only the selected aggregation functions.
-If omitted, the current default behavior is preserved: the core performance tables benchmark `sum`,
-while the extra single-key evidence section benchmarks `std` and `var`.
+If omitted, benchmark reports default to `sum`. Single-key evidence sections are included in
+Markdown reports only when selected `std`/`var` aggregations are emitted.
 
 Note: `median` is fully supported by `--agg` selection for benchmark runs and correctness checks.
 The dedicated `--profile-json` diagnostics remain focused on the single-key `std`/`var` evidence lane.
 
-Note: `--profile-json` is an internal benchmark diagnostics output. It includes the same
-single-key `std`/`var` evidence cases used by the Markdown report, plus phase breakdowns when a
+Note: `--profile-json` is an internal benchmark diagnostics output. By default it includes
+single-key `std`/`var` evidence cases, plus phase breakdowns when a
 Rust-only Booster profile hook is available. Cases that fall back to pandas or require Python
 sorting remain in the JSON with `breakdown: null`.
 

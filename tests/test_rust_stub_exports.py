@@ -170,7 +170,7 @@ def test_prod_surface_mentions_stay_in_sync():
     groupby_accel = repo / "python" / "pandas_booster" / "_groupby_accel.py"
     accessor = repo / "python" / "pandas_booster" / "accessor.py"
     proxy = repo / "python" / "pandas_booster" / "proxy.py"
-    benchmark = repo / "benches" / "benchmark.py"
+    benchmark = repo / "benchmarks" / "benchmark.py"
 
     assert "prod" in _assigned_strings(groupby_accel, "AggFunc")
     assert any(
@@ -193,7 +193,7 @@ def test_prod_surface_mentions_stay_in_sync():
 def test_median_surface_mentions_stay_in_sync():
     repo = _REPO_ROOT
     groupby_accel = repo / "python" / "pandas_booster" / "_groupby_accel.py"
-    benchmark = repo / "benches" / "benchmark.py"
+    benchmark = repo / "benchmarks" / "benchmark.py"
 
     assert "median" in _assigned_strings(groupby_accel, "AggFunc")
     assert any(
