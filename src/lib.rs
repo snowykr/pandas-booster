@@ -2767,174 +2767,195 @@ fn convert_multi_result<'py>(
     convert_multi_result_f64(py, result)
 }
 
+macro_rules! add_pyfunctions {
+    ($module:ident, $( $function_name:ident ),+ $(,)?) => {
+        $( $module.add_function(wrap_pyfunction!($function_name, $module)?)?; )+
+    };
+}
+
 #[pymodule]
 fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    // Single-key groupby
-    m.add_function(wrap_pyfunction!(groupby_sum_f64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_prod_f64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_mean_f64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_median_f64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_var_f64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_std_f64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_min_f64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_max_f64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_sum_i64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_prod_i64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_mean_i64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_median_i64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_var_i64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_std_i64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_min_i64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_max_i64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_count_f64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_count_i64, m)?)?;
-    m.add_function(wrap_pyfunction!(has_ordered_single_key_float_prod_abi, m)?)?;
+    // Single-key groupby exports.
+    add_pyfunctions!(
+        m,
+        groupby_sum_f64,
+        groupby_prod_f64,
+        groupby_mean_f64,
+        groupby_median_f64,
+        groupby_var_f64,
+        groupby_std_f64,
+        groupby_min_f64,
+        groupby_max_f64,
+        groupby_sum_i64,
+        groupby_prod_i64,
+        groupby_mean_i64,
+        groupby_median_i64,
+        groupby_var_i64,
+        groupby_std_i64,
+        groupby_min_i64,
+        groupby_max_i64,
+        groupby_count_f64,
+        groupby_count_i64,
+    );
+    add_pyfunctions!(
+        m,
+        groupby_sum_f64_sorted,
+        groupby_prod_f64_sorted,
+        groupby_mean_f64_sorted,
+        groupby_median_f64_sorted,
+        groupby_var_f64_sorted,
+        groupby_std_f64_sorted,
+        profile_groupby_var_f64_sorted,
+        profile_groupby_std_f64_sorted,
+        groupby_min_f64_sorted,
+        groupby_max_f64_sorted,
+        groupby_count_f64_sorted,
+        groupby_sum_i64_sorted,
+        groupby_prod_i64_sorted,
+        groupby_mean_i64_sorted,
+        groupby_median_i64_sorted,
+        groupby_var_i64_sorted,
+        groupby_std_i64_sorted,
+        groupby_min_i64_sorted,
+        groupby_max_i64_sorted,
+        groupby_count_i64_sorted,
+    );
 
-    // Single-key groupby (sorted, for sort=True)
-    m.add_function(wrap_pyfunction!(groupby_sum_f64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_prod_f64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_mean_f64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_median_f64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_var_f64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_std_f64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(profile_groupby_var_f64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(profile_groupby_std_f64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_min_f64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_max_f64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_count_f64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_sum_i64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_prod_i64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_mean_i64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_median_i64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_var_i64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_std_i64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_min_i64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_max_i64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_count_i64_sorted, m)?)?;
+    // First-seen groupby exports.
+    add_pyfunctions!(
+        m,
+        groupby_sum_f64_firstseen_u32,
+        groupby_sum_f64_firstseen_u64,
+        groupby_prod_f64_firstseen_u32,
+        groupby_prod_f64_firstseen_u64,
+        groupby_mean_f64_firstseen_u32,
+        groupby_mean_f64_firstseen_u64,
+        groupby_median_f64_firstseen_u32,
+        groupby_median_f64_firstseen_u64,
+        groupby_var_f64_firstseen_u32,
+        groupby_var_f64_firstseen_u64,
+        groupby_std_f64_firstseen_u32,
+        groupby_std_f64_firstseen_u64,
+        profile_groupby_var_f64_firstseen_u32,
+        profile_groupby_var_f64_firstseen_u64,
+        profile_groupby_std_f64_firstseen_u32,
+        profile_groupby_std_f64_firstseen_u64,
+        groupby_min_f64_firstseen_u32,
+        groupby_min_f64_firstseen_u64,
+        groupby_max_f64_firstseen_u32,
+        groupby_max_f64_firstseen_u64,
+        groupby_count_f64_firstseen_u32,
+        groupby_count_f64_firstseen_u64,
+        groupby_sum_i64_firstseen_u32,
+        groupby_sum_i64_firstseen_u64,
+        groupby_prod_i64_firstseen_u32,
+        groupby_prod_i64_firstseen_u64,
+        groupby_mean_i64_firstseen_u32,
+        groupby_mean_i64_firstseen_u64,
+        groupby_median_i64_firstseen_u32,
+        groupby_median_i64_firstseen_u64,
+        groupby_var_i64_firstseen_u32,
+        groupby_var_i64_firstseen_u64,
+        groupby_std_i64_firstseen_u32,
+        groupby_std_i64_firstseen_u64,
+        groupby_min_i64_firstseen_u32,
+        groupby_min_i64_firstseen_u64,
+        groupby_max_i64_firstseen_u32,
+        groupby_max_i64_firstseen_u64,
+        groupby_count_i64_firstseen_u32,
+        groupby_count_i64_firstseen_u64,
+    );
+    add_pyfunctions!(
+        m,
+        groupby_multi_sum_f64_firstseen_u32,
+        groupby_multi_sum_f64_firstseen_u64,
+        groupby_multi_prod_f64_firstseen_u32,
+        groupby_multi_prod_f64_firstseen_u64,
+        groupby_multi_mean_f64_firstseen_u32,
+        groupby_multi_mean_f64_firstseen_u64,
+        groupby_multi_median_f64_firstseen_u32,
+        groupby_multi_median_f64_firstseen_u64,
+        groupby_multi_var_f64_firstseen_u32,
+        groupby_multi_var_f64_firstseen_u64,
+        groupby_multi_std_f64_firstseen_u32,
+        groupby_multi_std_f64_firstseen_u64,
+        groupby_multi_min_f64_firstseen_u32,
+        groupby_multi_min_f64_firstseen_u64,
+        groupby_multi_max_f64_firstseen_u32,
+        groupby_multi_max_f64_firstseen_u64,
+        groupby_multi_count_f64_firstseen_u32,
+        groupby_multi_count_f64_firstseen_u64,
+        groupby_multi_sum_i64_firstseen_u32,
+        groupby_multi_sum_i64_firstseen_u64,
+        groupby_multi_prod_i64_firstseen_u32,
+        groupby_multi_prod_i64_firstseen_u64,
+        groupby_multi_mean_i64_firstseen_u32,
+        groupby_multi_mean_i64_firstseen_u64,
+        groupby_multi_median_i64_firstseen_u32,
+        groupby_multi_median_i64_firstseen_u64,
+        groupby_multi_var_i64_firstseen_u32,
+        groupby_multi_var_i64_firstseen_u64,
+        groupby_multi_std_i64_firstseen_u32,
+        groupby_multi_std_i64_firstseen_u64,
+        groupby_multi_min_i64_firstseen_u32,
+        groupby_multi_min_i64_firstseen_u64,
+        groupby_multi_max_i64_firstseen_u32,
+        groupby_multi_max_i64_firstseen_u64,
+        groupby_multi_count_i64_firstseen_u32,
+        groupby_multi_count_i64_firstseen_u64,
+    );
 
-    // Single-key groupby (first-seen order, for sort=False)
-    m.add_function(wrap_pyfunction!(groupby_sum_f64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_sum_f64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_prod_f64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_prod_f64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_mean_f64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_mean_f64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_median_f64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_median_f64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_var_f64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_var_f64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_std_f64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_std_f64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(profile_groupby_var_f64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(profile_groupby_var_f64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(profile_groupby_std_f64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(profile_groupby_std_f64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_min_f64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_min_f64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_max_f64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_max_f64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_count_f64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_count_f64_firstseen_u64, m)?)?;
+    // Multi-key groupby exports.
+    add_pyfunctions!(
+        m,
+        groupby_multi_sum_f64,
+        groupby_multi_prod_f64,
+        groupby_multi_mean_f64,
+        groupby_multi_median_f64,
+        groupby_multi_var_f64,
+        groupby_multi_std_f64,
+        groupby_multi_min_f64,
+        groupby_multi_max_f64,
+        groupby_multi_sum_i64,
+        groupby_multi_prod_i64,
+        groupby_multi_mean_i64,
+        groupby_multi_median_i64,
+        groupby_multi_var_i64,
+        groupby_multi_std_i64,
+        groupby_multi_min_i64,
+        groupby_multi_max_i64,
+        groupby_multi_count_f64,
+        groupby_multi_count_i64,
+    );
+    add_pyfunctions!(
+        m,
+        groupby_multi_sum_f64_sorted,
+        groupby_multi_prod_f64_sorted,
+        groupby_multi_mean_f64_sorted,
+        groupby_multi_median_f64_sorted,
+        groupby_multi_var_f64_sorted,
+        groupby_multi_std_f64_sorted,
+        groupby_multi_min_f64_sorted,
+        groupby_multi_max_f64_sorted,
+        groupby_multi_count_f64_sorted,
+        groupby_multi_sum_i64_sorted,
+        groupby_multi_prod_i64_sorted,
+        groupby_multi_mean_i64_sorted,
+        groupby_multi_median_i64_sorted,
+        groupby_multi_var_i64_sorted,
+        groupby_multi_std_i64_sorted,
+        groupby_multi_min_i64_sorted,
+        groupby_multi_max_i64_sorted,
+        groupby_multi_count_i64_sorted,
+    );
 
-    m.add_function(wrap_pyfunction!(groupby_sum_i64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_sum_i64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_prod_i64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_prod_i64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_mean_i64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_mean_i64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_median_i64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_median_i64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_var_i64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_var_i64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_std_i64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_std_i64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_min_i64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_min_i64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_max_i64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_max_i64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_count_i64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_count_i64_firstseen_u64, m)?)?;
-    // Multi-key groupby
-    m.add_function(wrap_pyfunction!(groupby_multi_sum_f64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_prod_f64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_mean_f64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_median_f64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_var_f64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_std_f64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_min_f64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_max_f64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_sum_i64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_prod_i64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_mean_i64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_median_i64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_var_i64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_std_i64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_min_i64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_max_i64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_count_f64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_count_i64, m)?)?;
-
-    // Multi-key groupby (sorted, for sort=True)
-    m.add_function(wrap_pyfunction!(groupby_multi_sum_f64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_prod_f64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_mean_f64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_median_f64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_var_f64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_std_f64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_min_f64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_max_f64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_count_f64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_sum_i64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_prod_i64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_mean_i64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_median_i64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_var_i64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_std_i64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_min_i64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_max_i64_sorted, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_count_i64_sorted, m)?)?;
-
-    // Multi-key groupby (first-seen order, for sort=False)
-    m.add_function(wrap_pyfunction!(groupby_multi_sum_f64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_sum_f64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_prod_f64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_prod_f64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_mean_f64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_mean_f64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_median_f64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_median_f64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_var_f64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_var_f64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_std_f64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_std_f64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_min_f64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_min_f64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_max_f64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_max_f64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_count_f64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_count_f64_firstseen_u64, m)?)?;
-
-    m.add_function(wrap_pyfunction!(groupby_multi_sum_i64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_sum_i64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_prod_i64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_prod_i64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_mean_i64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_mean_i64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_median_i64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_median_i64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_var_i64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_var_i64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_std_i64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_std_i64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_min_i64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_min_i64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_max_i64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_max_i64_firstseen_u64, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_count_i64_firstseen_u32, m)?)?;
-    m.add_function(wrap_pyfunction!(groupby_multi_count_i64_firstseen_u64, m)?)?;
-    // Utilities
-    m.add_function(wrap_pyfunction!(get_fallback_threshold, m)?)?;
-    m.add_function(wrap_pyfunction!(get_thread_count, m)?)?;
+    // Helper and ABI marker exports.
+    add_pyfunctions!(
+        m,
+        has_ordered_single_key_float_prod_abi,
+        get_fallback_threshold,
+        get_thread_count,
+    );
     Ok(())
 }
 

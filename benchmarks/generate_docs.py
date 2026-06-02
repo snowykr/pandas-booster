@@ -6,19 +6,14 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+BENCHMARKS_DIR = Path(__file__).resolve().parent
+if str(BENCHMARKS_DIR) not in sys.path:
+    sys.path.insert(0, str(BENCHMARKS_DIR))
+
+from reporting import SUPPORTED_AGGS  # noqa: E402
+
 BENCHMARK_SCRIPT = REPO_ROOT / "benchmarks" / "benchmark.py"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "benchmarks" / "reports"
-ALL_AGGS: tuple[str, ...] = (
-    "sum",
-    "mean",
-    "median",
-    "prod",
-    "std",
-    "var",
-    "min",
-    "max",
-    "count",
-)
 
 
 def build_command(args: argparse.Namespace) -> list[str]:
@@ -36,7 +31,7 @@ def build_command(args: argparse.Namespace) -> list[str]:
         "--output",
         str(args.output),
     ]
-    for agg in ALL_AGGS:
+    for agg in SUPPORTED_AGGS:
         command.extend(("--agg", agg))
     return command
 

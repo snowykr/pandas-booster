@@ -1029,9 +1029,7 @@ class TestProdSingleKey:
         df = pd.DataFrame(
             {
                 "key": np.resize(np.array([1, 2], dtype=np.int64), n),
-                "val": np.resize(
-                    np.array([1e308, 1e308, 1e-308, 1e-308], dtype=np.float64), n
-                ),
+                "val": np.resize(np.array([1e308, 1e308, 1e-308, 1e-308], dtype=np.float64), n),
             }
         )
         expected = df.groupby("key", sort=sort)["val"].prod()

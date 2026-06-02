@@ -513,9 +513,7 @@ class TestMultiKeyGroupByMedian:
         mixed_nan = (k1 == 3) & (k2 == 30) & ((np.arange(n) % 2) == 0)
         val_float[mixed_nan] = np.nan
 
-        return pd.DataFrame(
-            {"k1": k1, "k2": k2, "val_float": val_float, "val_int": val_int}
-        )
+        return pd.DataFrame({"k1": k1, "k2": k2, "val_float": val_float, "val_int": val_int})
 
     def _make_three_key_df(self) -> pd.DataFrame:
         n = 240_000
@@ -578,9 +576,7 @@ class TestMultiKeyGroupByMedian:
         )
 
     @pytest.mark.parametrize("target", ["val_float", "val_int"])
-    def test_accessor_two_keys_sort_false_preserves_first_seen_order(
-        self, target: str
-    ) -> None:
+    def test_accessor_two_keys_sort_false_preserves_first_seen_order(self, target: str) -> None:
         df = self._make_ordered_two_key_df()
 
         booster_result = cast(Any, cast(BoosterAccessor, df.booster)).groupby(
@@ -1052,6 +1048,7 @@ class TestMultiKeyAllNaNGroup:
             rtol=1e-10,
         )
 
+
 class TestProdMultiKey:
     def test_composite_key_prod_sort_true_and_false_order(self):
         base = pd.DataFrame(
@@ -1103,11 +1100,7 @@ class TestProdMultiKey:
         expected = df.groupby(["k1", "k2"], sort=sort)["val"].prod()
         calls: list[str] = []
 
-        symbol = (
-            "groupby_multi_prod_f64_sorted"
-            if sort
-            else "groupby_multi_prod_f64_firstseen_u32"
-        )
+        symbol = "groupby_multi_prod_f64_sorted" if sort else "groupby_multi_prod_f64_firstseen_u32"
         original = getattr(rust, symbol)
 
         def wrapped(*args, **kwargs):
@@ -1116,9 +1109,7 @@ class TestProdMultiKey:
 
         monkeypatch.setattr(rust, symbol, wrapped, raising=False)
 
-        result = cast(BoosterAccessor, df.booster).groupby(
-            ["k1", "k2"], "val", "prod", sort=sort
-        )
+        result = cast(BoosterAccessor, df.booster).groupby(["k1", "k2"], "val", "prod", sort=sort)
 
         assert calls == [symbol]
         pd.testing.assert_series_equal(result, expected, check_exact=True)

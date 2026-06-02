@@ -5,6 +5,10 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _RUST_LIB_PATH = _REPO_ROOT / "src" / "lib.rs"
 _RUST_STUB_PATH = _REPO_ROOT / "python" / "pandas_booster" / "_rust.pyi"
+_GROUPBY_ACCEL_PATH = _REPO_ROOT / "python" / "pandas_booster" / "_groupby_accel.py"
+_BENCHMARK_REPORTING_PATH = _REPO_ROOT / "benchmarks" / "reporting.py"
+_BENCHMARK_REPORTING_CONSTANTS_PATH = _REPO_ROOT / "benchmarks" / "reporting_constants.py"
+_ALL_GROUPBY_AGGS = ("sum", "prod", "mean", "median", "var", "std", "min", "max", "count")
 
 
 def _python_module(path: Path) -> ast.Module:
@@ -16,12 +20,17 @@ def _literal_strings(node: ast.AST) -> set[str]:
         return {node.value}
     if isinstance(node, ast.Subscript):
         return _literal_strings(node.slice)
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {
-        "frozenset",
-        "set",
-        "tuple",
-        "list",
-    }:
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id
+        in {
+            "frozenset",
+            "set",
+            "tuple",
+            "list",
+        }
+    ):
         return set().union(*(_literal_strings(arg) for arg in node.args))
     if isinstance(node, ast.Dict):
         return set().union(*(_literal_strings(key) for key in node.keys if key is not None))
@@ -111,21 +120,32 @@ def _readme_force_float_groupby_aggs() -> set[str]:
     }
 
 
-def test_rust_pyi_exports_match_pyo3_module_registrations():
-    registered_exports = set(
-        re.findall(
-            r"m\.add_function\(wrap_pyfunction!\((\w+), m\)\?\)\?;",
-            _RUST_LIB_PATH.read_text(),
-        )
-    )
-    stubbed_exports = set(re.findall(r"^def (\w+)\(", _RUST_STUB_PATH.read_text(), re.MULTILINE))
-
-    assert registered_exports == stubbed_exports
+def _strip_rust_comments(source: str) -> str:
+    without_block_comments = re.sub(r"(?s)/\*.*?\*/", "", source)
+    return re.sub(r"(?m)//.*$", "", without_block_comments)
 
 
-def _prod_expected_symbols() -> set[str]:
+def _registered_exports_from_source(source: str) -> set[str]:
+    registered_exports: set[str] = set()
+    stripped_source = _strip_rust_comments(source)
+    for match in re.finditer(
+        r"add_pyfunctions!\(\s*m\s*,(?P<body>.*?)\)\s*;", stripped_source, re.DOTALL
+    ):
+        body = match.group("body")
+        registered_exports.update(re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", body))
+    return registered_exports
+
+
+def _registered_exports() -> set[str]:
+    return _registered_exports_from_source(_RUST_LIB_PATH.read_text())
+
+
+def _stubbed_exports() -> set[str]:
+    return set(re.findall(r"^def (\w+)\(", _RUST_STUB_PATH.read_text(), re.MULTILINE))
+
+
+def _expected_groupby_export_matrix(aggs: tuple[str, ...] = _ALL_GROUPBY_AGGS) -> set[str]:
     prefixes = ("groupby", "groupby_multi")
-    aggs = ("prod",)
     kernels = ("f64", "i64")
     suffixes = ("", "_sorted", "_firstseen_u32", "_firstseen_u64")
     return {
@@ -137,40 +157,131 @@ def _prod_expected_symbols() -> set[str]:
     }
 
 
+def _expected_profile_exports() -> set[str]:
+    return {
+        f"profile_groupby_{agg}_f64{suffix}"
+        for agg in ("var", "std")
+        for suffix in ("_sorted", "_firstseen_u32", "_firstseen_u64")
+    }
+
+
+def _expected_support_exports() -> set[str]:
+    return {
+        "get_fallback_threshold",
+        "get_thread_count",
+        "has_ordered_single_key_float_prod_abi",
+    }
+
+
+def _expected_exports() -> set[str]:
+    return (
+        _expected_groupby_export_matrix()
+        | _expected_profile_exports()
+        | _expected_support_exports()
+    )
+
+
+def _function_references_name(path: Path, function_name: str, name: str) -> bool:
+    for node in ast.walk(_python_module(path)):
+        if isinstance(node, ast.FunctionDef) and node.name == function_name:
+            return any(isinstance(child, ast.Name) and child.id == name for child in ast.walk(node))
+    return False
+
+
+def _assert_expected_groupby_exports_are_registered_and_stubbed(aggs: tuple[str, ...]) -> None:
+    expected = _expected_groupby_export_matrix(aggs)
+    assert expected <= _registered_exports()
+    assert expected <= _stubbed_exports()
+
+
+def _missing_exports(
+    expected: set[str], registered: set[str], stubbed: set[str]
+) -> tuple[set[str], set[str]]:
+    return expected - registered, expected - stubbed
+
+
+def test_rust_pyi_exports_match_expected_pyo3_surface():
+    expected_exports = _expected_exports()
+    registered_exports = _registered_exports()
+    stubbed_exports = _stubbed_exports()
+    missing_registered, missing_stubbed = _missing_exports(
+        expected_exports,
+        registered_exports,
+        stubbed_exports,
+    )
+
+    assert registered_exports, "src/lib.rs must register exports through add_pyfunctions!(m, ...)"
+    assert not missing_registered
+    assert not missing_stubbed
+    assert registered_exports == expected_exports
+    assert stubbed_exports == expected_exports
+
+
+def test_export_matrix_detection_flags_missing_macro_registration():
+    expected_exports = _expected_exports()
+    registered_exports = _registered_exports_from_source(
+        "add_pyfunctions!(m, groupby_sum_f64, groupby_sum_i64);"
+    )
+    stubbed_exports = expected_exports
+
+    missing_registered, missing_stubbed = _missing_exports(
+        expected_exports,
+        registered_exports,
+        stubbed_exports,
+    )
+
+    assert "groupby_prod_f64" in missing_registered
+    assert not missing_stubbed
+
+
+def test_export_matrix_detection_flags_missing_stub_entry():
+    expected_exports = _expected_exports()
+    registered_exports = expected_exports
+    stubbed_exports = expected_exports - {"groupby_prod_f64"}
+
+    missing_registered, missing_stubbed = _missing_exports(
+        expected_exports,
+        registered_exports,
+        stubbed_exports,
+    )
+
+    assert not missing_registered
+    assert missing_stubbed == {"groupby_prod_f64"}
+
+
 def test_prod_symbols_are_registered_and_stubbed():
-    registered_exports = set(
-        re.findall(
-            r"m\.add_function\(wrap_pyfunction!\((\w+), m\)\?\)\?;",
-            _RUST_LIB_PATH.read_text(),
-        )
-    )
-    stubbed_exports = set(re.findall(r"^def (\w+)\(", _RUST_STUB_PATH.read_text(), re.MULTILINE))
-
-    expected = _prod_expected_symbols()
-    assert expected <= registered_exports
-    assert expected <= stubbed_exports
+    _assert_expected_groupby_exports_are_registered_and_stubbed(("prod",))
 
 
-def test_ordered_single_key_float_prod_abi_marker_is_registered_and_stubbed():
-    registered_exports = set(
-        re.findall(
-            r"m\.add_function\(wrap_pyfunction!\((\w+), m\)\?\)\?;",
-            _RUST_LIB_PATH.read_text(),
-        )
-    )
-    stubbed_exports = set(re.findall(r"^def (\w+)\(", _RUST_STUB_PATH.read_text(), re.MULTILINE))
-
+def test_ordered_single_key_float_prod_abi_source_contract():
     marker = "has_ordered_single_key_float_prod_abi"
-    assert marker in registered_exports
-    assert marker in stubbed_exports
+    rust_source = _RUST_LIB_PATH.read_text()
+
+    assert marker in _registered_exports()
+    assert re.search(rf"(?m)^def {marker}\(\) -> bool: \.\.\.$", _RUST_STUB_PATH.read_text())
+    assert re.search(rf"(?ms)^fn {marker}\(\) -> bool \{{\s*true\s*\}}", rust_source)
+    assert _assigned_strings(_GROUPBY_ACCEL_PATH, "ORDERED_SINGLE_KEY_FLOAT_PROD_ABI_MARKER") == {
+        marker
+    }
+    assert _function_references_name(
+        _GROUPBY_ACCEL_PATH,
+        "select_rust_groupby_func",
+        "ORDERED_SINGLE_KEY_FLOAT_PROD_ABI_MARKER",
+    )
+    assert _function_references_name(
+        _GROUPBY_ACCEL_PATH,
+        "has_rust_groupby_func",
+        "ORDERED_SINGLE_KEY_FLOAT_PROD_ABI_MARKER",
+    )
 
 
 def test_prod_surface_mentions_stay_in_sync():
     repo = _REPO_ROOT
-    groupby_accel = repo / "python" / "pandas_booster" / "_groupby_accel.py"
+    groupby_accel = _GROUPBY_ACCEL_PATH
     accessor = repo / "python" / "pandas_booster" / "accessor.py"
     proxy = repo / "python" / "pandas_booster" / "proxy.py"
     benchmark = repo / "benchmarks" / "benchmark.py"
+    reporting_constants = _BENCHMARK_REPORTING_CONSTANTS_PATH
 
     assert "prod" in _assigned_strings(groupby_accel, "AggFunc")
     assert any(
@@ -184,7 +295,7 @@ def test_prod_surface_mentions_stay_in_sync():
     assert "prod" in _class_assigned_strings(accessor, "BoosterAccessor", "_SUPPORTED_AGGS")
     assert "prod" in _assigned_strings(proxy, "_ACCELERATED_AGGS")
     assert "prod" in _function_names(proxy)
-    assert "prod" in _assigned_strings(benchmark, "SUPPORTED_AGGS")
+    assert "prod" in _assigned_strings(reporting_constants, "SUPPORTED_AGGS")
     assert "prod" in _dict_keys_assigned_in_function(benchmark, "build_polars_agg_expr", "agg_map")
     assert "prod" in _readme_operation_names()
     assert "prod" in _readme_force_float_groupby_aggs()
@@ -192,15 +303,16 @@ def test_prod_surface_mentions_stay_in_sync():
 
 def test_median_surface_mentions_stay_in_sync():
     repo = _REPO_ROOT
-    groupby_accel = repo / "python" / "pandas_booster" / "_groupby_accel.py"
+    groupby_accel = _GROUPBY_ACCEL_PATH
     benchmark = repo / "benchmarks" / "benchmark.py"
+    reporting_constants = _BENCHMARK_REPORTING_CONSTANTS_PATH
 
     assert "median" in _assigned_strings(groupby_accel, "AggFunc")
     assert any(
         {"sum", "mean", "prod", "std", "var", "median"} <= strings
         for strings in _literal_string_collections(groupby_accel)
     )
-    assert "median" in _assigned_strings(benchmark, "SUPPORTED_AGGS")
+    assert "median" in _assigned_strings(reporting_constants, "SUPPORTED_AGGS")
     assert "median" in _dict_keys_assigned_in_function(
         benchmark, "build_polars_agg_expr", "agg_map"
     )
@@ -217,7 +329,7 @@ def test_prod_exact_dispatch_mapping_selects_expected_symbols():
             return True
 
     rust = FakeRust()
-    expected = _prod_expected_symbols()
+    expected = _expected_groupby_export_matrix(("prod",))
     calls: list[str] = []
     for symbol in expected:
 
@@ -302,31 +414,8 @@ def test_single_key_float_prod_requires_ordered_abi_marker():
         raise AssertionError("missing ordered prod ABI marker should block symbol resolution")
 
 
-def _median_expected_symbols() -> set[str]:
-    prefixes = ("groupby", "groupby_multi")
-    agg = "median"
-    kernels = ("f64", "i64")
-    suffixes = ("", "_sorted", "_firstseen_u32", "_firstseen_u64")
-    return {
-        f"{prefix}_{agg}_{kernel}{suffix}"
-        for prefix in prefixes
-        for kernel in kernels
-        for suffix in suffixes
-    }
-
-
 def test_median_symbols_are_registered_and_stubbed():
-    registered_exports = set(
-        re.findall(
-            r"m\.add_function\(wrap_pyfunction!\((\w+), m\)\?\)\?;",
-            _RUST_LIB_PATH.read_text(),
-        )
-    )
-    stubbed_exports = set(re.findall(r"^def (\w+)\(", _RUST_STUB_PATH.read_text(), re.MULTILINE))
-
-    expected = _median_expected_symbols()
-    assert expected <= registered_exports
-    assert expected <= stubbed_exports
+    _assert_expected_groupby_exports_are_registered_and_stubbed(("median",))
 
 
 def test_median_exact_dispatch_mapping_selects_expected_symbols():
@@ -336,7 +425,7 @@ def test_median_exact_dispatch_mapping_selects_expected_symbols():
         pass
 
     rust = FakeRust()
-    for symbol in _median_expected_symbols():
+    for symbol in _expected_groupby_export_matrix(("median",)):
 
         def _make(name: str):
             def _fn(*_args, **_kwargs):
@@ -392,6 +481,32 @@ def test_median_exact_dispatch_mapping_selects_expected_symbols():
         )
         assert func.__name__ == expected_name
         assert needs_python_sort is expected_python_sort
+
+
+def test_pr12_regression_anchor_targets_still_exist():
+    anchor_targets = {
+        "discussion_r3196780027": (
+            _REPO_ROOT / "tests" / "test_rust_stub_exports.py",
+            "test_prod_exact_dispatch_mapping_selects_expected_symbols",
+        ),
+        "discussion_r3196782200": (
+            _REPO_ROOT / "tests" / "test_rust_stub_exports.py",
+            "test_rust_pyi_exports_match_expected_pyo3_surface",
+        ),
+        "discussion_r3197179732": (
+            _REPO_ROOT / "src" / "groupby.rs",
+            "test_groupby_prod_f64_preserves_row_order_ieee_semantics",
+        ),
+        "discussion_r3197709485": (
+            _REPO_ROOT / "tests" / "test_edge_cases.py",
+            "test_single_key_float_median_large_even_middle_values_match_pandas",
+        ),
+    }
+
+    for anchor, (path, needle) in anchor_targets.items():
+        assert needle in path.read_text(), (
+            f"{anchor} lost its characterization target {needle!r} in {path}"
+        )
 
 
 def test_rust_module_docs_mention_supported_groupby_aggs():

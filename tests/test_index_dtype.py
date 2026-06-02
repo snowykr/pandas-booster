@@ -152,9 +152,7 @@ def test_accessor_multi_key_median_preserves_level_dtypes_and_float64_value_dtyp
     df = _make_df_int32_keys()
     df["val_int"] = (np.arange(len(df), dtype=np.int64) % 13) - 6
 
-    booster_result = cast(BoosterAccessor, df.booster).groupby(
-        ["k1", "k2"], "val_int", "median"
-    )
+    booster_result = cast(BoosterAccessor, df.booster).groupby(["k1", "k2"], "val_int", "median")
     pandas_result = df.groupby(["k1", "k2"])["val_int"].median()
 
     assert isinstance(booster_result.index, pd.MultiIndex)
