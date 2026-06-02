@@ -436,7 +436,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - run: bash scripts/supply_chain_audit.sh "$BASE_SHA" "$HEAD_SHA" "$RUNNER_TEMP/findings.md"
+      - run: >
+          bash "$RUNNER_TEMP/supply_chain_audit.sh"
+          "$BASE_SHA" "$HEAD_SHA" "$RUNNER_TEMP/findings.md"
       - run: gh pr comment "$PR_NUMBER" --body-file "$RUNNER_TEMP/comment.md"
       - name: Fail on critical findings
         run: exit 1

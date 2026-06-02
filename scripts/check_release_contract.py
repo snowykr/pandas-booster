@@ -54,7 +54,7 @@ SUPPLY_CHAIN_WORKFLOW_REQUIRED_TOKENS = (
     "pull-requests: write",
     "contents: read",
     "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
-    'bash scripts/supply_chain_audit.sh "$BASE_SHA" "$HEAD_SHA" "$RUNNER_TEMP/findings.md"',
+    'bash "$RUNNER_TEMP/supply_chain_audit.sh" "$BASE_SHA" "$HEAD_SHA" "$RUNNER_TEMP/findings.md"',
     "BASE_SHA:",
     "HEAD_SHA:",
     "PR_NUMBER:",

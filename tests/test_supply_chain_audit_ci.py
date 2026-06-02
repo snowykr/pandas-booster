@@ -14,7 +14,8 @@ def test_supply_chain_audit_workflow_runs_high_signal_pr_scan() -> None:
     assert "pull_request:" in workflow_text
     assert "pull-requests: write" in workflow_text
     assert "contents: read" in workflow_text
-    assert "scripts/supply_chain_audit.sh" in workflow_text
+    assert "$RUNNER_TEMP/supply_chain_audit.sh" in workflow_text
+    assert "bash scripts/supply_chain_audit.sh" not in workflow_text
     assert "gh pr comment" in workflow_text
     assert "--body-file" in workflow_text
     assert "Fail on critical findings" in workflow_text
@@ -60,8 +61,13 @@ def test_supply_chain_audit_script_flags_critical_python_payloads(tmp_path: Path
     findings_path = tmp_path / "findings.md"
 
     (repo / "sitecustomize.py").write_text("# import-time hook\n", encoding="utf-8")
+    encoded_call = (
+        "exec("
+        "base64.b64decode('cHJpbnQoImhpIik=')"
+        ")"
+    )
     (repo / "payload.py").write_text(
-        "import base64\nexec(base64.b64decode('cHJpbnQoImhpIik='))\n",
+        f"import base64\n{encoded_call}\n",
         encoding="utf-8",
     )
     (repo / "danger.pth").write_text("import payload\n", encoding="utf-8")
@@ -84,6 +90,25 @@ def test_supply_chain_audit_script_flags_critical_python_payloads(tmp_path: Path
     assert "sitecustomize.py" in findings
 
 
+def test_supply_chain_audit_script_rejects_invalid_revisions(tmp_path: Path) -> None:
+    repo, _base = _init_audit_repo(tmp_path)
+    repo_root = Path(__file__).resolve().parents[1]
+    script_path = repo_root / "scripts" / "supply_chain_audit.sh"
+    findings_path = tmp_path / "findings.md"
+
+    result = subprocess.run(
+        [str(script_path), "invalid-base", "invalid-head", str(findings_path)],
+        cwd=repo,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 2
+    assert "could not diff revisions" in result.stderr
+    assert not findings_path.exists()
+
+
 def test_supply_chain_audit_script_ignores_lockfile_only_matches(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     script_path = repo_root / "scripts" / "supply_chain_audit.sh"
@@ -91,7 +116,9 @@ def test_supply_chain_audit_script_ignores_lockfile_only_matches(tmp_path: Path)
     findings_path = tmp_path / "findings.md"
 
     (repo / "uv.lock").write_text(
-        "exec(base64.b64decode('cHJpbnQoImhpIik='))\n",
+        "exec("
+        "base64.b64decode('cHJpbnQoImhpIik=')"
+        ")\n",
         encoding="utf-8",
     )
     head = _commit_all(repo, "add lockfile text")

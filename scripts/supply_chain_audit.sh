@@ -10,10 +10,18 @@ BASE="$1"
 HEAD="$2"
 FINDINGS_OUTPUT="$3"
 
-DIFF=$(git diff "$BASE".."$HEAD" -- . ':!uv.lock' ':!*.lock' ':!package-lock.json' ':!yarn.lock' || true)
+if ! DIFF=$(git diff "$BASE".."$HEAD" -- . ':!uv.lock' ':!*.lock' ':!package-lock.json' ':!yarn.lock'); then
+  echo "could not diff revisions: $BASE..$HEAD" >&2
+  exit 2
+fi
 FINDINGS=""
 
-PTH_FILES=$(git diff --name-only "$BASE".."$HEAD" | grep '\.pth$' || true)
+if ! CHANGED_FILES=$(git diff --name-only "$BASE".."$HEAD"); then
+  echo "could not list changed files: $BASE..$HEAD" >&2
+  exit 2
+fi
+
+PTH_FILES=$(echo "$CHANGED_FILES" | grep '\.pth$' || true)
 if [ -n "$PTH_FILES" ]; then
   FINDINGS="${FINDINGS}
 ### 🚨 CRITICAL: .pth file added or modified
@@ -52,7 +60,7 @@ ${PROC_HITS}
 "
 fi
 
-SETUP_HITS=$(git diff --name-only "$BASE".."$HEAD" | grep -E '^(setup\.py|setup\.cfg)$|(^|/)(sitecustomize\.py|usercustomize\.py|__init__\.pth)$' || true)
+SETUP_HITS=$(echo "$CHANGED_FILES" | grep -E '^(setup\.py|setup\.cfg)$|(^|/)(sitecustomize\.py|usercustomize\.py|__init__\.pth)$' || true)
 if [ -n "$SETUP_HITS" ]; then
   FINDINGS="${FINDINGS}
 ### 🚨 CRITICAL: Install-hook file added or modified
