@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -48,20 +49,91 @@ WORKFLOW_REQUIRED_TOKENS = (
     ),
 )
 SUPPLY_CHAIN_WORKFLOW_REQUIRED_TOKENS = (
-    "name: Supply Chain Audit",
+    "name: Supply Chain Risk Guard",
     "pull_request:",
     "types: [opened, synchronize, reopened]",
     "pull-requests: write",
     "contents: read",
     "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
-    'bash "$RUNNER_TEMP/supply_chain_audit.sh" "$BASE_SHA" "$HEAD_SHA" "$RUNNER_TEMP/findings.md"',
+    "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+    "Select audit scripts",
+    'git show "$BASE_SHA:scripts/supply_chain_audit.py"',
+    'git show "$BASE_SHA:scripts/supply_chain_comment.py"',
+    "Base branch does not contain supply-chain risk guard scripts.",
+    "AUDIT_SCRIPT=",
+    "COMMENT_SCRIPT=",
+    'python "$AUDIT_SCRIPT" scan',
+    'python "$COMMENT_SCRIPT" sync',
+    "scripts/supply_chain_audit.py",
+    "scripts/supply_chain_comment.py",
     "BASE_SHA:",
     "HEAD_SHA:",
     "PR_NUMBER:",
-    'gh pr comment "$PR_NUMBER" --body-file "$RUNNER_TEMP/comment.md"',
-    "Fail on critical findings",
+    "GH_TOKEN:",
+    "$RUNNER_TEMP/findings.md",
+    "pandas-booster:supply-chain-risk-guard",
+    "Sync risk guard comment",
+    "Fail on risk findings",
     "steps.scan.outputs.found == 'true'",
 )
+LEGACY_SUPPLY_CHAIN_SCRIPT = "supply_chain" + "_audit.sh"
+SUPPLY_CHAIN_WORKFLOW_FORBIDDEN_TOKENS = (
+    f'cat > "$RUNNER_TEMP/{LEGACY_SUPPLY_CHAIN_SCRIPT}"',
+    f"$RUNNER_TEMP/{LEGACY_SUPPLY_CHAIN_SCRIPT}",
+    f"bash scripts/{LEGACY_SUPPLY_CHAIN_SCRIPT}",
+    LEGACY_SUPPLY_CHAIN_SCRIPT,
+    "pull_request_target",
+    "paths:",
+    "paths-ignore:",
+    "credential-" + "stealing",
+    "lite" + "llm",
+    "Manage supply-chain " + "audit comment",
+    "<!-- pandas-booster:supply-chain-" + "audit -->",
+    "actions/checkout@v4",
+    "actions/setup-python@v5",
+    "cp scripts/supply_chain_audit.py",
+    "cp scripts/supply_chain_comment.py",
+)
+SUPPLY_CHAIN_CONCURRENCY_GROUP = (
+    "group: supply-chain-risk-guard-${{ github.event.pull_request.number }}"
+)
+SUPPLY_CHAIN_CONCURRENCY_CANCEL = "cancel-in-progress: true"
+SUPPLY_CHAIN_FORBIDDEN_LINE_MESSAGES = {
+    "push:": "must not use push triggers",
+    "workflow_dispatch:": "must not use workflow_dispatch triggers",
+    "schedule:": "must not use schedule triggers",
+    "repository_dispatch:": "must not use repository_dispatch triggers",
+    "workflow_run:": "must not use workflow_run triggers",
+    "issue_comment:": "must not use issue_comment triggers",
+    "paths-ignore:": "must not use workflow-level paths filters",
+}
+WRITE_PERMISSION_RE = re.compile(r"^([a-z-]+): write$")
+ALLOWED_WRITE_PERMISSIONS = frozenset({"pull-requests"})
+PYTHON_COMMAND_RE = re.compile(r"\bpython(?:3(?:\.\d+)?)?\b")
+SUPPLY_CHAIN_SCRIPT_PATH_RE = re.compile(
+    r"(?:^|[\s'\"])(?:[\w${}./_-]+/)*"
+    r"scripts/supply_chain_(?:audit|comment)\.py(?:$|[\s'\"])"
+)
+SUPPLY_CHAIN_MODULE_RE = re.compile(
+    r"(?:^|\s)-m\s+scripts\.supply_chain_(?:audit|comment)(?:$|\s)"
+)
+SUPPLY_CHAIN_DOTTED_MODULE_RE = re.compile(
+    r"\bscripts\.supply_chain_(?:audit|comment)\b"
+)
+SUPPLY_CHAIN_FROM_IMPORT_RE = re.compile(
+    r"\bfrom\s+scripts\s+import\s+supply_chain_(?:audit|comment)\b"
+)
+SUPPLY_CHAIN_SCRIPT_ENV_KEY_RE = re.compile(
+    r"(?:^|[{,]\s*)(AUDIT_SCRIPT|COMMENT_SCRIPT)\s*:"
+)
+SUPPLY_CHAIN_GITHUB_ENV_SCRIPT_ASSIGNMENT_RE = re.compile(
+    r"\b(AUDIT_SCRIPT|COMMENT_SCRIPT)=([^\s\"']+)"
+)
+PERMISSION_LINE_RE = re.compile(r"^([a-z-]+)\s*:\s*(read|write|none)$")
+ALLOWED_SUPPLY_CHAIN_PERMISSIONS = {
+    "contents": "read",
+    "pull-requests": "write",
+}
 
 
 class ContractError(Exception):
@@ -87,6 +159,350 @@ def load_text(path: Path) -> str:
         return path.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
         raise ContractError(f"Required file not found: {path}") from exc
+
+
+def _check_supply_chain_run_blocks(workflow_text: str, workflow_path: Path) -> list[str]:
+    lines = workflow_text.splitlines()
+    errors: list[str] = []
+    in_run_block = False
+    run_key_indent = 0
+    run_in_select_audit = False
+    in_select_audit_step = False
+    run_block_lines: list[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip())
+
+        if in_run_block and stripped and indent <= run_key_indent:
+            _check_supply_chain_run_content(
+                join_run_block_lines(run_block_lines),
+                workflow_path,
+                errors,
+            )
+            run_block_lines.clear()
+            in_run_block = False
+            run_in_select_audit = False
+
+        if in_run_block:
+            run_block_lines.append(line)
+            _check_supply_chain_run_content(line, workflow_path, errors)
+            if run_in_select_audit and (
+                "cp scripts/supply_chain_audit.py" in line
+                or "cp scripts/supply_chain_comment.py" in line
+            ):
+                errors.append(
+                    f"{workflow_path} must not use PR-controlled fallback copies in "
+                    "Select audit scripts"
+                )
+            continue
+
+        if stripped.startswith("- "):
+            in_select_audit_step = stripped == "- name: Select audit scripts"
+
+        if stripped.startswith("run: ") and not (
+            stripped.startswith("run: |") or stripped.startswith("run: >")
+        ):
+            _check_supply_chain_run_content(stripped, workflow_path, errors)
+
+        if stripped.startswith("run: |") or stripped.startswith("run: >"):
+            in_run_block = True
+            run_key_indent = indent
+            run_in_select_audit = in_select_audit_step
+
+    if in_run_block:
+        _check_supply_chain_run_content(
+            join_run_block_lines(run_block_lines),
+            workflow_path,
+            errors,
+        )
+
+    return errors
+
+
+def _check_supply_chain_script_env_overrides(
+    workflow_lines: list[str],
+    workflow_path: Path,
+) -> list[str]:
+    errors: list[str] = []
+
+    for line in workflow_lines:
+        stripped = line.partition("#")[0].strip()
+        match = SUPPLY_CHAIN_SCRIPT_ENV_KEY_RE.search(stripped)
+        if match is None:
+            continue
+        errors.append(f"{workflow_path} must not set {match.group(1)} from YAML env")
+
+    return errors
+
+
+def join_run_block_lines(lines: list[str]) -> str:
+    return " ".join(line.strip().rstrip("\\") for line in lines)
+
+
+def _check_supply_chain_run_content(
+    line: str,
+    workflow_path: Path,
+    errors: list[str],
+) -> None:
+    if "${{ github.event" in line:
+        errors.append(f"{workflow_path} must not reference github.event inside run blocks")
+    script_env_assignment = SUPPLY_CHAIN_GITHUB_ENV_SCRIPT_ASSIGNMENT_RE.search(line)
+    if script_env_assignment is not None and "$GITHUB_ENV" in line:
+        script_name = script_env_assignment.group(1)
+        script_value = script_env_assignment.group(2)
+        if is_pr_controlled_supply_chain_execution(script_value):
+            errors.append(
+                f"{workflow_path} must not write PR-controlled {script_name} to GITHUB_ENV"
+            )
+            return
+    if is_pr_controlled_supply_chain_execution(line):
+        errors.append(f"{workflow_path} must not execute PR-controlled supply-chain scripts")
+
+
+def is_pr_controlled_supply_chain_execution(line: str) -> bool:
+    normalized_line = normalize_run_content(line)
+    if SUPPLY_CHAIN_SCRIPT_PATH_RE.search(normalized_line) is not None:
+        return True
+    return (
+        SUPPLY_CHAIN_MODULE_RE.search(normalized_line) is not None
+        or SUPPLY_CHAIN_DOTTED_MODULE_RE.search(normalized_line) is not None
+        or SUPPLY_CHAIN_FROM_IMPORT_RE.search(normalized_line) is not None
+    )
+
+
+def normalize_run_content(line: str) -> str:
+    unquoted = line.replace('"', "").replace("'", "")
+    normalized_workspace = re.sub(
+        r"\${{\s*github\.workspace\s*}}",
+        "GITHUB_WORKSPACE",
+        unquoted,
+    )
+    normalized_segments = normalized_workspace.replace("/./", "/")
+    return re.sub(r"(?<!:)//+", "/", normalized_segments)
+
+
+def _check_supply_chain_concurrency(workflow_lines: list[str], workflow_path: Path) -> list[str]:
+    errors: list[str] = []
+    concurrency_children = _block_direct_children(workflow_lines, "concurrency:")
+
+    if not concurrency_children:
+        errors.append(f"{workflow_path} must define workflow concurrency")
+        return errors
+
+    has_group = False
+    has_cancel = False
+    for child_stripped in concurrency_children:
+        if child_stripped == SUPPLY_CHAIN_CONCURRENCY_GROUP:
+            has_group = True
+        elif child_stripped == SUPPLY_CHAIN_CONCURRENCY_CANCEL:
+            has_cancel = True
+        elif child_stripped.split(":", 1)[0] in {"group", "cancel-in-progress"}:
+            errors.append(f"{workflow_path} has malformed concurrency key '{child_stripped}'")
+
+    if not has_group:
+        errors.append(
+            f"{workflow_path} is missing required concurrency group "
+            f"'{SUPPLY_CHAIN_CONCURRENCY_GROUP}'"
+        )
+    if not has_cancel:
+        errors.append(
+            f"{workflow_path} is missing required concurrency setting "
+            f"'{SUPPLY_CHAIN_CONCURRENCY_CANCEL}'"
+        )
+
+    return errors
+
+
+def _check_supply_chain_on_block(
+    workflow_lines: list[str],
+    workflow_path: Path,
+) -> list[str]:
+    errors: list[str] = []
+    on_index = next(
+        (
+            index
+            for index, line in enumerate(workflow_lines)
+            if line.strip().startswith("on:") and len(line) == len(line.lstrip())
+        ),
+        None,
+    )
+    on_line = workflow_lines[on_index].strip() if on_index is not None else ""
+    if on_line and on_line != "on:":
+        errors.append(f"{workflow_path} must use a pull_request-only on block")
+        return errors
+    if on_index is None:
+        errors.append(f"{workflow_path} must define an on block")
+        return errors
+
+    on_children = _block_direct_children_from_index(workflow_lines, on_index)
+    if on_children != ["pull_request:"]:
+        errors.append(f"{workflow_path} must define only pull_request in the on block")
+    for child in on_children:
+        if child.endswith(":") and child != "pull_request:":
+            errors.append(f"{workflow_path} must not use {child.removesuffix(':')} triggers")
+
+    pull_request_index = _find_direct_child_index(
+        workflow_lines,
+        parent_index=on_index,
+        child="pull_request:",
+    )
+    if pull_request_index is None:
+        return errors
+
+    pull_request_children = _block_direct_children_from_index(
+        workflow_lines,
+        pull_request_index,
+    )
+    required_types = "types: [opened, synchronize, reopened]"
+    if required_types not in pull_request_children:
+        errors.append(f"{workflow_path} must set pull_request {required_types}")
+
+    return errors
+
+
+def _check_supply_chain_permissions_block(
+    workflow_lines: list[str],
+    workflow_path: Path,
+) -> list[str]:
+    errors: list[str] = []
+    top_level_permission_indices: list[int] = []
+    for index, line in enumerate(workflow_lines):
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip())
+        if not stripped.startswith("permissions:"):
+            continue
+        if stripped == "permissions:":
+            if indent != 0:
+                errors.append(f"{workflow_path} must not define job-level permissions")
+            else:
+                top_level_permission_indices.append(index)
+            continue
+        errors.append(f"{workflow_path} must not use inline or job-level permissions")
+
+    if len(top_level_permission_indices) > 1:
+        errors.append(f"{workflow_path} must define exactly one top-level permissions block")
+
+    seen_permissions: dict[str, str] = {}
+    for permissions_index in top_level_permission_indices:
+        for child in _block_direct_children_from_index(workflow_lines, permissions_index):
+            permission_child = strip_yaml_inline_comment(child)
+            match = PERMISSION_LINE_RE.fullmatch(permission_child)
+            if match is None:
+                continue
+
+            permission = match.group(1)
+            value = match.group(2)
+            seen_permissions[permission] = value
+            expected_value = ALLOWED_SUPPLY_CHAIN_PERMISSIONS.get(permission)
+            if expected_value is None:
+                errors.append(f"{workflow_path} must not request {permission_child}")
+            elif value != expected_value:
+                errors.append(
+                    f"{workflow_path} must request {permission}: {expected_value}, not {value}"
+                )
+
+    for permission, expected_value in ALLOWED_SUPPLY_CHAIN_PERMISSIONS.items():
+        if seen_permissions.get(permission) != expected_value:
+            errors.append(f"{workflow_path} must request {permission}: {expected_value}")
+
+    return errors
+
+
+def strip_yaml_inline_comment(line: str) -> str:
+    return line.split("#", 1)[0].rstrip()
+
+
+def _block_direct_children(workflow_lines: list[str], header: str) -> list[str]:
+    header_index: int | None = next(
+        (
+            index
+            for index, line in enumerate(workflow_lines)
+            if line.strip() == header
+        ),
+        None,
+    )
+    if header_index is None:
+        return []
+
+    return _block_direct_children_from_index(workflow_lines, header_index)
+
+
+def _block_direct_children_from_index(
+    workflow_lines: list[str],
+    header_index: int,
+) -> list[str]:
+    header_indent = len(workflow_lines[header_index]) - len(
+        workflow_lines[header_index].lstrip()
+    )
+    child_indent: int | None = None
+    children: list[str] = []
+
+    for line in workflow_lines[header_index + 1 :]:
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        indent = len(line) - len(line.lstrip())
+        if indent <= header_indent:
+            break
+
+        if child_indent is None or indent < child_indent:
+            child_indent = indent
+            children.clear()
+
+        if indent == child_indent:
+            children.append(stripped)
+
+    return children
+
+
+def _find_direct_child_index(
+    workflow_lines: list[str],
+    *,
+    parent_index: int,
+    child: str,
+) -> int | None:
+    parent_indent = len(workflow_lines[parent_index]) - len(
+        workflow_lines[parent_index].lstrip()
+    )
+    child_indent: int | None = None
+
+    for index, line in enumerate(workflow_lines[parent_index + 1 :], start=parent_index + 1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        indent = len(line) - len(line.lstrip())
+        if indent <= parent_indent:
+            return None
+
+        if child_indent is None or indent < child_indent:
+            child_indent = indent
+
+        if indent == child_indent and stripped == child:
+            return index
+
+    return None
+
+
+def _check_supply_chain_forbidden_lines(
+    workflow_lines: list[str],
+    workflow_path: Path,
+) -> list[str]:
+    errors: list[str] = []
+    for line in workflow_lines:
+        stripped = line.strip()
+        message = SUPPLY_CHAIN_FORBIDDEN_LINE_MESSAGES.get(stripped)
+        if message is not None:
+            errors.append(f"{workflow_path} {message}")
+        permission_match = WRITE_PERMISSION_RE.fullmatch(stripped)
+        if (
+            permission_match is not None
+            and permission_match.group(1) not in ALLOWED_WRITE_PERMISSIONS
+        ):
+            errors.append(f"{workflow_path} must not request {stripped}")
+    return errors
 
 
 def fail(errors: list[str]) -> None:
@@ -217,17 +633,28 @@ def validate_supply_chain_workflow(args: argparse.Namespace) -> int:
         workflow_path = project_root() / workflow_path
 
     workflow_text = load_text(workflow_path)
+    workflow_lines = workflow_text.splitlines()
     errors = [
         f"{workflow_path} is missing required token '{token}'"
         for token in SUPPLY_CHAIN_WORKFLOW_REQUIRED_TOKENS
         if token not in workflow_text
     ]
 
-    if "pull_request_target" in workflow_text:
-        errors.append(f"{workflow_path} must not use pull_request_target")
+    for token in SUPPLY_CHAIN_WORKFLOW_FORBIDDEN_TOKENS:
+        if token in workflow_text:
+            if token == "pull_request_target":
+                errors.append(f"{workflow_path} must not use pull_request_target")
+            elif token in {"paths:", "paths-ignore:"}:
+                errors.append(f"{workflow_path} must not use workflow-level paths filters")
+            else:
+                errors.append(f"{workflow_path} must not contain forbidden token '{token}'")
 
-    if "paths:" in workflow_text:
-        errors.append(f"{workflow_path} must not use workflow-level paths filters")
+    errors.extend(_check_supply_chain_run_blocks(workflow_text, workflow_path))
+    errors.extend(_check_supply_chain_script_env_overrides(workflow_lines, workflow_path))
+    errors.extend(_check_supply_chain_concurrency(workflow_lines, workflow_path))
+    errors.extend(_check_supply_chain_on_block(workflow_lines, workflow_path))
+    errors.extend(_check_supply_chain_permissions_block(workflow_lines, workflow_path))
+    errors.extend(_check_supply_chain_forbidden_lines(workflow_lines, workflow_path))
 
     if errors:
         fail(errors)
