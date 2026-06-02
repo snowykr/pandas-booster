@@ -19,3 +19,45 @@ def test_groupby_compatibility_result_supports_named_and_tuple_access() -> None:
     supported, force_pandas = compatibility
     assert supported is True
     assert force_pandas is True
+
+
+def test_single_key_float_prod_is_rust_eligible_by_default() -> None:
+    df = pd.DataFrame({"key": [1, 1], "val": [0.5, 2.0]})
+
+    compatibility = classify_groupby_compatibility(
+        key_cols=[df["key"]],
+        val_col=df["val"],
+        agg="prod",
+        force_pandas_float_groupby=False,
+    )
+
+    assert compatibility.supported is True
+    assert compatibility.force_pandas is False
+
+
+def test_single_key_float_prod_force_pandas_escape_hatch_still_applies() -> None:
+    df = pd.DataFrame({"key": [1, 1], "val": [0.5, 2.0]})
+
+    compatibility = classify_groupby_compatibility(
+        key_cols=[df["key"]],
+        val_col=df["val"],
+        agg="prod",
+        force_pandas_float_groupby=True,
+    )
+
+    assert compatibility.supported is True
+    assert compatibility.force_pandas is True
+
+
+def test_multi_key_float_prod_remains_rust_eligible() -> None:
+    df = pd.DataFrame({"k1": [1, 1], "k2": [1, 2], "val": [0.5, 2.0]})
+
+    compatibility = classify_groupby_compatibility(
+        key_cols=[df["k1"], df["k2"]],
+        val_col=df["val"],
+        agg="prod",
+        force_pandas_float_groupby=False,
+    )
+
+    assert compatibility.supported is True
+    assert compatibility.force_pandas is False

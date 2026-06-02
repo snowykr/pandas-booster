@@ -305,18 +305,27 @@ def test_force_pandas_sort_matches_pandas_output(monkeypatch: pytest.MonkeyPatch
 
     _assert_groupby_series_equal(booster_on, pandas_on, agg="sum")
 
+
 def test_single_key_prod_sort_true_special_value_signbits(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("PANDAS_BOOSTER_FORCE_PANDAS_SORT", raising=False)
 
     pairs = [
-        (1, np.nan), (1, np.nan),
-        (2, np.nan), (2, 2.0),
-        (3, np.inf), (3, 0.0),
-        (4, -np.inf), (4, 0.0),
-        (5, -0.0), (5, 2.0),
-        (6, 0.0), (6, -2.0),
-        (7, 1e308), (7, 1e308),
-        (8, 1e-308), (8, 1e-308),
+        (1, np.nan),
+        (1, np.nan),
+        (2, np.nan),
+        (2, 2.0),
+        (3, np.inf),
+        (3, 0.0),
+        (4, -np.inf),
+        (4, 0.0),
+        (5, -0.0),
+        (5, 2.0),
+        (6, 0.0),
+        (6, -2.0),
+        (7, 1e308),
+        (7, 1e308),
+        (8, 1e-308),
+        (8, 1e-308),
     ]
     repeats = 12_500
     keys = np.array([k for k, _ in pairs] * repeats, dtype=np.int64)

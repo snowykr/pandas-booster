@@ -1,6 +1,6 @@
 """Official benchmark script for pandas-booster with Cold/Warm measurement.
 
-This script generates benchmark results for the README Performance section.
+This script generates per-aggregation benchmark reports for the benchmark docs.
 It measures single-key through five-key groupby operations with proper
 cold/warm separation and statistical analysis.
 
@@ -10,37 +10,38 @@ Cold/Warm Definitions:
 
 Usage:
     # Run core benchmarks (standard + high cardinality, sorted + sort=False)
-    python benches/benchmark.py
+    python benchmarks/benchmark.py
 
     # Run only standard cardinality benchmarks
-    python benches/benchmark.py --cardinality standard
+    python benchmarks/benchmark.py --cardinality standard
 
     # Run only high cardinality benchmarks
-    python benches/benchmark.py --cardinality high
+    python benchmarks/benchmark.py --cardinality high
 
     # Run threshold-neighborhood diagnostics (sort=False boundary checks)
-    python benches/benchmark.py --diagnostic threshold --sort-mode unsorted
+    python benchmarks/benchmark.py --diagnostic threshold --sort-mode unsorted
 
     # Run full suite (core + diagnostics)
-    python benches/benchmark.py --cardinality all --diagnostic threshold --sort-mode unsorted
+    python benchmarks/benchmark.py --cardinality all --diagnostic threshold --sort-mode unsorted
 
     # Run only sorted benchmarks
-    python benches/benchmark.py --sort-mode sorted
+    python benchmarks/benchmark.py --sort-mode sorted
 
     # Run only sort=False benchmarks
-    python benches/benchmark.py --sort-mode unsorted
+    python benchmarks/benchmark.py --sort-mode unsorted
 
     # Combine options
-    python benches/benchmark.py --cardinality high --sort-mode sorted
+    python benchmarks/benchmark.py --cardinality high --sort-mode sorted
 
-    # Save results to markdown file
-    python benches/benchmark.py --output results.md
+    # Save per-aggregation Markdown reports
+    python benchmarks/benchmark.py --output benchmarks/reports
 
     # Run only selected aggregation functions
-    python benches/benchmark.py --agg std --agg var
+    python benchmarks/benchmark.py --agg std --agg var
+    python benchmarks/benchmark.py --agg median
 
     # Adjust sample count (applies to both cold and warm)
-    python benches/benchmark.py --samples 10
+    python benchmarks/benchmark.py --samples 10
 """
 
 from __future__ import annotations
@@ -65,25 +66,63 @@ except ImportError:
     HAS_POLARS = False
 
 
-# Keep benchmark progress output aligned with README table column order.
-BACKEND_DISPLAY_ORDER: tuple[str, ...] = ("pandas", "polars", "booster")
-
-sys.path.insert(0, str(Path(__file__).parent))
+BENCHMARKS_DIR = Path(__file__).resolve().parent
+if str(BENCHMARKS_DIR) not in sys.path:
+    sys.path.insert(0, str(BENCHMARKS_DIR))
 from bench_utils import BenchmarkStats, compute_stats, run_cold_warm_benchmark  # noqa: E402
 from datasets import PRESETS, generate_multi_key_dataset, get_dataset_info  # noqa: E402
+from reporting import (  # noqa: E402
+    BACKEND_DISPLAY_ORDER,
+    BENCHMARK_INDEX_FILENAME,
+    BENCHMARK_REPORT_GENERATED_MARKER,
+    CORE_BENCHMARK_AGG,
+    STATS_EVIDENCE_AGGS,
+    STATS_EVIDENCE_PRESETS,
+    STATS_EVIDENCE_SORTS,
+    SUPPORTED_AGGS,
+    benchmark_report_filename,
+    format_benchmark_document,
+    format_benchmark_index,
+    format_correctness_section,
+    format_performance_section,
+    is_generated_benchmark_report,
+    ordered_result_aggs,
+    render_generated_markdown,
+    render_high_table,
+    render_standard_table,
+    render_stats_evidence_section,
+    render_threshold_table,
+    save_results_md,
+    validate_report_output_conflicts,
+)
+
+__all__ = [
+    "BACKEND_DISPLAY_ORDER",
+    "BENCHMARK_INDEX_FILENAME",
+    "BENCHMARK_REPORT_GENERATED_MARKER",
+    "CORE_BENCHMARK_AGG",
+    "STATS_EVIDENCE_AGGS",
+    "STATS_EVIDENCE_PRESETS",
+    "STATS_EVIDENCE_SORTS",
+    "SUPPORTED_AGGS",
+    "benchmark_report_filename",
+    "format_benchmark_document",
+    "format_benchmark_index",
+    "format_correctness_section",
+    "format_performance_section",
+    "is_generated_benchmark_report",
+    "ordered_result_aggs",
+    "render_generated_markdown",
+    "render_high_table",
+    "render_standard_table",
+    "render_stats_evidence_section",
+    "render_threshold_table",
+    "save_results_md",
+    "validate_report_output_conflicts",
+]
 
 if TYPE_CHECKING:
     from typing import Literal
-
-
-SUPPORTED_AGGS: tuple[str, ...] = ("sum", "mean", "prod", "std", "var", "min", "max", "count")
-CORE_BENCHMARK_AGG = "sum"
-STATS_EVIDENCE_AGGS: tuple[str, str] = ("std", "var")
-STATS_EVIDENCE_SORTS: tuple[bool, bool] = (True, False)
-STATS_EVIDENCE_PRESETS: dict[str, str] = {
-    "standard": "1key",
-    "high": "high_cardinality_1key",
-}
 
 
 def stats_evidence_workload_label(preset_name: str) -> str:
@@ -113,9 +152,7 @@ def summarize_profile_cases(cases: list[dict[str, Any]]) -> dict[str, Any] | Non
 
     phase_names = list(profiled_cases[0]["breakdown"]["phases"].keys())
     phase_means = {
-        phase_name: sum(
-            case["breakdown"]["phases"][phase_name].mean for case in profiled_cases
-        )
+        phase_name: sum(case["breakdown"]["phases"][phase_name].mean for case in profiled_cases)
         / len(profiled_cases)
         for phase_name in phase_names
     }
@@ -131,9 +168,7 @@ def summarize_profile_cases(cases: list[dict[str, Any]]) -> dict[str, Any] | Non
         / len(profiled_cases),
         "python_total_s": sum(case["breakdown"]["python_total_s"] for case in profiled_cases)
         / len(profiled_cases),
-        "total_pipeline_s": sum(
-            case["breakdown"]["total_pipeline_s"] for case in profiled_cases
-        )
+        "total_pipeline_s": sum(case["breakdown"]["total_pipeline_s"] for case in profiled_cases)
         / len(profiled_cases),
         "partial_group_total": first_breakdown["partial_group_total"],
         "final_group_count": first_breakdown["final_group_count"],
@@ -247,6 +282,7 @@ def build_polars_agg_expr(value_col: str, agg: str) -> Any:
     agg_map = {
         "sum": pl.col(value_col).sum().alias(value_col),
         "mean": pl.col(value_col).mean().alias(value_col),
+        "median": pl.col(value_col).median().alias(value_col),
         "prod": pl.col(value_col).product().alias(value_col),
         "std": pl.col(value_col).std().alias(value_col),
         "var": pl.col(value_col).var().alias(value_col),
@@ -298,7 +334,7 @@ def resolve_booster_benchmark_dispatch(
     val_col = cast(pd.Series, df[value_col])
     key_series = [cast(pd.Series, df[col]) for col in key_cols]
 
-    if agg not in {"std", "var"} and len(df) < rust.get_fallback_threshold():
+    if agg not in {"std", "var", "median"} and len(df) < rust.get_fallback_threshold():
         return {
             "execution": f"booster->pandas.groupby.{agg}",
             "rust_func": None,
@@ -311,7 +347,26 @@ def resolve_booster_benchmark_dispatch(
         agg=cast(Any, agg),
         force_pandas_float_groupby=force_pandas_float_groupby_enabled(),
     )
+    is_val_int = pd.api.types.is_integer_dtype(val_col)
+    prefix = "groupby_multi" if len(key_cols) > 1 else "groupby"
+    suffix = "i64" if is_val_int else "f64"
+    force_pandas_sort = (
+        False if ignore_force_pandas_sort else bool(sort) and force_pandas_sort_enabled()
+    )
+
     if not compatibility.supported or compatibility.force_pandas:
+        return {
+            "execution": f"booster->pandas.groupby.{agg}",
+            "rust_func": None,
+            "needs_python_sort": False,
+        }
+    if agg in {"median", "prod"} and not groupby_accel.has_rust_groupby_func(
+        rust,
+        f"{prefix}_{agg}_{suffix}",
+        sort=sort,
+        n_rows=len(df),
+        force_pandas_sort=force_pandas_sort,
+    ):
         return {
             "execution": f"booster->pandas.groupby.{agg}",
             "rust_func": None,
@@ -321,7 +376,7 @@ def resolve_booster_benchmark_dispatch(
     if (
         len(key_cols) == 1
         and pd.api.types.is_float_dtype(val_col)
-        and agg in {"sum", "mean", "prod"}
+        and agg in {"sum", "mean"}
         and force_pandas_float_groupby_enabled()
     ):
         return {
@@ -330,19 +385,12 @@ def resolve_booster_benchmark_dispatch(
             "needs_python_sort": False,
         }
 
-    is_val_int = pd.api.types.is_integer_dtype(val_col)
-    prefix = "groupby_multi" if len(key_cols) > 1 else "groupby"
-    suffix = "i64" if is_val_int else "f64"
     rust_func, needs_python_sort = groupby_accel.select_rust_groupby_func(
         rust,
         f"{prefix}_{agg}_{suffix}",
         sort=sort,
         n_rows=len(df),
-        force_pandas_sort=(
-            False
-            if ignore_force_pandas_sort
-            else bool(sort) and force_pandas_sort_enabled()
-        ),
+        force_pandas_sort=force_pandas_sort,
         context="benchmark",
     )
     execution = f"booster->rust.{rust_func.__name__}"
@@ -560,134 +608,20 @@ def collect_stats_evidence(
     return evidence
 
 
-def render_stats_evidence_section(evidence: list[dict[str, Any]]) -> str:
-    if not evidence:
-        return ""
-
-    evidence_aggs = sorted({item["agg"] for item in evidence})
-    if evidence_aggs == ["std", "var"]:
-        heading = "## Single-Key `std`/`var` Evidence"
-    elif len(evidence_aggs) == 1:
-        heading = f"## Single-Key `{evidence_aggs[0]}` Evidence"
-    else:
-        agg_list = "/".join(f"`{agg}`" for agg in evidence_aggs)
-        heading = f"## Single-Key {agg_list} Evidence"
-
-    lines: list[str] = []
-    lines.append(heading)
-    lines.append("")
-    agg_phrase = "`std` and `var`" if evidence_aggs == ["std", "var"] else ", ".join(
-        f"`{agg}`" for agg in evidence_aggs
-    )
-    lines.append(
-        f"{agg_phrase} scale on the Rust-first path because each worker accumulates "
-        "mergeable `(count, mean, m2)` state and Rayon only merges those partial states at the end."
-    )
-    lines.append(
-        "When the dataset is smaller or the group count is low, the fixed overhead from NumPy "
-        "contiguity/copy work, the Python↔Rust boundary, and Series materialization "
-        "eats into that gain even though the kernel itself remains parallel."
-    )
-    lines.append("")
-    lines.append("| Workload | Agg | Sort | Backend | Execution | Cold | Warm |")
-    lines.append("|----------|-----|------|---------|-----------|------|------|")
-
-    for item in evidence:
-        agg = item["agg"]
-        sort = "True" if item["sort"] else "False"
-        result = item["result"]
-        execution = item["execution"]
-        for backend_name in BACKEND_DISPLAY_ORDER:
-            backend_data = result["backends"].get(backend_name)
-            if backend_data is None:
-                continue
-            cold_stats: BenchmarkStats = backend_data["cold_stats"]
-            warm_stats: BenchmarkStats = backend_data["warm_stats"]
-            row = [
-                item["workload"],
-                f"`{agg}`",
-                sort,
-                backend_name,
-                f"`{execution[backend_name]}`",
-                cold_stats.format_ms(2),
-                warm_stats.format_ms(2),
-            ]
-            lines.append("| " + " | ".join(row) + " |")
-
-    lines.append("")
-    lines.append("### Booster conversion vs compute breakdown")
-    lines.append("")
-    lines.append(
-        "The table below isolates the Rust-first Booster path for the same single-key datasets. "
-        "`local_build`, `merge`, `reorder`, and `materialize` come from the "
-        "internal Rust profiling hook, while the Python-side phases measure "
-        "post-kernel normalization and final pandas Series assembly."
-    )
-    lines.append("")
-    breakdown_columns = [
-        "Workload",
-        "Agg",
-        "Sort",
-        "Execution",
-        "Prepare inputs",
-        "Local build",
-        "Merge",
-        "Reorder",
-        "Materialize",
-        "Python normalize",
-        "Series build",
-        "Rust total",
-        "Total pipeline",
-        "Partial groups",
-        "Final groups",
-        "Partial/final",
-    ]
-    breakdown_separators = ["-" * len(column) for column in breakdown_columns]
-    lines.append("| " + " | ".join(breakdown_columns) + " |")
-    separator_row = "|" + "|".join(
-        f"{separator:-^{len(separator) + 2}}"
-        for separator in breakdown_separators
-    )
-    lines.append(separator_row + "|")
-    has_breakdown_rows = False
-    for item in evidence:
-        breakdown = item["breakdown"]
-        if breakdown is None:
-            continue
-        has_breakdown_rows = True
-        phases = breakdown["phases"]
-        row = [
-            item["workload"],
-            f"`{item['agg']}`",
-            "True" if item["sort"] else "False",
-            f"`{breakdown['execution']}`",
-            phases["prepare_inputs_s"].format_ms(2),
-            phases["local_build_s"].format_ms(2),
-            phases["merge_s"].format_ms(2),
-            phases["reorder_s"].format_ms(2),
-            phases["materialize_s"].format_ms(2),
-            phases["python_normalize_s"].format_ms(2),
-            phases["python_series_build_s"].format_ms(2),
-            phases["rust_total_s"].format_ms(2),
-            phases["total_pipeline_s"].format_ms(2),
-            f"{breakdown['partial_group_total']:,}",
-            f"{breakdown['final_group_count']:,}",
-            f"{breakdown['partial_to_final_ratio']:.3f}",
-        ]
-        lines.append("| " + " | ".join(row) + " |")
-    if not has_breakdown_rows:
-        lines.append(
-            "No Rust-only Booster breakdown rows were available for the selected evidence cases."
-        )
-
-    lines.append("")
-    return "\n".join(lines)
-
-
 def benchmark_worker(
     preset_name: str,
     backend: str,
-    agg: Literal["sum", "mean", "prod", "std", "var", "min", "max", "count"] = "sum",
+    agg: Literal[
+        "sum",
+        "mean",
+        "prod",
+        "median",
+        "std",
+        "var",
+        "min",
+        "max",
+        "count",
+    ] = "sum",
     sort: bool = True,
     verify_correctness: bool = False,
     mode: Literal["cold", "warm"] = "cold",
@@ -923,6 +857,7 @@ def benchmark_worker(
             "execution": execution,
         }
 
+
 def benchmark_single(
     preset_name: str,
     agg: str = "sum",
@@ -987,458 +922,6 @@ def benchmark_single(
         "sort": sort,
         "backends": results,
     }
-
-
-def render_standard_table(results: list[dict]) -> str:
-    """Render standard cardinality table (Single-key through 5-key) with cold/warm stats.
-
-    Args:
-        results: List of benchmark results for standard presets (can include both sorted and
-            unsorted).
-
-    Returns:
-        Markdown table string.
-    """
-    if not results:
-        return ""
-
-    preset_order = ["1key", "2key", "3key", "4key", "5key"]
-    preset_labels = {
-        "1key": "Single-key",
-        "2key": "2-key",
-        "3key": "3-key",
-        "4key": "4-key",
-        "5key": "5-key",
-    }
-
-    # Group results by preset and sort
-    results_by_preset_sort = {}
-    for r in results:
-        key = (r["preset"], r["sort"])
-        results_by_preset_sort[key] = r
-
-    lines = []
-    lines.append("| Operation | Groups | Sort | Type | Pandas | Polars | Booster |")
-    lines.append("|-----------|--------|------|------|--------|--------|---------|")
-
-    prev_label = None
-    prev_groups = None
-    prev_sort_str = None
-
-    for preset in preset_order:
-        for sort_val in [True, False]:
-            key = (preset, sort_val)
-            if key not in results_by_preset_sort:
-                continue
-
-            r = results_by_preset_sort[key]
-            label = preset_labels[preset]
-            groups = f"{r['combo_cardinality']:,}"
-            sort_str = "True" if sort_val else "False"
-            backends = r["backends"]
-
-            if "pandas" not in backends:
-                continue
-
-            pandas_cold: BenchmarkStats = backends["pandas"]["cold_stats"]
-            pandas_warm: BenchmarkStats = backends["pandas"]["warm_stats"]
-            pandas_cold_mean = pandas_cold.mean
-            pandas_warm_mean = pandas_warm.mean
-
-            def fmt_cell_cold(name, *, backends=backends, pandas_cold_mean=pandas_cold_mean):
-                if name not in backends:
-                    return "-"
-                cold_stats: BenchmarkStats = backends[name]["cold_stats"]
-
-                cold_mean_ms = cold_stats.mean * 1000
-                cold_std_ms = cold_stats.std * 1000
-                cold_speedup = pandas_cold_mean / cold_stats.mean if cold_stats.mean > 0 else 0
-
-                cold_str = f"{cold_mean_ms:.1f}±{cold_std_ms:.1f}ms"
-
-                if name == "pandas":
-                    return f"{cold_str} (1.0x)"
-
-                cold_speedup_str = (
-                    f"**{cold_speedup:.1f}x**" if cold_speedup >= 1.1 else f"{cold_speedup:.1f}x"
-                )
-                return f"{cold_str} ({cold_speedup_str})"
-
-            def fmt_cell_warm(name, *, backends=backends, pandas_warm_mean=pandas_warm_mean):
-                if name not in backends:
-                    return "-"
-                warm_stats: BenchmarkStats = backends[name]["warm_stats"]
-
-                warm_mean_ms = warm_stats.mean * 1000
-                warm_std_ms = warm_stats.std * 1000
-                warm_speedup = pandas_warm_mean / warm_stats.mean if warm_stats.mean > 0 else 0
-
-                warm_str = f"{warm_mean_ms:.1f}±{warm_std_ms:.1f}ms"
-
-                if name == "pandas":
-                    return f"{warm_str} (1.0x)"
-
-                warm_speedup_str = (
-                    f"**{warm_speedup:.1f}x**" if warm_speedup >= 1.1 else f"{warm_speedup:.1f}x"
-                )
-                return f"{warm_str} ({warm_speedup_str})"
-
-            pandas_cold_str = fmt_cell_cold("pandas")
-            polars_cold_str = fmt_cell_cold("polars")
-            booster_cold_str = fmt_cell_cold("booster")
-
-            pandas_warm_str = fmt_cell_warm("pandas")
-            polars_warm_str = fmt_cell_warm("polars")
-            booster_warm_str = fmt_cell_warm("booster")
-
-            # First row (Cold)
-            display_label = label if label != prev_label else ""
-            display_groups = groups if groups != prev_groups else ""
-            display_sort = sort_str if sort_str != prev_sort_str else ""
-
-            lines.append(
-                f"| {display_label} | {display_groups} | {display_sort} | Cold | "
-                f"{pandas_cold_str} | {polars_cold_str} | {booster_cold_str} |"
-            )
-
-            # Second row (Warm) - always hide label, groups, sort
-            lines.append(
-                f"|  |  |  | Warm | {pandas_warm_str} | {polars_warm_str} | {booster_warm_str} |"
-            )
-
-            prev_label = label
-            prev_groups = groups
-            prev_sort_str = sort_str
-
-    return "\n".join(lines)
-
-
-def render_high_table(results: list[dict]) -> str:
-    """Render high cardinality table with cold/warm stats.
-
-    Args:
-        results: List of benchmark results for high cardinality presets (can include both sorted
-            and unsorted).
-
-    Returns:
-        Markdown table string.
-    """
-    if not results:
-        return ""
-
-    preset_order = ["high_cardinality_1key", "high_cardinality_2key", "high_cardinality_3key"]
-    preset_labels = {
-        "high_cardinality_1key": "Single-key",
-        "high_cardinality_2key": "2-key",
-        "high_cardinality_3key": "3-key",
-    }
-
-    # Group results by preset and sort
-    results_by_preset_sort = {}
-    for r in results:
-        key = (r["preset"], r["sort"])
-        results_by_preset_sort[key] = r
-
-    lines = []
-    lines.append("| Operation | Groups | Sort | Type | Pandas | Polars | Booster |")
-    lines.append("|-----------|--------|------|------|--------|--------|---------|")
-
-    prev_label = None
-    prev_groups = None
-    prev_sort_str = None
-
-    for preset in preset_order:
-        for sort_val in [True, False]:
-            key = (preset, sort_val)
-            if key not in results_by_preset_sort:
-                continue
-
-            r = results_by_preset_sort[key]
-            label = preset_labels[preset]
-            groups = f"{r['combo_cardinality']:,}"
-            sort_str = "True" if sort_val else "False"
-            backends = r["backends"]
-
-            if "pandas" not in backends:
-                continue
-
-            pandas_cold: BenchmarkStats = backends["pandas"]["cold_stats"]
-            pandas_warm: BenchmarkStats = backends["pandas"]["warm_stats"]
-            pandas_cold_mean = pandas_cold.mean
-            pandas_warm_mean = pandas_warm.mean
-
-            def fmt_cell_cold(name, *, backends=backends, pandas_cold_mean=pandas_cold_mean):
-                if name not in backends:
-                    return "-"
-                cold_stats: BenchmarkStats = backends[name]["cold_stats"]
-
-                cold_mean_ms = cold_stats.mean * 1000
-                cold_std_ms = cold_stats.std * 1000
-                cold_speedup = pandas_cold_mean / cold_stats.mean if cold_stats.mean > 0 else 0
-
-                cold_str = f"{cold_mean_ms:.1f}±{cold_std_ms:.1f}ms"
-
-                if name == "pandas":
-                    return f"{cold_str} (1.0x)"
-
-                cold_speedup_str = (
-                    f"**{cold_speedup:.1f}x**" if cold_speedup >= 1.1 else f"{cold_speedup:.1f}x"
-                )
-                return f"{cold_str} ({cold_speedup_str})"
-
-            def fmt_cell_warm(name, *, backends=backends, pandas_warm_mean=pandas_warm_mean):
-                if name not in backends:
-                    return "-"
-                warm_stats: BenchmarkStats = backends[name]["warm_stats"]
-
-                warm_mean_ms = warm_stats.mean * 1000
-                warm_std_ms = warm_stats.std * 1000
-                warm_speedup = pandas_warm_mean / warm_stats.mean if warm_stats.mean > 0 else 0
-
-                warm_str = f"{warm_mean_ms:.1f}±{warm_std_ms:.1f}ms"
-
-                if name == "pandas":
-                    return f"{warm_str} (1.0x)"
-
-                warm_speedup_str = (
-                    f"**{warm_speedup:.1f}x**" if warm_speedup >= 1.1 else f"{warm_speedup:.1f}x"
-                )
-                return f"{warm_str} ({warm_speedup_str})"
-
-            pandas_cold_str = fmt_cell_cold("pandas")
-            polars_cold_str = fmt_cell_cold("polars")
-            booster_cold_str = fmt_cell_cold("booster")
-
-            pandas_warm_str = fmt_cell_warm("pandas")
-            polars_warm_str = fmt_cell_warm("polars")
-            booster_warm_str = fmt_cell_warm("booster")
-
-            # First row (Cold)
-            display_label = label if label != prev_label else ""
-            display_groups = groups if groups != prev_groups else ""
-            display_sort = sort_str if sort_str != prev_sort_str else ""
-
-            lines.append(
-                f"| {display_label} | {display_groups} | {display_sort} | Cold | "
-                f"{pandas_cold_str} | {polars_cold_str} | {booster_cold_str} |"
-            )
-
-            # Second row (Warm) - always hide label, groups, sort
-            lines.append(
-                f"|  |  |  | Warm | {pandas_warm_str} | {polars_warm_str} | {booster_warm_str} |"
-            )
-
-            prev_label = label
-            prev_groups = groups
-            prev_sort_str = sort_str
-
-    return "\n".join(lines)
-
-
-def render_threshold_table(results: list[dict]) -> str:
-    """Render threshold-neighborhood table with cold/warm stats.
-
-    Args:
-        results: List of benchmark results for threshold presets (can include both sorted
-            and unsorted).
-
-    Returns:
-        Markdown table string.
-    """
-    if not results:
-        return ""
-
-    preset_order = ["threshold_180k", "threshold_200k", "threshold_220k"]
-    preset_labels = {
-        "threshold_180k": "2-key (~180k elems)",
-        "threshold_200k": "2-key (~200k elems)",
-        "threshold_220k": "2-key (~220k elems)",
-    }
-
-    results_by_preset_sort = {}
-    for r in results:
-        key = (r["preset"], r["sort"])
-        results_by_preset_sort[key] = r
-
-    lines = []
-    lines.append("| Operation | Groups | Sort | Type | Pandas | Polars | Booster |")
-    lines.append("|-----------|--------|------|------|--------|--------|---------|")
-
-    prev_label = None
-    prev_groups = None
-    prev_sort_str = None
-
-    for preset in preset_order:
-        for sort_val in [True, False]:
-            key = (preset, sort_val)
-            if key not in results_by_preset_sort:
-                continue
-
-            r = results_by_preset_sort[key]
-            label = preset_labels[preset]
-            groups = f"{r['combo_cardinality']:,}"
-            sort_str = "True" if sort_val else "False"
-            backends = r["backends"]
-
-            if "pandas" not in backends:
-                continue
-
-            pandas_cold: BenchmarkStats = backends["pandas"]["cold_stats"]
-            pandas_warm: BenchmarkStats = backends["pandas"]["warm_stats"]
-            pandas_cold_mean = pandas_cold.mean
-            pandas_warm_mean = pandas_warm.mean
-
-            def fmt_cell_cold(name, *, backends=backends, pandas_cold_mean=pandas_cold_mean):
-                if name not in backends:
-                    return "-"
-                cold_stats: BenchmarkStats = backends[name]["cold_stats"]
-
-                cold_mean_ms = cold_stats.mean * 1000
-                cold_std_ms = cold_stats.std * 1000
-                cold_speedup = pandas_cold_mean / cold_stats.mean if cold_stats.mean > 0 else 0
-
-                cold_str = f"{cold_mean_ms:.1f}±{cold_std_ms:.1f}ms"
-
-                if name == "pandas":
-                    return f"{cold_str} (1.0x)"
-
-                cold_speedup_str = (
-                    f"**{cold_speedup:.1f}x**" if cold_speedup >= 1.1 else f"{cold_speedup:.1f}x"
-                )
-                return f"{cold_str} ({cold_speedup_str})"
-
-            def fmt_cell_warm(name, *, backends=backends, pandas_warm_mean=pandas_warm_mean):
-                if name not in backends:
-                    return "-"
-                warm_stats: BenchmarkStats = backends[name]["warm_stats"]
-
-                warm_mean_ms = warm_stats.mean * 1000
-                warm_std_ms = warm_stats.std * 1000
-                warm_speedup = pandas_warm_mean / warm_stats.mean if warm_stats.mean > 0 else 0
-
-                warm_str = f"{warm_mean_ms:.1f}±{warm_std_ms:.1f}ms"
-
-                if name == "pandas":
-                    return f"{warm_str} (1.0x)"
-
-                warm_speedup_str = (
-                    f"**{warm_speedup:.1f}x**" if warm_speedup >= 1.1 else f"{warm_speedup:.1f}x"
-                )
-                return f"{warm_str} ({warm_speedup_str})"
-
-            pandas_cold_str = fmt_cell_cold("pandas")
-            polars_cold_str = fmt_cell_cold("polars")
-            booster_cold_str = fmt_cell_cold("booster")
-
-            pandas_warm_str = fmt_cell_warm("pandas")
-            polars_warm_str = fmt_cell_warm("polars")
-            booster_warm_str = fmt_cell_warm("booster")
-
-            display_label = label if label != prev_label else ""
-            display_groups = groups if groups != prev_groups else ""
-            display_sort = sort_str if sort_str != prev_sort_str else ""
-
-            lines.append(
-                f"| {display_label} | {display_groups} | {display_sort} | Cold | "
-                f"{pandas_cold_str} | {polars_cold_str} | {booster_cold_str} |"
-            )
-            lines.append(
-                f"|  |  |  | Warm | {pandas_warm_str} | {polars_warm_str} | {booster_warm_str} |"
-            )
-
-            prev_label = label
-            prev_groups = groups
-            prev_sort_str = sort_str
-
-    return "\n".join(lines)
-
-
-def format_performance_section(
-    results: list[dict],
-    sort_mode: str,
-    cardinality: str,
-    diagnostic: str,
-) -> str:
-    """Format benchmark results as README Performance section with cold/warm stats.
-
-    Args:
-        results: List of all benchmark result dictionaries.
-        sort_mode: "all", "sorted", or "unsorted".
-        cardinality: "all", "standard", or "high".
-        diagnostic: "none" or "threshold".
-
-    Returns:
-        Markdown string with Performance section structure.
-    """
-    standard_presets = {"1key", "2key", "3key", "4key", "5key"}
-    high_presets = {"high_cardinality_1key", "high_cardinality_2key", "high_cardinality_3key"}
-    threshold_presets = {"threshold_180k", "threshold_200k", "threshold_220k"}
-
-    filtered_results = []
-    for r in results:
-        if (
-            sort_mode == "all"
-            or (sort_mode == "sorted" and r["sort"])
-            or (sort_mode == "unsorted" and not r["sort"])
-        ):
-            filtered_results.append(r)
-
-    sections = ["## Performance", ""]
-    aggs = []
-    for result in filtered_results:
-        agg = result["agg"]
-        if agg not in aggs:
-            aggs.append(agg)
-
-    multiple_aggs = len(aggs) > 1
-
-    for agg in aggs:
-        agg_results = [r for r in filtered_results if r["agg"] == agg]
-        standard_results = [r for r in agg_results if r["preset"] in standard_presets]
-        high_results = [r for r in agg_results if r["preset"] in high_presets]
-        threshold_results = [r for r in agg_results if r["preset"] in threshold_presets]
-
-        if multiple_aggs:
-            sections.append(f"### Aggregation: `{agg}`")
-            sections.append("")
-
-        if cardinality in ["all", "standard"] and standard_results:
-            heading = (
-                "### Standard Cardinality (5M rows)"
-                if not multiple_aggs
-                else "#### Standard Cardinality (5M rows)"
-            )
-            sections.append(heading)
-            sections.append("")
-            sections.append(render_standard_table(standard_results))
-            sections.append("")
-
-        if cardinality in ["all", "high"] and high_results:
-            heading = (
-                "### High Cardinality (5M rows, ~5M unique groups)"
-                if not multiple_aggs
-                else "#### High Cardinality (5M rows, ~5M unique groups)"
-            )
-            sections.append(heading)
-            sections.append("")
-            sections.append(render_high_table(high_results))
-            sections.append("")
-
-        if diagnostic == "threshold" and threshold_results:
-            diag_heading = "### Diagnostics" if not multiple_aggs else "#### Diagnostics"
-            threshold_heading = (
-                "#### Threshold Neighborhood (2-key, n_groups * n_keys near 200k)"
-                if not multiple_aggs
-                else "##### Threshold Neighborhood (2-key, n_groups * n_keys near 200k)"
-            )
-            sections.append(diag_heading)
-            sections.append("")
-            sections.append(threshold_heading)
-            sections.append("")
-            sections.append(render_threshold_table(threshold_results))
-            sections.append("")
-
-    return "\n".join(sections)
 
 
 def resolve_core_presets(cardinality: str) -> list[str]:
@@ -1573,9 +1056,7 @@ def run_benchmarks(
                         cold_corr = backend_data.get("cold_correctness", "not_checked")
                         warm_corr = backend_data.get("warm_correctness", "not_checked")
                         if cold_corr != "not_checked" or warm_corr != "not_checked":
-                            correctness_str = (
-                                f" | Correctness: cold={cold_corr}, warm={warm_corr}"
-                            )
+                            correctness_str = f" | Correctness: cold={cold_corr}, warm={warm_corr}"
 
                     print(
                         f"  {backend_name:8s} | Cold: {cold_str} | "
@@ -1589,92 +1070,6 @@ def run_benchmarks(
     print()
 
     return results
-
-
-def save_results_md(
-    results: list[dict],
-    stats_evidence: list[dict[str, Any]],
-    output_path: str,
-    sort_mode: str,
-    cardinality: str,
-    diagnostic: str,
-) -> None:
-    """Save benchmark results to Markdown file.
-
-    Args:
-        results: List of benchmark result dictionaries.
-        output_path: Output file path (should end with .md).
-        sort_mode: Sort mode used in benchmark.
-        cardinality: Cardinality mode used in benchmark.
-        diagnostic: Diagnostic mode used in benchmark.
-    """
-    path = Path(output_path)
-
-    if not path.suffix:
-        path = path.with_suffix(".md")
-    elif path.suffix != ".md":
-        print(f"Warning: Output path should have .md extension, got {path.suffix}")
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    performance_section = format_performance_section(results, sort_mode, cardinality, diagnostic)
-    stats_evidence_section = render_stats_evidence_section(stats_evidence)
-
-    def correctness_section() -> str:
-        lines: list[str] = []
-        lines.append("### Correctness")
-        lines.append("")
-
-        def summarize_backend(name: str) -> str:
-            failures: list[str] = []
-            checked = 0
-            passed = 0
-
-            for r in results:
-                backend_data = r.get("backends", {}).get(name)
-                if not backend_data:
-                    continue
-
-                for mode_label in ("cold", "warm"):
-                    status = backend_data.get(f"{mode_label}_correctness", "not_checked")
-                    if status == "not_checked":
-                        continue
-                    checked += 1
-                    if status.startswith("fail:"):
-                        failures.append(f"{r['preset']} (sort={r['sort']}, {mode_label}): {status}")
-                    else:
-                        passed += 1
-
-            if checked == 0:
-                return "not_checked"
-            if failures:
-                first = failures[0]
-                more = f" (+{len(failures) - 1} more)" if len(failures) > 1 else ""
-                return f"fail ({passed}/{checked} passed): {first}{more}"
-            return f"pass ({passed}/{checked})"
-
-        for backend in BACKEND_DISPLAY_ORDER:
-            if backend == "pandas":
-                continue
-            if backend == "polars" and not any("polars" in r.get("backends", {}) for r in results):
-                continue
-            label = backend.capitalize()
-            lines.append(f"- {label}: {summarize_backend(backend)}")
-
-        lines.append("")
-        return "\n".join(lines)
-
-    with open(path, "w") as f:
-        f.write(performance_section)
-        f.write("\n")
-        f.write("\n")
-        f.write(correctness_section())
-        f.write("\n")
-        f.write("\n")
-        f.write(stats_evidence_section)
-        f.write("\n")
-
-    print(f"\nResults saved to: {path}")
 
 
 def save_profile_json(
@@ -1711,23 +1106,24 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python benches/benchmark.py
+  python benchmarks/benchmark.py
       # Run default benchmarks (cardinality=all, diagnostic=none)
-  python benches/benchmark.py --cardinality all
+  python benchmarks/benchmark.py --cardinality all
       # Run core benchmarks only (standard + high)
-  python benches/benchmark.py --cardinality standard             # Standard only
-  python benches/benchmark.py --cardinality high                 # High only
-  python benches/benchmark.py --agg std --agg var                # Run only std/var benchmarks
-  python benches/benchmark.py --agg prod                         # Run only product benchmarks
-  python benches/benchmark.py --agg min --agg max               # Run only min/max benchmarks
-  python benches/benchmark.py --diagnostic threshold --sort-mode unsorted
+  python benchmarks/benchmark.py --cardinality standard             # Standard only
+  python benchmarks/benchmark.py --cardinality high                 # High only
+  python benchmarks/benchmark.py --agg std --agg var                # Run only std/var benchmarks
+  python benchmarks/benchmark.py --agg median                       # Run only median benchmarks
+  python benchmarks/benchmark.py --agg prod                         # Run only product benchmarks
+  python benchmarks/benchmark.py --agg min --agg max               # Run only min/max benchmarks
+  python benchmarks/benchmark.py --diagnostic threshold --sort-mode unsorted
       # Add threshold diagnostics
-  python benches/benchmark.py --cardinality all --diagnostic threshold --sort-mode unsorted
+  python benchmarks/benchmark.py --cardinality all --diagnostic threshold --sort-mode unsorted
       # Core + diagnostics
-  python benches/benchmark.py --sort-mode sorted                 # Sorted only
-  python benches/benchmark.py --cardinality high --sort-mode unsorted  # Combine
-  python benches/benchmark.py --output results.md                # Save results
-  python benches/benchmark.py --samples 10                       # Adjust sample count
+  python benchmarks/benchmark.py --sort-mode sorted                 # Sorted only
+  python benchmarks/benchmark.py --cardinality high --sort-mode unsorted  # Combine
+  python benchmarks/benchmark.py --output benchmarks/reports        # Save per-aggregation reports
+  python benchmarks/benchmark.py --samples 10                       # Adjust sample count
 
 Environment:
   PANDAS_BOOSTER_FORCE_PANDAS_SORT=1  # force Python sort_index() (panic button)
@@ -1765,14 +1161,18 @@ Environment:
         choices=SUPPORTED_AGGS,
         help=(
             "Aggregation function to benchmark. Repeatable. "
-            "Defaults to current behavior: core=sum, evidence=std/var."
+            "Defaults to core=sum for benchmark reports; profile JSON defaults to std/var evidence."
         ),
     )
     parser.add_argument(
         "--output",
         "-o",
         type=str,
-        help="Output file path for Markdown results (e.g., results.md)",
+        help=(
+            "Output directory for per-aggregation Markdown reports (e.g., benchmarks/reports). "
+            "Existing README.md/<agg>.md files must already be benchmark-generated or the command "
+            "will fail to avoid overwriting user files."
+        ),
     )
     parser.add_argument(
         "--profile-json",
@@ -1831,9 +1231,9 @@ Environment:
         aggs=args.aggs,
     )
 
-    stats_evidence: list[dict[str, Any]] = []
-    if args.output or args.profile_json:
-        stats_evidence = collect_stats_evidence(
+    profile_stats_evidence: list[dict[str, Any]] = []
+    if args.profile_json:
+        profile_stats_evidence = collect_stats_evidence(
             args.samples,
             args.cardinality,
             args.sort_mode,
@@ -1841,9 +1241,21 @@ Environment:
         )
 
     if args.output:
+        result_aggs = {result["agg"] for result in all_results}
+        output_stats_evidence = [
+            item for item in profile_stats_evidence if item["agg"] in result_aggs
+        ]
+        if not args.profile_json and args.aggs is not None:
+            output_stats_evidence = collect_stats_evidence(
+                args.samples,
+                args.cardinality,
+                args.sort_mode,
+                args.aggs,
+            )
+
         save_results_md(
             all_results,
-            stats_evidence,
+            output_stats_evidence,
             args.output,
             args.sort_mode,
             args.cardinality,
@@ -1852,7 +1264,7 @@ Environment:
 
     if args.profile_json:
         save_profile_json(
-            stats_evidence,
+            profile_stats_evidence,
             args.profile_json,
             cardinality=args.cardinality,
             sort_mode=args.sort_mode,

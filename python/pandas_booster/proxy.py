@@ -3,27 +3,11 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
-import numpy as np
 import pandas as pd
 
-from ._abi_compat import (
-    PandasBoosterKeyShapeSkewError,
-    normalize_multi_keys_cols,
-    normalize_result_values,
-    raise_abi_skew,
-)
-from ._config import (
-    force_pandas_float_groupby_enabled,
-    force_pandas_sort_enabled,
-    strict_abi_enabled,
-)
-from ._groupby_accel import (
-    build_series_from_multi_result,
-    build_series_from_single_result,
-    capture_key_numpy_dtype,
-    classify_groupby_compatibility,
-    select_rust_groupby_func,
-    to_i64_contiguous,
+from ._groupby_execution import (
+    execute_groupby_multi,
+    execute_groupby_single,
 )
 
 if TYPE_CHECKING:
@@ -45,6 +29,8 @@ class _SeriesGroupByProto(Protocol):
 
     def std(self, *args: Any, **kwargs: Any) -> Series: ...
 
+    def median(self, *args: Any, **kwargs: Any) -> Series: ...
+
     def var(self, *args: Any, **kwargs: Any) -> Series: ...
 
     def __getattr__(self, name: str) -> Any: ...
@@ -60,21 +46,12 @@ class _DataFrameGroupByProto(Protocol):
     def __getattr__(self, name: str) -> Any: ...
 
 
-_ACCELERATED_AGGS = frozenset({"sum", "mean", "prod", "min", "max", "count", "std", "var"})
-_FALLBACK_THRESHOLD: int | None = None
+_ACCELERATED_AGGS = frozenset(
+    {"sum", "mean", "prod", "min", "max", "count", "std", "var", "median"}
+)
 
 
-def _get_fallback_threshold() -> int:
-    global _FALLBACK_THRESHOLD
-    if _FALLBACK_THRESHOLD is None:
-        import importlib
-
-        _rust = importlib.import_module("pandas_booster._rust")
-        _FALLBACK_THRESHOLD = int(_rust.get_fallback_threshold())
-    return _FALLBACK_THRESHOLD
-
-
-AggFunc = Literal["sum", "mean", "prod", "min", "max", "count", "std", "var"]
+AggFunc = Literal["sum", "mean", "prod", "min", "max", "count", "std", "median", "var"]
 
 
 class BoosterSeriesGroupBy:
@@ -96,173 +73,52 @@ class BoosterSeriesGroupBy:
         self._target = target
         self._sort = sort
 
-    def _can_accelerate(self, agg: AggFunc) -> bool:
-        if agg not in {"std", "var"} and len(self._df) < _get_fallback_threshold():
-            return False
-
-        key_cols: list[pd.Series] = []
-        for col_name in self._by_cols:
-            col = self._df[col_name]
-            if not isinstance(col, pd.Series):
-                return False
-            key_cols.append(cast(pd.Series, col))
-
-        val_col = self._df[self._target]
-        if not isinstance(val_col, pd.Series):
-            return False
-        val_col = cast(pd.Series, val_col)
-
-        compatibility = classify_groupby_compatibility(
-            key_cols=key_cols,
-            val_col=val_col,
-            agg=agg,
-            force_pandas_float_groupby=force_pandas_float_groupby_enabled(),
-        )
-        return compatibility.supported and not compatibility.force_pandas
-
-    def _rust_aggregate(self, agg: AggFunc) -> Series:
-        import importlib
-
-        _rust = importlib.import_module("pandas_booster._rust")
-
+    def _accelerated_aggregate(self, agg: AggFunc) -> Series:
         by_cols = self._by_cols
         target = self._target
         sort = self._sort
-        force_pandas_sort = bool(sort) and force_pandas_sort_enabled()
 
-        strict = strict_abi_enabled()
+        def fallback() -> Series:
+            return cast("Series", getattr(self._obj, agg)())
 
         val_col = self._df[target]
         if not isinstance(val_col, pd.Series):
-            return cast("Series", getattr(self._obj, agg)())
-        is_val_int = pd.api.types.is_integer_dtype(val_col)
+            return fallback()
 
         if len(by_cols) == 1:
             key_col = self._df[by_cols[0]]
             if not isinstance(key_col, pd.Series):
-                return cast("Series", getattr(self._obj, agg)())
+                return fallback()
+            return execute_groupby_single(
+                self._df,
+                key_col,
+                val_col,
+                agg,
+                sort=sort,
+                context="proxy",
+                fallback=fallback,
+            )
 
-            key_dtype = capture_key_numpy_dtype(key_col)
-            value_dtype = np.asarray(val_col.to_numpy(copy=False)).dtype
+        key_cols: list[tuple[str, pd.Series]] = []
+        for col_name in by_cols:
+            col = self._df[col_name]
+            if not isinstance(col, pd.Series):
+                return fallback()
+            key_cols.append((col_name, col))
 
-            keys = to_i64_contiguous(key_col.to_numpy(copy=False))
-            if is_val_int:
-                values = np.ascontiguousarray(val_col.to_numpy(dtype=np.int64))
-                func_base = f"groupby_{agg}_i64"
-            else:
-                values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
-                func_base = f"groupby_{agg}_f64"
-
-            try:
-                rust_func, needs_python_sort = select_rust_groupby_func(
-                    _rust,
-                    func_base,
-                    sort=sort,
-                    n_rows=len(self._df),
-                    force_pandas_sort=force_pandas_sort,
-                    context="proxy",
-                )
-                result_keys, result_values = rust_func(keys, values)
-                result_values_arr = normalize_result_values(
-                    result_values,
-                    agg=agg,
-                    is_val_int=is_val_int,
-                    context="proxy",
-                )
-
-                return build_series_from_single_result(
-                    np.asarray(result_keys),
-                    result_values_arr,
-                    name=val_col.name,
-                    index_name=key_col.name,
-                    index_dtype=key_dtype,
-                    value_dtype=value_dtype,
-                    agg=agg,
-                    is_val_int=is_val_int,
-                    sort=sort,
-                    needs_python_sort=needs_python_sort,
-                )
-            except PandasBoosterKeyShapeSkewError:
-                if strict:
-                    raise
-                return cast("Series", getattr(self._obj, agg)())
-        else:
-            key_cols: list[pd.Series] = []
-            for col_name in by_cols:
-                col = self._df[col_name]
-                if not isinstance(col, pd.Series):
-                    return cast("Series", getattr(self._obj, agg)())
-                key_cols.append(col)
-
-            key_dtypes = [capture_key_numpy_dtype(col) for col in key_cols]
-            value_dtype = np.asarray(val_col.to_numpy(copy=False)).dtype
-            key_arrays = [to_i64_contiguous(col.to_numpy(copy=False)) for col in key_cols]
-
-            if is_val_int:
-                values = np.ascontiguousarray(val_col.to_numpy(dtype=np.int64))
-                func_base = f"groupby_multi_{agg}_i64"
-            else:
-                values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
-                func_base = f"groupby_multi_{agg}_f64"
-
-            try:
-                rust_func, needs_python_sort = select_rust_groupby_func(
-                    _rust,
-                    func_base,
-                    sort=sort,
-                    n_rows=len(self._df),
-                    force_pandas_sort=force_pandas_sort,
-                    context="proxy",
-                )
-                rust_result = rust_func(key_arrays, values)
-                if not isinstance(rust_result, tuple) or len(rust_result) != 2:
-                    raise_abi_skew(
-                        context="proxy",
-                        detail=(
-                            "expected Rust groupby_multi result as "
-                            "(keys_cols, result_values) tuple; "
-                            f"got type={type(rust_result)!r}."
-                            if not isinstance(rust_result, tuple)
-                            else (
-                                "expected 2-tuple (keys_cols, result_values); "
-                                f"got len={len(rust_result)}."
-                            )
-                        ),
-                    )
-                keys_cols, result_values = rust_result
-                result_values_arr = normalize_result_values(
-                    result_values,
-                    agg=agg,
-                    is_val_int=is_val_int,
-                    context="proxy",
-                )
-                keys_cols_arr = normalize_multi_keys_cols(
-                    keys_cols,
-                    n_groups=result_values_arr.shape[0],
-                    n_keys=len(by_cols),
-                    context="proxy",
-                    strict=strict,
-                )
-                return build_series_from_multi_result(
-                    keys_cols_arr,
-                    result_values_arr,
-                    by_cols=by_cols,
-                    key_dtypes=key_dtypes,
-                    name=val_col.name,
-                    value_dtype=value_dtype,
-                    agg=agg,
-                    is_val_int=is_val_int,
-                    sort=sort,
-                    needs_python_sort=needs_python_sort,
-                )
-            except PandasBoosterKeyShapeSkewError:
-                if strict:
-                    raise
-                return cast("Series", getattr(self._obj, agg)())
+        return execute_groupby_multi(
+            self._df,
+            key_cols,
+            val_col,
+            agg,
+            sort=sort,
+            context="proxy",
+            fallback=fallback,
+        )
 
     def _try_accelerate(self, agg: AggFunc) -> Series:
-        if agg in _ACCELERATED_AGGS and self._can_accelerate(agg):
-            return self._rust_aggregate(agg)
+        if agg in _ACCELERATED_AGGS:
+            return self._accelerated_aggregate(agg)
         return cast("Series", getattr(self._obj, agg)())
 
     def sum(self, *args: Any, **kwargs: Any) -> Series:
@@ -304,6 +160,12 @@ class BoosterSeriesGroupBy:
         if args or kwargs:
             return cast("Series", self._obj.std(*args, **kwargs))
         return self._try_accelerate("std")
+
+    def median(self, *args: Any, **kwargs: Any) -> Series:
+        """Compute median, preserving pandas call parity."""
+        if args or kwargs:
+            return cast("Series", self._obj.median(*args, **kwargs))
+        return self._try_accelerate("median")
 
     def var(self, *args: Any, **kwargs: Any) -> Series:
         """Compute var, using Rust acceleration when possible."""

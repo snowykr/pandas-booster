@@ -33,7 +33,7 @@ def strict_abi_enabled() -> bool:
 
 
 def force_pandas_float_groupby_enabled() -> bool:
-    """Return True if single-key float sum/mean should force pandas fallback.
+    """Return True if eligible single-key float reductions should force pandas fallback.
 
     Emergency toggle:
     - unset / 0: OFF (default)

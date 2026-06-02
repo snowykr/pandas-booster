@@ -191,6 +191,76 @@ class TestAcceleratedAggregations:
             rtol=(1e-10 if agg == "mean" else 0.0),
         )
 
+    @pytest.mark.parametrize("target", ["val_float", "val_int"])
+    def test_single_key_median_matches_pandas(self, large_df, target):
+        import pandas_booster
+
+        pandas_booster.activate()
+        booster_result = large_df.groupby("key")[target].median()
+        pandas_booster.deactivate()
+        pandas_result = large_df.groupby("key")[target].median()
+
+        assert booster_result.dtype == np.dtype(np.float64)
+        pd.testing.assert_series_equal(
+            booster_result.sort_index(),
+            pandas_result.sort_index(),
+            check_exact=False,
+            check_dtype=True,
+            rtol=1e-10,
+        )
+
+    @pytest.mark.parametrize("target", ["val_float", "val_int"])
+    def test_multi_key_median_matches_pandas(self, large_df, target):
+        import pandas_booster
+
+        pandas_booster.activate()
+        booster_result = large_df.groupby(["key", "key2"])[target].median()
+        pandas_booster.deactivate()
+        pandas_result = large_df.groupby(["key", "key2"])[target].median()
+
+        assert booster_result.dtype == np.dtype(np.float64)
+        pd.testing.assert_series_equal(
+            booster_result.sort_index(),
+            pandas_result.sort_index(),
+            check_exact=False,
+            check_dtype=True,
+            rtol=1e-10,
+        )
+
+
+class TestProxyMedianCallParity:
+    def test_median_kwargs_delegate_to_pandas_without_acceleration(
+        self, large_df, monkeypatch: pytest.MonkeyPatch
+    ):
+        import pandas_booster
+        from pandas.core.groupby.generic import SeriesGroupBy
+        from pandas_booster.proxy import BoosterSeriesGroupBy
+
+        expected = large_df.groupby("key")["val_float"].median(numeric_only=False)
+        calls: list[dict[str, object]] = []
+        original_median = SeriesGroupBy.median
+
+        def wrapped(self, *args, **kwargs):
+            calls.append({"args": args, "kwargs": dict(kwargs)})
+            return original_median(self, *args, **kwargs)
+
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("median kwargs must pass through to pandas")
+
+        monkeypatch.setattr(SeriesGroupBy, "median", wrapped, raising=True)
+        monkeypatch.setattr(BoosterSeriesGroupBy, "_try_accelerate", _boom, raising=True)
+
+        pandas_booster.activate()
+        try:
+            result = large_df.groupby("key")["val_float"].median(numeric_only=False)
+        finally:
+            pandas_booster.deactivate()
+
+        assert calls == [{"args": (), "kwargs": {"numeric_only": False}}]
+        pd.testing.assert_series_equal(
+            result.sort_index(), expected.sort_index(), check_exact=False, rtol=1e-10
+        )
+
 
 class TestFallbackBehavior:
     def test_small_df_falls_back(self, small_df):
@@ -290,6 +360,35 @@ class TestNonAcceleratedMethodsFallback:
             result.sort_index(),
             expected.sort_index(),
             check_exact=False,
+        )
+
+    def test_median_works(self, large_df, monkeypatch: pytest.MonkeyPatch):
+        import pandas_booster
+        from pandas_booster.proxy import BoosterSeriesGroupBy
+
+        expected = large_df.groupby("key")["val_float"].median()
+        calls: list[str] = []
+
+        def fake_try_accelerate(self, agg):
+            calls.append(agg)
+            return expected
+
+        monkeypatch.setattr(
+            BoosterSeriesGroupBy, "_try_accelerate", fake_try_accelerate, raising=True
+        )
+
+        pandas_booster.activate()
+        try:
+            result = large_df.groupby("key")["val_float"].median()
+        finally:
+            pandas_booster.deactivate()
+
+        assert calls == ["median"]
+        pd.testing.assert_series_equal(
+            result.sort_index(),
+            expected.sort_index(),
+            check_exact=False,
+            rtol=1e-10,
         )
 
 
@@ -447,7 +546,7 @@ class TestProdProxy:
         )
         pd.testing.assert_series_equal(multi_result, multi_expected, check_exact=True)
 
-    def test_prod_no_arg_uses_accelerated_proxy_when_eligible(
+    def test_prod_no_arg_single_key_float_uses_rust_path(
         self, large_df, monkeypatch: pytest.MonkeyPatch
     ):
         import pandas_booster
@@ -457,7 +556,7 @@ class TestProdProxy:
         calls: list[str] = []
 
         def fake_sorted(_keys, _values):
-            calls.append("prod")
+            calls.append("groupby_prod_f64_sorted")
             return expected.index.to_numpy(dtype=np.int64), expected.to_numpy(dtype=np.float64)
 
         monkeypatch.setattr(rust, "groupby_prod_f64_sorted", fake_sorted, raising=False)
@@ -468,7 +567,41 @@ class TestProdProxy:
         finally:
             pandas_booster.deactivate()
 
-        assert calls == ["prod"]
+        pd.testing.assert_series_equal(
+            result.sort_index(), expected.sort_index(), check_exact=False, rtol=1e-10
+        )
+        assert calls == ["groupby_prod_f64_sorted"]
+
+    def test_prod_no_arg_single_key_float_without_ordered_abi_marker_delegates_to_pandas(
+        self, large_df, monkeypatch: pytest.MonkeyPatch
+    ):
+        import sys
+        from types import ModuleType
+
+        import pandas_booster
+        import pandas_booster._abi_compat as abi
+
+        class StaleRustModule(ModuleType):
+            def get_fallback_threshold(self) -> int:
+                return 100_000
+
+            def groupby_prod_f64_sorted(self, *_args, **_kwargs):
+                raise AssertionError("stale proxy single-key float prod kernel must not be called")
+
+        stale_rust = StaleRustModule("pandas_booster._rust")
+        monkeypatch.setitem(sys.modules, "pandas_booster._rust", stale_rust)
+        monkeypatch.delenv("PANDAS_BOOSTER_STRICT_ABI", raising=False)
+        monkeypatch.delenv("PANDAS_BOOSTER_ABI_SKEW_NOTICE", raising=False)
+        monkeypatch.setattr(abi, "_WARNED_ABI_SKEW", False)
+
+        expected = large_df.groupby("key", sort=True)["val_float"].prod()
+
+        pandas_booster.activate()
+        try:
+            result = large_df.groupby("key", sort=True)["val_float"].prod()
+        finally:
+            pandas_booster.deactivate()
+
         pd.testing.assert_series_equal(
             result.sort_index(), expected.sort_index(), check_exact=False, rtol=1e-10
         )

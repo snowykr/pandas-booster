@@ -113,6 +113,19 @@ class TestBoosterGroupBy:
             rtol=1e-10,
         )
 
+    def test_median_matches_pandas_on_large_supported_input(self, large_df):
+        booster_result = cast(BoosterAccessor, large_df.booster).groupby(
+            "key", "val_float", "median"
+        )
+        pandas_result = large_df.groupby("key")["val_float"].median()
+
+        pd.testing.assert_series_equal(
+            booster_result.sort_index(),
+            pandas_result.sort_index(),
+            check_exact=False,
+            rtol=1e-10,
+        )
+
 
 class TestGroupbyCount:
     def test_count_f64_matches_pandas(self, large_df):
@@ -359,6 +372,105 @@ class TestStdVarSingleKeyRed:
         assert booster_result.dtype == np.float64
 
 
+class TestMedianSingleKeyAccessor:
+    def _make_float_df(self) -> pd.DataFrame:
+        n = 200_000
+        keys = np.full(n, 4, dtype=np.int64)
+        vals = np.full(n, 10.0, dtype=np.float64)
+
+        keys[[0, 50_000, 100_000]] = 3
+        vals[[0, 50_000, 100_000]] = [1.0, 5.0, 9.0]
+
+        keys[[1, 60_000]] = 2
+        vals[[1, 60_000]] = np.nan
+
+        keys[[2, 30_000, 90_000]] = 1
+        vals[[2, 30_000, 90_000]] = [np.nan, 4.0, 6.0]
+
+        keys[3] = 4
+        vals[3] = 11.0
+
+        keys[[4, 150_000]] = 5
+        vals[[4, 150_000]] = [2.0, 8.0]
+
+        return pd.DataFrame({"key": keys, "val": vals})
+
+    def _make_int_df(self) -> pd.DataFrame:
+        n = 200_000
+        keys = np.array([2, 99, 1, 5], dtype=np.int64)
+        keys = np.tile(keys, (n + len(keys) - 1) // len(keys))[:n]
+        vals = (np.arange(n, dtype=np.int64) % 12) - 6
+        return pd.DataFrame({"key": keys, "val": vals})
+
+    def test_float_special_cases_match_pandas_sort_true(self):
+        df = self._make_float_df()
+
+        booster_result = cast(BoosterAccessor, df.booster).groupby("key", "val", "median")
+        pandas_result = df.groupby("key")["val"].median()
+
+        booster_sorted = booster_result.sort_index()
+        pandas_sorted = pandas_result.sort_index()
+
+        pd.testing.assert_series_equal(
+            booster_sorted,
+            pandas_sorted,
+            check_exact=False,
+            rtol=1e-10,
+        )
+        assert booster_result.dtype == np.float64
+        assert booster_sorted.loc[3] == 5.0
+        assert booster_sorted.loc[5] == 5.0
+        assert np.isnan(booster_sorted.loc[2])
+
+    def test_float_special_cases_match_pandas_sort_false(self):
+        df = self._make_float_df()
+
+        booster_result = cast(BoosterAccessor, df.booster).groupby(
+            "key", "val", "median", sort=False
+        )
+        pandas_result = df.groupby("key", sort=False)["val"].median()
+
+        assert booster_result.index.tolist() == pandas_result.index.tolist() == [3, 2, 1, 4, 5]
+        pd.testing.assert_series_equal(
+            booster_result,
+            pandas_result,
+            check_exact=False,
+            rtol=1e-10,
+        )
+        assert booster_result.dtype == np.float64
+
+    def test_int_values_match_pandas_sort_true_with_float64_dtype(self):
+        df = self._make_int_df()
+
+        booster_result = cast(BoosterAccessor, df.booster).groupby("key", "val", "median")
+        pandas_result = df.groupby("key")["val"].median()
+
+        pd.testing.assert_series_equal(
+            booster_result.sort_index(),
+            pandas_result.sort_index(),
+            check_exact=False,
+            rtol=1e-10,
+        )
+        assert booster_result.dtype == np.float64
+
+    def test_int_values_match_pandas_sort_false_with_float64_dtype(self):
+        df = self._make_int_df()
+
+        booster_result = cast(BoosterAccessor, df.booster).groupby(
+            "key", "val", "median", sort=False
+        )
+        pandas_result = df.groupby("key", sort=False)["val"].median()
+
+        assert booster_result.index.tolist() == pandas_result.index.tolist() == [2, 99, 1, 5]
+        pd.testing.assert_series_equal(
+            booster_result,
+            pandas_result,
+            check_exact=False,
+            rtol=1e-10,
+        )
+        assert booster_result.dtype == np.float64
+
+
 class TestFirstSeenOrderSingleKeySortFalse:
     def _make_df(self) -> pd.DataFrame:
         n = 200_000
@@ -506,7 +618,7 @@ class TestNullableInteger:
         n = 200_000
         df = pd.DataFrame(
             {
-                "key": pd.array(np.random.randint(0, 100, n), dtype="Int64"),
+                "key": pd.array(np.random.randint(0, 100, n).tolist(), dtype="Int64"),
                 "val": np.random.random(n),
             }
         )
@@ -769,6 +881,41 @@ class TestProdSingleKey:
             pandas_result = df.groupby("key", sort=sort)["val"].prod()
             _assert_prod_series_matches_pandas(booster_result, pandas_result)
 
+    @pytest.mark.parametrize("sort", [True, False])
+    def test_single_key_float_prod_order_sensitive_chunks_use_rust_path(
+        self, monkeypatch: pytest.MonkeyPatch, sort: bool
+    ):
+        import pandas_booster._rust as rust
+
+        monkeypatch.delenv("PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY", raising=False)
+        monkeypatch.delenv("PANDAS_BOOSTER_FORCE_PANDAS_SORT", raising=False)
+
+        n = rust.get_fallback_threshold()
+        df = pd.DataFrame(
+            {
+                "key": np.ones(n, dtype=np.int64),
+                "val": np.r_[
+                    np.full(n // 2, 0.5),
+                    np.full(n - n // 2, 2.0),
+                ].astype(np.float64),
+            }
+        )
+        expected = df.groupby("key", sort=sort)["val"].prod()
+        called = False
+
+        def _fake_rust_prod(*_args, **_kwargs):
+            nonlocal called
+            called = True
+            return expected.index.to_numpy(dtype=np.int64), expected.to_numpy(dtype=np.float64)
+
+        suffix = "_sorted" if sort else "_firstseen_u32"
+        monkeypatch.setattr(rust, f"groupby_prod_f64{suffix}", _fake_rust_prod, raising=False)
+
+        result = cast(BoosterAccessor, df.booster).groupby("key", "val", "prod", sort=sort)
+
+        pd.testing.assert_series_equal(result, expected, check_exact=True)
+        assert called is True
+
     def test_prod_i64_matches_pandas_sort_modes(self):
         n = 200_000
         vals = np.tile(np.array([-2, -1, 1, 2, 3], dtype=np.int64), n // 5)
@@ -848,3 +995,83 @@ class TestProdSingleKey:
 
         result = cast(BoosterAccessor, df.booster).groupby("key", "val", "prod", sort=True)
         pd.testing.assert_series_equal(result, expected)
+
+    @pytest.mark.parametrize("sort", [True, False])
+    def test_single_key_float_prod_without_ordered_abi_marker_falls_back_to_pandas(
+        self, monkeypatch: pytest.MonkeyPatch, sort: bool
+    ):
+        import pandas_booster._abi_compat as abi
+        import pandas_booster.accessor as accessor_mod
+
+        class StaleRust:
+            @staticmethod
+            def get_fallback_threshold() -> int:
+                return 100_000
+
+            @staticmethod
+            def groupby_prod_f64_sorted(*_args, **_kwargs):
+                raise AssertionError("stale single-key float prod kernel must not be called")
+
+            @staticmethod
+            def groupby_prod_f64_firstseen_u32(*_args, **_kwargs):
+                raise AssertionError("stale single-key float prod kernel must not be called")
+
+        monkeypatch.setattr(
+            accessor_mod.BoosterAccessor,
+            "_get_rust_module",
+            staticmethod(lambda: StaleRust),
+        )
+        monkeypatch.delenv("PANDAS_BOOSTER_STRICT_ABI", raising=False)
+        monkeypatch.delenv("PANDAS_BOOSTER_ABI_SKEW_NOTICE", raising=False)
+        monkeypatch.setattr(abi, "_WARNED_ABI_SKEW", False)
+
+        n = 100_000
+        df = pd.DataFrame(
+            {
+                "key": np.resize(np.array([1, 2], dtype=np.int64), n),
+                "val": np.resize(np.array([1e308, 1e308, 1e-308, 1e-308], dtype=np.float64), n),
+            }
+        )
+        expected = df.groupby("key", sort=sort)["val"].prod()
+
+        result = cast(BoosterAccessor, df.booster).groupby("key", "val", "prod", sort=sort)
+
+        pd.testing.assert_series_equal(result, expected, check_exact=True)
+
+    def test_single_key_float_prod_without_ordered_abi_marker_hard_fails_in_strict_abi(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        import pandas_booster._abi_compat as abi
+        import pandas_booster.accessor as accessor_mod
+
+        class StaleRust:
+            @staticmethod
+            def get_fallback_threshold() -> int:
+                return 100_000
+
+            @staticmethod
+            def groupby_prod_f64_sorted(*_args, **_kwargs):
+                raise AssertionError("stale single-key float prod kernel must not be called")
+
+        monkeypatch.setattr(
+            accessor_mod.BoosterAccessor,
+            "_get_rust_module",
+            staticmethod(lambda: StaleRust),
+        )
+        monkeypatch.setenv("PANDAS_BOOSTER_STRICT_ABI", "1")
+        monkeypatch.delenv("PANDAS_BOOSTER_ABI_SKEW_NOTICE", raising=False)
+        monkeypatch.setattr(abi, "_WARNED_ABI_SKEW", False)
+
+        n = 100_000
+        df = pd.DataFrame(
+            {
+                "key": np.resize(np.array([1, 2], dtype=np.int64), n),
+                "val": np.linspace(1.001, 1.01, n, dtype=np.float64),
+            }
+        )
+
+        with pytest.raises(
+            abi.PandasBoosterKeyShapeSkewError,
+            match="has_ordered_single_key_float_prod_abi",
+        ):
+            cast(BoosterAccessor, df.booster).groupby("key", "val", "prod", sort=True)
