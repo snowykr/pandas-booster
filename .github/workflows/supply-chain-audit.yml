@@ -1,0 +1,65 @@
+name: Supply Chain Audit
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  scan:
+    name: Scan PR for critical supply chain risks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+
+      - name: Scan diff for critical patterns
+        id: scan
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          set +e
+          bash scripts/supply_chain_audit.sh "$BASE_SHA" "$HEAD_SHA" "$RUNNER_TEMP/findings.md"
+          SCAN_EXIT="$?"
+          set -e
+
+          if [ "$SCAN_EXIT" -eq 1 ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          elif [ "$SCAN_EXIT" -eq 0 ]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          else
+            exit "$SCAN_EXIT"
+          fi
+
+      - name: Post critical finding comment
+        if: steps.scan.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          cat > "$RUNNER_TEMP/comment.md" <<EOF
+          ## 🚨 CRITICAL Supply Chain Risk Detected
+
+          This PR contains a pattern that has been used in real supply chain attacks. A maintainer must review the flagged code carefully before merging.
+
+          $(cat "$RUNNER_TEMP/findings.md")
+
+          ---
+          *Scanner only fires on high-signal indicators: .pth files, base64+exec/eval combos, subprocess with encoded commands, or install-hook files. Low-signal warnings are intentionally excluded.*
+          EOF
+
+          gh pr comment "$PR_NUMBER" --body-file "$RUNNER_TEMP/comment.md" || echo "::warning::Could not post PR comment (expected for fork PRs where GITHUB_TOKEN is read-only)"
+
+      - name: Fail on critical findings
+        if: steps.scan.outputs.found == 'true'
+        run: |
+          echo "::error::CRITICAL supply chain risk patterns detected in this PR. See the PR comment for details."
+          exit 1

@@ -47,6 +47,21 @@ WORKFLOW_REQUIRED_TOKENS = (
         "--expected-wheel-count 12 --require-sdist"
     ),
 )
+SUPPLY_CHAIN_WORKFLOW_REQUIRED_TOKENS = (
+    "name: Supply Chain Audit",
+    "pull_request:",
+    "types: [opened, synchronize, reopened]",
+    "pull-requests: write",
+    "contents: read",
+    "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+    'bash scripts/supply_chain_audit.sh "$BASE_SHA" "$HEAD_SHA" "$RUNNER_TEMP/findings.md"',
+    "BASE_SHA:",
+    "HEAD_SHA:",
+    "PR_NUMBER:",
+    'gh pr comment "$PR_NUMBER" --body-file "$RUNNER_TEMP/comment.md"',
+    "Fail on critical findings",
+    "steps.scan.outputs.found == 'true'",
+)
 
 
 class ContractError(Exception):
@@ -196,6 +211,31 @@ def validate_workflow(args: argparse.Namespace) -> int:
     return 0
 
 
+def validate_supply_chain_workflow(args: argparse.Namespace) -> int:
+    workflow_path = Path(args.file)
+    if not workflow_path.is_absolute():
+        workflow_path = project_root() / workflow_path
+
+    workflow_text = load_text(workflow_path)
+    errors = [
+        f"{workflow_path} is missing required token '{token}'"
+        for token in SUPPLY_CHAIN_WORKFLOW_REQUIRED_TOKENS
+        if token not in workflow_text
+    ]
+
+    if "pull_request_target" in workflow_text:
+        errors.append(f"{workflow_path} must not use pull_request_target")
+
+    if "paths:" in workflow_text:
+        errors.append(f"{workflow_path} must not use workflow-level paths filters")
+
+    if errors:
+        fail(errors)
+
+    print(f"supply-chain-workflow: required guardrails found in {workflow_path}")
+    return 0
+
+
 def validate_artifacts(args: argparse.Namespace) -> int:
     dist_path = Path(args.dist)
     if not dist_path.is_absolute():
@@ -254,6 +294,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     workflow_parser.add_argument("--file", required=True, help="Workflow file to inspect")
     workflow_parser.set_defaults(func=validate_workflow)
+
+    supply_chain_parser = subparsers.add_parser(
+        "supply-chain-workflow",
+        help="Validate required supply-chain audit workflow guardrail tokens",
+    )
+    supply_chain_parser.add_argument("--file", required=True, help="Workflow file to inspect")
+    supply_chain_parser.set_defaults(func=validate_supply_chain_workflow)
 
     artifacts_parser = subparsers.add_parser(
         "artifacts",

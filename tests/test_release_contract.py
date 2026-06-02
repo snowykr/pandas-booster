@@ -418,6 +418,48 @@ def test_validate_workflow_requires_tag_gated_publish_condition(tmp_path: Path):
         contract.validate_workflow(argparse.Namespace(file=str(workflow_path)))
 
 
+def test_validate_supply_chain_workflow_rejects_paths_filter(tmp_path: Path):
+    contract = _load_release_contract_module()
+    workflow_path = tmp_path / "supply-chain-audit.yml"
+    workflow_path.write_text(
+        """
+name: Supply Chain Audit
+on:
+  pull_request:
+    paths:
+      - '**/*.py'
+permissions:
+  pull-requests: write
+  contents: read
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - run: bash scripts/supply_chain_audit.sh "$BASE_SHA" "$HEAD_SHA" "$RUNNER_TEMP/findings.md"
+      - run: gh pr comment "$PR_NUMBER" --body-file "$RUNNER_TEMP/comment.md"
+      - name: Fail on critical findings
+        run: exit 1
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(contract.ContractError, match="must not use workflow-level paths"):
+        contract.validate_supply_chain_workflow(argparse.Namespace(file=str(workflow_path)))
+
+
+def test_validate_supply_chain_workflow_accepts_current_workflow():
+    contract = _load_release_contract_module()
+
+    assert (
+        contract.validate_supply_chain_workflow(
+            argparse.Namespace(file=".github/workflows/supply-chain-audit.yml")
+        )
+        == 0
+    )
+
+
 def test_ci_keeps_non_tag_release_readiness_paths():
     repo_root = Path(__file__).resolve().parents[1]
     ci_text = (repo_root / ".github/workflows/ci.yml").read_text(encoding="utf-8")

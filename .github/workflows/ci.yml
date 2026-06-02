@@ -69,6 +69,9 @@ jobs:
       - name: Validate publish workflow contract
         run: python scripts/check_release_contract.py workflow --file .github/workflows/publish.yml
 
+      - name: Validate supply-chain audit workflow contract
+        run: python scripts/check_release_contract.py supply-chain-workflow --file .github/workflows/supply-chain-audit.yml
+
   build-wheel-smoke:
     name: Build Wheel Smoke
     needs:
