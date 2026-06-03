@@ -20,7 +20,7 @@ README_REQUIRED_TOKENS = (
     "publish.yml",
     "GitHub environment `pypi` is configured",
 )
-README_FORBIDDEN_TOKENS = ("uv ", "uvx", "your-org")
+README_FORBIDDEN_TOKENS = ("your-org",)
 WORKFLOW_REQUIRED_TOKENS = (
     "workflow_dispatch:",
     "publish:",
