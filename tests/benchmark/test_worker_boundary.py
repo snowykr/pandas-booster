@@ -30,18 +30,18 @@ def test_worker_rejects_non_object_json(benchmark_module, monkeypatch):
 
 
 def test_worker_rejects_output_file_outside_temp_root(benchmark_module, monkeypatch):
-    output_path = Path(__file__).resolve().parents[2] / ".omo" / "blocked-worker-output.json"
-    output_path.unlink(missing_ok=True)
+    output_path = (
+        Path(__file__).resolve().parents[2]
+        / f"missing-worker-output-{uuid.uuid4().hex}"
+        / "blocked-worker-output.json"
+    )
 
-    try:
-        with pytest.raises(ValueError, match="output_file"):
-            _run_worker_payload(
-                benchmark_module,
-                monkeypatch,
-                {"preset": "1key", "output_file": str(output_path)},
-            )
-    finally:
-        output_path.unlink(missing_ok=True)
+    with pytest.raises(ValueError, match="output_file"):
+        _run_worker_payload(
+            benchmark_module,
+            monkeypatch,
+            {"preset": "1key", "output_file": str(output_path)},
+        )
 
 
 def test_worker_rejects_symlink_output_file(benchmark_module, monkeypatch):

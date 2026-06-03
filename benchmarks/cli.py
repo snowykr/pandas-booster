@@ -36,7 +36,12 @@ def _validate_worker_output_file(output_file: JsonValue) -> Path:
         raise ValueError("output_file must not be a symlink")
 
     temp_root = Path(tempfile.gettempdir()).resolve(strict=True)
-    resolved_parent = output_path.parent.resolve(strict=True)
+    try:
+        resolved_parent = output_path.parent.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise ValueError(
+            "output_file must be directly inside the system temp directory"
+        ) from exc
     if resolved_parent != temp_root:
         raise ValueError("output_file must be directly inside the system temp directory")
 
