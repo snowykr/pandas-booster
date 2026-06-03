@@ -71,8 +71,9 @@ def run_worker_process(
     timeout: int = 300,
 ) -> dict[str, Any]:
     """Run a worker process and return its JSON output."""
-    with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".json") as tmp:
-        output_file = tmp.name
+    file_descriptor, output_file = tempfile.mkstemp(suffix=".json")
+    os.close(file_descriptor)
+    os.unlink(output_file)
 
     # Add output_file to args so worker knows where to write
     worker_args = worker_args.copy()

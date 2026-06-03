@@ -24,6 +24,16 @@ Install the latest published release from PyPI:
 pip install pandas-booster
 ```
 
+If your project uses uv:
+```bash
+uv add pandas-booster
+```
+
+For a uv-managed environment without adding a project dependency:
+```bash
+uv pip install pandas-booster
+```
+
 ### Development Setup
 To build and install from source, **all development commands in this repository assume you are using an activated virtual environment** (I recommend `.venv`).
 
@@ -38,6 +48,15 @@ pip install -e ".[bench,dev]"
 
 # 3. Build and install in development mode
 maturin develop --release
+```
+
+Equivalent setup with uv:
+```bash
+# 1. Create/sync the project environment with development extras
+uv sync --extra bench --extra dev
+
+# 2. Build and install the Rust extension in development mode
+uv run --with "maturin>=1.13,<2.0" maturin develop --release
 ```
 
 ## Quick Start
@@ -224,6 +243,10 @@ To reproduce the checked-in benchmark reports:
 pip install -e ".[bench,dev]"
 maturin develop --release
 
+# Or, with uv
+uv sync --extra bench --extra dev
+uv run --with "maturin>=1.13,<2.0" maturin develop --release
+
 # Run the lightweight checked-in smoke reports for all supported aggregations
 python benchmarks/generate_docs.py --samples 1 --cardinality standard --sort-mode sorted
 
@@ -267,12 +290,18 @@ Build the extension module in-place:
 ```bash
 source .venv/bin/activate
 maturin develop
+
+# Or, with uv
+uv run --with "maturin>=1.13,<2.0" maturin develop
 ```
 
 For release builds with optimizations:
 ```bash
 source .venv/bin/activate
 maturin develop --release
+
+# Or, with uv
+uv run --with "maturin>=1.13,<2.0" maturin develop --release
 ```
 
 ### Release
@@ -319,6 +348,15 @@ pytest tests/ -v --strict-markers -m "not stress"
 pytest tests/test_sort_false_determinism.py -v --strict-markers -m stress
 ```
 
+With uv, run Python tools through the synced project environment:
+```bash
+uv sync --extra bench --extra dev
+uv run --with "maturin>=1.13,<2.0" maturin develop --release
+uv run basedpyright --project pyrightconfig.json
+uv run ruff check python tests scripts benchmarks
+uv run pytest tests/ -v --strict-markers -m "not stress"
+```
+
 ### Benchmarking
 
 #### Setup
@@ -329,8 +367,13 @@ To run benchmarks with library comparisons (Polars, etc.), install the optional 
 source .venv/bin/activate
 pip install -e ".[bench,dev]"
 
+# Or with uv
+uv sync --extra bench --extra dev
+
 # Build the Rust extension in release mode
 maturin develop --release
+# Or with uv
+uv run --with "maturin>=1.13,<2.0" maturin develop --release
 ```
 
 This installs:
@@ -340,6 +383,8 @@ This installs:
 - `pytest` and `pytest-benchmark`: For test framework and benchmarking
 
 #### Running Benchmarks
+With uv, replace `python ...` with `uv run python ...` in the commands below.
+
 ```bash
 # Run default benchmarks (cardinality=all, diagnostic=none)
 source .venv/bin/activate

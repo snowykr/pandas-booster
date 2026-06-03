@@ -61,6 +61,7 @@ include = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["python"]
 markers = [
     "stress: long-running determinism stress tests",
 ]
@@ -77,6 +78,6 @@ ignore = ["D100", "D104", "D105", "D107"]
 convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*.py" = ["D"]
+"tests/**/*.py" = ["D"]
 "scripts/*.py" = ["D"]
 "benchmarks/*.py" = ["D"]
