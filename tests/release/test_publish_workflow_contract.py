@@ -112,9 +112,12 @@ def test_ci_keeps_non_tag_release_readiness_paths():
     assert _job_if_expression(ci_text, "build-wheel-smoke") == main_pr_smoke_gate
     assert _job_if_expression(ci_text, "test-wheel-smoke") == main_pr_smoke_gate
     test_wheel_smoke_block = _job_block(ci_text, "test-wheel-smoke")
+    assert "PANDAS_BOOSTER_WHEEL_SMOKE" in test_wheel_smoke_block
     assert "uv sync --locked --extra dev --no-install-project" in test_wheel_smoke_block
     assert "uv pip install" in test_wheel_smoke_block
+    assert "site-packages" in test_wheel_smoke_block
     assert "uv run --no-sync pytest" in test_wheel_smoke_block
+    assert "-o pythonpath=" in test_wheel_smoke_block
     assert _job_if_expression(ci_text, "build-and-test-quick") == non_main_pr_quick_gate
     assert _job_if_expression(ci_text, "stress-tests") == stress_gate
     assert "name: Release Matrix" in ci_text

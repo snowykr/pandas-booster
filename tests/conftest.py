@@ -28,6 +28,10 @@ _GENERATED_BENCHMARK_MARKER = (
 )
 
 
+def wheel_smoke_mode() -> bool:
+    return os.environ.get("PANDAS_BOOSTER_WHEEL_SMOKE") == "1"
+
+
 def prepend_repo_pythonpath(existing_pythonpath: str | None, repo_python: str) -> str:
     if not existing_pythonpath:
         return repo_python
@@ -41,6 +45,9 @@ def prepend_repo_pythonpath(existing_pythonpath: str | None, repo_python: str) -
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    if wheel_smoke_mode():
+        return
+
     repo_python = str(config.rootpath / "python")
     os.environ["PYTHONPATH"] = prepend_repo_pythonpath(
         os.environ.get("PYTHONPATH"),

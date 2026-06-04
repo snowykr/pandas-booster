@@ -111,6 +111,8 @@ jobs:
     if: >
       github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
+    env:
+      PANDAS_BOOSTER_WHEEL_SMOKE: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -141,8 +143,12 @@ jobs:
           echo "Installing ${wheels[0]}"
           uv pip install "${wheels[0]}"
 
+      - name: Verify wheel import path
+        run: |
+          uv run --no-sync python -c "import pathlib; import pandas_booster; import pandas_booster._rust; path = pathlib.Path(pandas_booster.__file__).resolve(); assert 'site-packages' in path.parts, path"
+
       - name: Run tests
-        run: uv run --no-sync pytest tests/ -v --strict-markers -m "not stress"
+        run: uv run --no-sync pytest tests/ -v --strict-markers -m "not stress" -o pythonpath=
 
   release-matrix:
     name: Release Matrix
