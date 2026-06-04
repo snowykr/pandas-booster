@@ -8,15 +8,15 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Union
 
 from profile_json import collect_stats_evidence
 from profile_json_payload import save_profile_json
 from reporting import SUPPORTED_AGGS, save_results_md
 from runner import benchmark_worker, run_benchmarks
 
-JsonScalar = None | bool | int | float | str
-JsonValue = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
+JsonScalar = Union[None, bool, int, float, str]
+JsonValue = Union[JsonScalar, list["JsonValue"], dict[str, "JsonValue"]]
 _NOFOLLOW_FLAG: Final[int] = getattr(os, "O_NOFOLLOW", 0)
 
 
