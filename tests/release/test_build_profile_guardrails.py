@@ -24,6 +24,21 @@ _CI_WHEEL_BUILD_JOBS: Final = (
     "build-and-test-quick",
     "stress-tests",
 )
+_CI_WHEEL_TEST_JOBS: Final = (
+    (
+        "release-matrix",
+        'uv run --no-sync pytest tests/ -v --strict-markers -m "not stress" -o pythonpath=',
+    ),
+    (
+        "build-and-test-quick",
+        'uv run --no-sync pytest tests/ -v --strict-markers -m "not stress" -o pythonpath=',
+    ),
+    (
+        "stress-tests",
+        "uv run --no-sync pytest tests/test_sort_false_determinism.py "
+        "-v --strict-markers -m stress -o pythonpath=",
+    ),
+)
 _PUBLISH_RELEASE_ARGS: Final = (
     "args: --release --out dist --compatibility pypi "
     "--interpreter ${{ matrix.python-version }}"
@@ -128,6 +143,18 @@ def _assert_wheel_smoke_install_contract(workflow_text: str) -> None:
     assert "-o pythonpath=" in smoke_job
 
 
+def _assert_ci_wheel_test_job_uses_installed_wheel(
+    workflow_text: str,
+    job_name: str,
+    expected_pytest_command: str,
+) -> None:
+    job_block = _job_block(workflow_text, job_name)
+
+    assert expected_pytest_command in job_block, (
+        f"{job_name} must run pytest with uv --no-sync and clear pytest pythonpath"
+    )
+
+
 def test_cargo_toml_keeps_certified_release_build_settings() -> None:
     contract = _cargo_build_contract_from_text(_CARGO_PATH.read_text(encoding="utf-8"))
 
@@ -209,6 +236,20 @@ def test_ci_wheel_smoke_keeps_no_editable_install_contract() -> None:
     workflow_text = _CI_WORKFLOW_PATH.read_text(encoding="utf-8")
 
     _assert_wheel_smoke_install_contract(workflow_text)
+
+
+@pytest.mark.parametrize(("job_name", "expected_pytest_command"), _CI_WHEEL_TEST_JOBS)
+def test_ci_wheel_test_jobs_run_pytest_against_installed_wheel(
+    job_name: str,
+    expected_pytest_command: str,
+) -> None:
+    workflow_text = _CI_WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    _assert_ci_wheel_test_job_uses_installed_wheel(
+        workflow_text,
+        job_name,
+        expected_pytest_command,
+    )
 
 
 @pytest.mark.parametrize(
