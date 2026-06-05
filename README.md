@@ -59,6 +59,13 @@ uv sync --extra bench --extra dev
 uv run --with "maturin>=1.13,<2.0" maturin develop --release
 ```
 
+Use release builds for packaging, validation, and before comparing runtime
+performance:
+```bash
+uv run --with "maturin>=1.13,<2.0" maturin build --release --out dist
+cargo build --release --features extension-module
+```
+
 ## Quick Start
 
 ```python
