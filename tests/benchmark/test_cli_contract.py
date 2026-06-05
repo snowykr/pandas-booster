@@ -8,6 +8,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+
 from ._report_output_helpers import (
     _BENCHMARK_PATH,
     _REPORTING_PATH,
@@ -165,18 +166,17 @@ def test_generate_benchmark_docs_main_returns_subprocess_code(monkeypatch, tmp_p
 def test_readme_documents_explicit_smoke_reports_separately_from_default_full_generation():
     readme = (_BENCHMARK_PATH.parent.parent / "README.md").read_text(encoding="utf-8")
 
-    assert "# Run the checked-in publication-quality reports for all supported aggregations" in readme
-    assert (
-        "python benchmarks/generate_docs.py --samples 20 --cardinality all --sort-mode all"
-        in readme
+    expected_snippets = (
+        "# Run the checked-in publication-quality reports for all supported aggregations",
+        "python benchmarks/generate_docs.py --samples 20 --cardinality all --sort-mode all",
+        "# Run lightweight smoke reports when iterating locally",
+        "python benchmarks/generate_docs.py --samples 1 --cardinality standard --sort-mode sorted",
+        "# Run default sum benchmark only (standard + high)",
+        "python benchmarks/benchmark.py --samples 20 --output benchmarks/reports",
     )
-    assert "# Run lightweight smoke reports when iterating locally" in readme
-    assert (
-        "python benchmarks/generate_docs.py --samples 1 --cardinality standard --sort-mode sorted"
-        in readme
-    )
-    assert "# Run default sum benchmark only (standard + high)" in readme
-    assert "python benchmarks/benchmark.py --samples 20 --output benchmarks/reports" in readme
+
+    for expected_snippet in expected_snippets:
+        assert expected_snippet in readme
 
 
 def test_benchmark_worker_rejects_unknown_backend_before_dataset_generation(
