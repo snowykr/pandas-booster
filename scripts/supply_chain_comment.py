@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -136,12 +137,24 @@ def update_comment(repository: str, comment_id: str, body: str) -> int:
 
 
 def run_gh(*args: str) -> subprocess.CompletedProcess[str]:
+    command = gh_command()
     return subprocess.run(
-        ["gh", *args],
+        [*command, *args],
         check=False,
         text=True,
         capture_output=True,
     )
+
+
+def gh_command() -> list[str]:
+    override = os.environ.get("PANDAS_BOOSTER_GH")
+    if override:
+        if Path(override).suffix == ".py":
+            return [sys.executable, override]
+        return [override]
+
+    resolved = shutil.which("gh")
+    return [resolved or "gh"]
 
 
 def warn(message: str) -> None:

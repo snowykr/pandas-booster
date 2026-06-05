@@ -166,6 +166,7 @@ def _run_audit(
 def _comment_env(fake_bin: Path, **overrides: str) -> dict[str, str]:
     env = os.environ.copy()
     env["PATH"] = os.pathsep.join([str(fake_bin), env.get("PATH", "")])
+    env["PANDAS_BOOSTER_GH"] = str(fake_bin / "gh.py")
     env.update(overrides)
     return env
 
