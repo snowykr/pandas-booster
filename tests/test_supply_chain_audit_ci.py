@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -348,19 +349,14 @@ def test_supply_chain_comment_warns_when_api_and_create_fail(tmp_path: Path) -> 
     comment_path = repo_root / "scripts" / "supply_chain_comment.py"
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
-    gh_path = fake_bin / "gh"
-    gh_path.write_text("\n".join(_failing_gh_script_lines()) + "\n", encoding="utf-8")
-    gh_path.chmod(0o755)
+    _write_fake_gh(fake_bin, behavior="failing")
     findings_path = tmp_path / "findings.md"
     findings_path.write_text("### Encoded dynamic execution\npayload.py:2\n", encoding="utf-8")
-    env = {
-        "PATH": f"{fake_bin}:{os.environ['PATH']}",
-        "GITHUB_REPOSITORY": "snowykr/pandas-booster",
-    }
+    env = _comment_env(fake_bin, GITHUB_REPOSITORY="snowykr/pandas-booster")
 
     result = subprocess.run(
         [
-            "python",
+            sys.executable,
             str(comment_path),
             "sync",
             "--pr-number",
@@ -388,19 +384,14 @@ def test_supply_chain_comment_warns_when_patch_fails(tmp_path: Path) -> None:
     comment_path = repo_root / "scripts" / "supply_chain_comment.py"
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
-    gh_path = fake_bin / "gh"
-    gh_path.write_text("\n".join(_patch_failing_gh_script_lines()) + "\n", encoding="utf-8")
-    gh_path.chmod(0o755)
+    _write_fake_gh(fake_bin, behavior="patch_failing")
     findings_path = tmp_path / "findings.md"
     findings_path.write_text("### Encoded dynamic execution\npayload.py:2\n", encoding="utf-8")
-    env = {
-        "PATH": f"{fake_bin}:{os.environ['PATH']}",
-        "GITHUB_REPOSITORY": "snowykr/pandas-booster",
-    }
+    env = _comment_env(fake_bin, GITHUB_REPOSITORY="snowykr/pandas-booster")
 
     result = subprocess.run(
         [
-            "python",
+            sys.executable,
             str(comment_path),
             "sync",
             "--pr-number",
@@ -431,20 +422,18 @@ def test_supply_chain_comment_lifecycle_updates_existing_alert_to_resolved(
     state_dir = tmp_path / "state"
     fake_bin.mkdir()
     state_dir.mkdir()
-    gh_path = fake_bin / "gh"
-    gh_path.write_text("\n".join(_fake_gh_script_lines()) + "\n", encoding="utf-8")
-    gh_path.chmod(0o755)
+    _write_fake_gh(fake_bin, behavior="ok")
     findings_path = tmp_path / "findings.md"
     findings_path.write_text("### Encoded dynamic execution\npayload.py:2\n", encoding="utf-8")
-    env = {
-        "PATH": f"{fake_bin}:{os.environ['PATH']}",
-        "STATE_DIR": str(state_dir),
-        "GITHUB_REPOSITORY": "snowykr/pandas-booster",
-    }
+    env = _comment_env(
+        fake_bin,
+        STATE_DIR=str(state_dir),
+        GITHUB_REPOSITORY="snowykr/pandas-booster",
+    )
 
     finding = subprocess.run(
         [
-            "python",
+            sys.executable,
             str(comment_path),
             "sync",
             "--pr-number",
@@ -463,7 +452,7 @@ def test_supply_chain_comment_lifecycle_updates_existing_alert_to_resolved(
     )
     resolved = subprocess.run(
         [
-            "python",
+            sys.executable,
             str(comment_path),
             "sync",
             "--pr-number",
@@ -497,18 +486,16 @@ def test_supply_chain_comment_lifecycle_skips_clear_without_existing_alert(
     state_dir = tmp_path / "state"
     fake_bin.mkdir()
     state_dir.mkdir()
-    gh_path = fake_bin / "gh"
-    gh_path.write_text("\n".join(_fake_gh_script_lines()) + "\n", encoding="utf-8")
-    gh_path.chmod(0o755)
-    env = {
-        "PATH": f"{fake_bin}:{os.environ['PATH']}",
-        "STATE_DIR": str(state_dir),
-        "GITHUB_REPOSITORY": "snowykr/pandas-booster",
-    }
+    _write_fake_gh(fake_bin, behavior="ok")
+    env = _comment_env(
+        fake_bin,
+        STATE_DIR=str(state_dir),
+        GITHUB_REPOSITORY="snowykr/pandas-booster",
+    )
 
     result = subprocess.run(
         [
-            "python",
+            sys.executable,
             str(comment_path),
             "sync",
             "--pr-number",
@@ -630,43 +617,76 @@ def _workflow_run_blocks(workflow_text: str) -> list[str]:
     return blocks
 
 
-def _fake_gh_script_lines() -> list[str]:
-    return [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        'echo "gh $*" >> "$STATE_DIR/gh.log"',
-        'if [ "$1" = "api" ] && [ "${2:-}" = "--paginate" ]; then',
-        '  if [ -f "$STATE_DIR/comment.md" ] && grep -q '
-        "'pandas-booster:supply-chain-risk-guard' "
-        '"$STATE_DIR/comment.md"; then echo 321; fi',
-        "  exit 0",
-        "fi",
-        'if [ "$1" = "pr" ] && [ "$2" = "comment" ]; then',
-        '  cp "$5" "$STATE_DIR/comment.md"; echo create > "$STATE_DIR/action"; exit 0',
-        "fi",
-        'if [ "$1" = "api" ] && [ "$2" = "--method" ] && [ "$3" = "PATCH" ]; then',
-        "  python -c 'import json, pathlib, sys; body = "
-        "json.loads(pathlib.Path(sys.argv[1]).read_text())[\"body\"]; "
-        "pathlib.Path(sys.argv[2]).write_text(body, encoding=\"utf-8\")' "
-        '"$6" "$STATE_DIR/comment.md"',
-        '  echo patch > "$STATE_DIR/action"; exit 0',
-        "fi",
-        "exit 9",
+def _comment_env(fake_bin: Path, **overrides: str) -> dict[str, str]:
+    env = os.environ.copy()
+    env["PATH"] = os.pathsep.join([str(fake_bin), env.get("PATH", "")])
+    env.update(overrides)
+    return env
+
+
+def _write_fake_gh(fake_bin: Path, *, behavior: str) -> None:
+    script_path = fake_bin / "gh.py"
+    script_path.write_text(_fake_gh_python_script(behavior), encoding="utf-8")
+
+    posix_wrapper = fake_bin / "gh"
+    posix_wrapper.write_text(
+        f'#!/usr/bin/env sh\nexec "{sys.executable}" "{script_path}" "$@"\n',
+        encoding="utf-8",
+    )
+    posix_wrapper.chmod(0o755)
+
+    windows_wrapper = fake_bin / "gh.cmd"
+    windows_wrapper.write_text(
+        f'@echo off\r\n"{sys.executable}" "{script_path}" %*\r\n',
+        encoding="utf-8",
+    )
+
+
+def _fake_gh_python_script(behavior: str) -> str:
+    lines = [
+        "from __future__ import annotations",
+        "",
+        "import json",
+        "import os",
+        "import shutil",
+        "import sys",
+        "from pathlib import Path",
+        "",
+        f"BEHAVIOR = {behavior!r}",
+        'MARKER = "pandas-booster:supply-chain-risk-guard"',
+        "",
+        "",
+        "def main() -> int:",
+        "    args = sys.argv[1:]",
+        '    if BEHAVIOR == "failing":',
+        "        return 7",
+        '    if BEHAVIOR == "patch_failing":',
+        '        if args[:2] == ["api", "--paginate"]:',
+        '            print("321")',
+        "            return 0",
+        "        return 8",
+        "",
+        '    state_dir = Path(os.environ["STATE_DIR"])',
+        '    with (state_dir / "gh.log").open("a", encoding="utf-8") as handle:',
+        '        handle.write("gh " + " ".join(args) + "\\n")',
+        '    if args[:2] == ["api", "--paginate"]:',
+        '        comment_path = state_dir / "comment.md"',
+        '        if comment_path.exists() and MARKER in comment_path.read_text(encoding="utf-8"):',
+        '            print("321")',
+        "        return 0",
+        '    if len(args) >= 5 and args[:2] == ["pr", "comment"]:',
+        '        shutil.copyfile(args[4], state_dir / "comment.md")',
+        '        (state_dir / "action").write_text("create\\n", encoding="utf-8")',
+        "        return 0",
+        '    if len(args) >= 6 and args[:3] == ["api", "--method", "PATCH"]:',
+        '        body = json.loads(Path(args[5]).read_text(encoding="utf-8"))["body"]',
+        '        (state_dir / "comment.md").write_text(body, encoding="utf-8")',
+        '        (state_dir / "action").write_text("patch\\n", encoding="utf-8")',
+        "        return 0",
+        "    return 9",
+        "",
+        "",
+        'if __name__ == "__main__":',
+        "    raise SystemExit(main())",
     ]
-
-
-def _failing_gh_script_lines() -> list[str]:
-    return [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        "exit 7",
-    ]
-
-
-def _patch_failing_gh_script_lines() -> list[str]:
-    return [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        'if [ "$1" = "api" ] && [ "${2:-}" = "--paginate" ]; then echo 321; exit 0; fi',
-        "exit 8",
-    ]
+    return "\n".join(lines) + "\n"

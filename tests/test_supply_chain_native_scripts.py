@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -55,20 +56,18 @@ def test_native_comment_script_updates_finding_to_clear(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
     fake_bin.mkdir()
     state_dir.mkdir()
-    gh_path = fake_bin / "gh"
-    gh_path.write_text("\n".join(_fake_gh_script_lines()) + "\n", encoding="utf-8")
-    gh_path.chmod(0o755)
+    _write_fake_gh(fake_bin)
     findings_path = tmp_path / "findings.md"
     findings_path.write_text("### Encoded subprocess command\npayload.py:1\n", encoding="utf-8")
-    env = {
-        "PATH": f"{fake_bin}:{os.environ['PATH']}",
-        "STATE_DIR": str(state_dir),
-        "GITHUB_REPOSITORY": "snowykr/pandas-booster",
-    }
+    env = _comment_env(
+        fake_bin,
+        STATE_DIR=str(state_dir),
+        GITHUB_REPOSITORY="snowykr/pandas-booster",
+    )
 
     finding = subprocess.run(
         [
-            "python",
+            sys.executable,
             str(comment_path),
             "sync",
             "--pr-number",
@@ -87,7 +86,7 @@ def test_native_comment_script_updates_finding_to_clear(tmp_path: Path) -> None:
     )
     clear = subprocess.run(
         [
-            "python",
+            sys.executable,
             str(comment_path),
             "sync",
             "--pr-number",
@@ -147,7 +146,7 @@ def _run_audit(
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
-            "python",
+            sys.executable,
             str(scanner_path),
             "scan",
             "--base",
@@ -164,25 +163,65 @@ def _run_audit(
     )
 
 
-def _fake_gh_script_lines() -> list[str]:
-    return [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        'if [ "$1" = "api" ] && [ "${2:-}" = "--paginate" ]; then',
-        '  if [ -f "$STATE_DIR/comment.md" ] && grep -q '
-        "'pandas-booster:supply-chain-risk-guard' "
-        '"$STATE_DIR/comment.md"; then echo 321; fi',
-        "  exit 0",
-        "fi",
-        'if [ "$1" = "pr" ] && [ "$2" = "comment" ]; then',
-        '  cp "$5" "$STATE_DIR/comment.md"; echo create > "$STATE_DIR/action"; exit 0',
-        "fi",
-        'if [ "$1" = "api" ] && [ "$2" = "--method" ] && [ "$3" = "PATCH" ]; then',
-        "  python -c 'import json, pathlib, sys; body = "
-        "json.loads(pathlib.Path(sys.argv[1]).read_text())[\"body\"]; "
-        "pathlib.Path(sys.argv[2]).write_text(body, encoding=\"utf-8\")' "
-        '"$6" "$STATE_DIR/comment.md"',
-        '  echo patch > "$STATE_DIR/action"; exit 0',
-        "fi",
-        "exit 9",
+def _comment_env(fake_bin: Path, **overrides: str) -> dict[str, str]:
+    env = os.environ.copy()
+    env["PATH"] = os.pathsep.join([str(fake_bin), env.get("PATH", "")])
+    env.update(overrides)
+    return env
+
+
+def _write_fake_gh(fake_bin: Path) -> None:
+    script_path = fake_bin / "gh.py"
+    script_path.write_text(_fake_gh_python_script(), encoding="utf-8")
+
+    posix_wrapper = fake_bin / "gh"
+    posix_wrapper.write_text(
+        f'#!/usr/bin/env sh\nexec "{sys.executable}" "{script_path}" "$@"\n',
+        encoding="utf-8",
+    )
+    posix_wrapper.chmod(0o755)
+
+    windows_wrapper = fake_bin / "gh.cmd"
+    windows_wrapper.write_text(
+        f'@echo off\r\n"{sys.executable}" "{script_path}" %*\r\n',
+        encoding="utf-8",
+    )
+
+
+def _fake_gh_python_script() -> str:
+    lines = [
+        "from __future__ import annotations",
+        "",
+        "import json",
+        "import os",
+        "import shutil",
+        "import sys",
+        "from pathlib import Path",
+        "",
+        'MARKER = "pandas-booster:supply-chain-risk-guard"',
+        "",
+        "",
+        "def main() -> int:",
+        "    args = sys.argv[1:]",
+        '    state_dir = Path(os.environ["STATE_DIR"])',
+        '    if args[:2] == ["api", "--paginate"]:',
+        '        comment_path = state_dir / "comment.md"',
+        '        if comment_path.exists() and MARKER in comment_path.read_text(encoding="utf-8"):',
+        '            print("321")',
+        "        return 0",
+        '    if len(args) >= 5 and args[:2] == ["pr", "comment"]:',
+        '        shutil.copyfile(args[4], state_dir / "comment.md")',
+        '        (state_dir / "action").write_text("create\\n", encoding="utf-8")',
+        "        return 0",
+        '    if len(args) >= 6 and args[:3] == ["api", "--method", "PATCH"]:',
+        '        body = json.loads(Path(args[5]).read_text(encoding="utf-8"))["body"]',
+        '        (state_dir / "comment.md").write_text(body, encoding="utf-8")',
+        '        (state_dir / "action").write_text("patch\\n", encoding="utf-8")',
+        "        return 0",
+        "    return 9",
+        "",
+        "",
+        'if __name__ == "__main__":',
+        "    raise SystemExit(main())",
     ]
+    return "\n".join(lines) + "\n"

@@ -642,7 +642,8 @@ class TestProdProxy:
         import pandas_booster
         import pandas_booster._rust as rust
 
-        expected = large_df.groupby(["key", "key2"], sort=True)["val_int"].prod()
+        df = large_df.assign(val_int=large_df["val_int"].astype(np.int64, copy=False))
+        expected = df.groupby(["key", "key2"], sort=True)["val_int"].prod()
         calls: list[str] = []
 
         def fake_sorted(_key_arrays, _values):
@@ -656,7 +657,7 @@ class TestProdProxy:
 
         pandas_booster.activate()
         try:
-            result = large_df.groupby(["key", "key2"], sort=True)["val_int"].prod()
+            result = df.groupby(["key", "key2"], sort=True)["val_int"].prod()
         finally:
             pandas_booster.deactivate()
 
