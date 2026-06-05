@@ -10,6 +10,7 @@ from pathlib import Path
 from types import ModuleType
 
 _BENCHMARK_PATH = Path(__file__).resolve().parents[2] / "benchmarks" / "benchmark.py"
+_REPORTING_PATH = Path(__file__).resolve().parents[2] / "benchmarks" / "reporting.py"
 _GENERATE_BENCHMARK_DOCS_PATH = (
     Path(__file__).resolve().parents[2] / "benchmarks" / "generate_docs.py"
 )

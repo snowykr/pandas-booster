@@ -215,7 +215,7 @@ The library is designed for large datasets where multi-core parallelism can be f
 **Benchmark methodology:**
 - **Process Isolation:** Benchmarks use rigorous process isolation to ensure accurate results.
 - **Host machine:** MacBook Pro (Mac15,6), Apple M3 Pro, 11 CPU cores (5 Performance + 6 Efficiency), 18 GB RAM, macOS 26.4.1.
-- **Samples:** The checked-in benchmark reports are lightweight smoke artifacts generated with `--samples 1 --cardinality standard --sort-mode sorted`. Use `--samples 20` for publication-quality local reports. Each sample runs in a fresh Python process.
+- **Samples:** The checked-in benchmark reports are publication-quality local artifacts generated with `--samples 20 --cardinality all --sort-mode all`. Each sample runs in a fresh Python process.
 - **Cold:** Average of the requested fresh process executions (1st run measured immediately).
 - **Warm:** Average of the requested fresh process executions. Each process runs Cold once and a Warmup once (both discarded), then measures the next run (steady state).
 - **Correctness:** Booster and Polars outputs are validated against a Pandas baseline. For `sort=False`, benchmarks validate Pandas-compatible appearance order (first-seen group order).
@@ -254,11 +254,11 @@ maturin develop --release
 uv sync --extra bench --extra dev
 uv run --with "maturin>=1.13,<2.0" maturin develop --release
 
-# Run the lightweight checked-in smoke reports for all supported aggregations
-python benchmarks/generate_docs.py --samples 1 --cardinality standard --sort-mode sorted
+# Run the checked-in publication-quality reports for all supported aggregations
+python benchmarks/generate_docs.py --samples 20 --cardinality all --sort-mode all
 
-# Run publication-quality local reports for all supported aggregations
-python benchmarks/generate_docs.py --samples 20
+# Run lightweight smoke reports when iterating locally
+python benchmarks/generate_docs.py --samples 1 --cardinality standard --sort-mode sorted
 
 # Run default sum benchmark only (standard + high)
 python benchmarks/benchmark.py --samples 20 --output benchmarks/reports
