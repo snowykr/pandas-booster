@@ -228,6 +228,36 @@ class TestAcceleratedAggregations:
         )
 
 
+class TestMultiKeyRustLimitFallback:
+    @pytest.mark.parametrize("agg", ["median", "prod"])
+    @pytest.mark.parametrize("sort", [True, False])
+    def test_proxy_multi_key_over_rust_limit_uses_pandas_fallback(
+        self, monkeypatch: pytest.MonkeyPatch, agg: str, sort: bool
+    ) -> None:
+        import pandas_booster
+        import pandas_booster._rust as rust
+
+        n = 100_001
+        df = pd.DataFrame({f"k{i}": np.arange(n, dtype=np.int64) % 2 for i in range(11)})
+        df["val"] = np.linspace(1.0, 3.0, n, dtype=np.float64)
+        key_cols = [f"k{i}" for i in range(11)]
+        expected = getattr(df.groupby(key_cols, sort=sort)["val"], agg)()
+
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("over-limit multi-key proxy groupby must fall back to pandas")
+
+        for suffix in ("", "_sorted", "_firstseen_u32", "_firstseen_u64"):
+            monkeypatch.setattr(rust, f"groupby_multi_{agg}_f64{suffix}", _boom, raising=False)
+
+        pandas_booster.activate()
+        try:
+            result = getattr(df.groupby(key_cols, sort=sort)["val"], agg)()
+        finally:
+            pandas_booster.deactivate()
+
+        pd.testing.assert_series_equal(result, expected, check_exact=False, rtol=1e-12)
+
+
 class TestProxyMedianCallParity:
     def test_median_kwargs_delegate_to_pandas_without_acceleration(
         self, large_df, monkeypatch: pytest.MonkeyPatch

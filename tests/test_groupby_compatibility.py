@@ -1,5 +1,7 @@
 import pandas as pd
+import pytest
 from pandas_booster._groupby_accel import classify_groupby_compatibility
+from pandas_booster._groupby_policy import should_fallback_groupby
 
 
 def test_groupby_compatibility_result_supports_named_and_tuple_access() -> None:
@@ -61,3 +63,53 @@ def test_multi_key_float_prod_remains_rust_eligible() -> None:
 
     assert compatibility.supported is True
     assert compatibility.force_pandas is False
+
+
+def test_multi_key_over_rust_limit_is_not_rust_eligible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    df = pd.DataFrame({f"k{i}": [1, 2, 1, 2] for i in range(11)})
+    df["val"] = [0.5, 2.0, 4.0, 8.0]
+
+    monkeypatch.setattr(
+        "pandas_booster._groupby_policy._has_median_kernel",
+        lambda *args, **kwargs: True,
+    )
+
+    assert (
+        should_fallback_groupby(
+            df,
+            [df[f"k{i}"] for i in range(11)],
+            df["val"],
+            "median",
+            context="proxy",
+            multi=True,
+            sort=True,
+        )
+        is True
+    )
+
+
+def test_multi_key_at_rust_limit_remains_rust_eligible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    df = pd.DataFrame({f"k{i}": [1, 2, 1, 2] for i in range(10)})
+    df["val"] = [0.5, 2.0, 4.0, 8.0]
+
+    monkeypatch.setattr(
+        "pandas_booster._groupby_policy._has_median_kernel",
+        lambda *args, **kwargs: True,
+    )
+
+    assert (
+        should_fallback_groupby(
+            df,
+            [df[f"k{i}"] for i in range(10)],
+            df["val"],
+            "median",
+            context="proxy",
+            multi=True,
+            sort=True,
+        )
+        is False
+    )

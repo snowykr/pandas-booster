@@ -13,6 +13,7 @@ from ._config import (
 from ._groupby_accel import AggFunc
 
 _FALLBACK_EXEMPT_AGGS: Final = frozenset({"std", "var", "median"})
+_MAX_RUST_MULTI_KEYS: Final = 10
 
 
 def resolve_rust_module(df: pd.DataFrame, *, context: str) -> Any:
@@ -32,6 +33,9 @@ def should_fallback_groupby(
     multi: bool,
     sort: bool,
 ) -> bool:
+    if multi and len(key_cols) > _MAX_RUST_MULTI_KEYS:
+        return True
+
     if agg not in _FALLBACK_EXEMPT_AGGS and len(df) < _resolve_fallback_threshold(
         df, context=context
     ):
