@@ -15,3 +15,16 @@ Each report contains benchmark tables for one aggregation function.
 | `min` | [min.md](min.md) |
 | `max` | [max.md](max.md) |
 | `count` | [count.md](count.md) |
+
+## Environment & Configuration
+
+The following environment was used to generate the checked-in benchmark reports.
+When refreshing these reports, replace these values with the environment used for that run.
+
+- **Build Mode**: Release (`maturin develop --release`)
+- **Machine**: MacBook Pro (`Mac15,6`), Apple M3 Pro, 11 CPU cores (5 Performance + 6 Efficiency), 18 GB RAM
+- **Threading**: Default Rayon behavior (uses all available logical cores)
+- **OS**: macOS 26.4.1 (Darwin 25.4.0, arm64)
+- **Python**: 3.11.15
+- **Pandas**: 2.3.3
+- **Polars**: 1.40.1
