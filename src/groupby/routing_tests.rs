@@ -1,9 +1,56 @@
-use super::routing::should_use_partitioned_median_engine;
+use super::routing::{
+    should_use_partitioned_firstseen_engine, should_use_partitioned_median_engine,
+    should_use_partitioned_std_var_engine,
+};
 use super::test_support::{
     assert_float_kernel_bitwise_deterministic, make_partitioned_single_key_float_data,
     make_sensitive_single_key_float_data,
 };
 use super::*;
+
+#[test]
+fn firstseen_partitioned_routing_rejects_samples_at_low_sample_boundary() {
+    let keys: Vec<i64> = (0..4_096).map(i64::from).collect();
+
+    assert!(!should_use_partitioned_firstseen_engine(&keys));
+}
+
+#[test]
+fn firstseen_partitioned_routing_accepts_high_uniqueness_sample() {
+    let n = 20_000i64;
+    let keys: Vec<i64> = (0..n).collect();
+
+    assert!(should_use_partitioned_firstseen_engine(&keys));
+}
+
+#[test]
+fn firstseen_partitioned_routing_rejects_below_min_unique_boundary() {
+    let n = 20_000i64;
+    let keys: Vec<i64> = (0..n).map(|i| i % 4_095).collect();
+
+    assert!(!should_use_partitioned_firstseen_engine(&keys));
+}
+
+#[test]
+fn firstseen_partitioned_routing_accepts_at_min_unique_boundary_when_sample_is_large_enough() {
+    let mut keys: Vec<i64> = (0..4_096).map(i64::from).collect();
+    keys.push(0);
+
+    assert!(should_use_partitioned_firstseen_engine(&keys));
+}
+
+#[test]
+fn firstseen_partitioned_routing_keeps_compatibility_wrappers_in_sync() {
+    let low_sample_keys: Vec<i64> = (0..4_096).map(i64::from).collect();
+    let boundary_keys: Vec<i64> = (0..4_097i64).map(|i| i % 4_096).collect();
+    let high_unique_keys: Vec<i64> = (0..20_000).map(i64::from).collect();
+
+    for keys in [&low_sample_keys, &boundary_keys, &high_unique_keys] {
+        let firstseen = should_use_partitioned_firstseen_engine(keys);
+        assert_eq!(should_use_partitioned_std_var_engine(keys), firstseen);
+        assert_eq!(should_use_partitioned_median_engine(keys), firstseen);
+    }
+}
 
 #[test]
 fn test_std_var_routing_prefers_legacy_engine_for_low_cardinality_samples() {

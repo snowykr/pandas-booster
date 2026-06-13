@@ -18,6 +18,7 @@ mod profile;
 mod reduce;
 mod result;
 mod routing;
+mod scalar_firstseen;
 
 #[cfg(test)]
 mod api_float_tests;

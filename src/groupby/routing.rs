@@ -1,10 +1,10 @@
 use ahash::AHashSet;
 
-const STD_VAR_ENGINE_SAMPLE_SIZE: usize = 16_384;
-const STD_VAR_ENGINE_MIN_SAMPLE_UNIQUES: usize = 4_096;
+const PARTITIONED_ENGINE_SAMPLE_SIZE: usize = 16_384;
+const PARTITIONED_ENGINE_MIN_SAMPLE_UNIQUES: usize = 4_096;
 
 fn estimate_sample_unique_keys(keys: &[i64]) -> usize {
-    let sample_size = keys.len().min(STD_VAR_ENGINE_SAMPLE_SIZE);
+    let sample_size = keys.len().min(PARTITIONED_ENGINE_SAMPLE_SIZE);
     if sample_size == 0 {
         return 0;
     }
@@ -24,13 +24,18 @@ fn estimate_sample_unique_keys(keys: &[i64]) -> usize {
 }
 
 #[inline]
+pub(super) fn should_use_partitioned_firstseen_engine(keys: &[i64]) -> bool {
+    let sample_size = keys.len().min(PARTITIONED_ENGINE_SAMPLE_SIZE);
+    sample_size > PARTITIONED_ENGINE_MIN_SAMPLE_UNIQUES
+        && estimate_sample_unique_keys(keys) >= PARTITIONED_ENGINE_MIN_SAMPLE_UNIQUES
+}
+
+#[inline]
 pub(super) fn should_use_partitioned_std_var_engine(keys: &[i64]) -> bool {
-    let sample_size = keys.len().min(STD_VAR_ENGINE_SAMPLE_SIZE);
-    sample_size > STD_VAR_ENGINE_MIN_SAMPLE_UNIQUES
-        && estimate_sample_unique_keys(keys) >= STD_VAR_ENGINE_MIN_SAMPLE_UNIQUES
+    should_use_partitioned_firstseen_engine(keys)
 }
 
 #[inline]
 pub(super) fn should_use_partitioned_median_engine(keys: &[i64]) -> bool {
-    should_use_partitioned_std_var_engine(keys)
+    should_use_partitioned_firstseen_engine(keys)
 }

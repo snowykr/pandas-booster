@@ -4,14 +4,15 @@ use std::time::Instant;
 use crate::aggregation::{MaxAggF64, MinAggF64, StdAggF64, VarAggF64};
 
 use super::engine::parallel_groupby_firstseen_std_var_impl;
-use super::legacy::{
-    parallel_groupby, parallel_groupby_firstseen_u32, parallel_groupby_firstseen_u64,
-};
+use super::legacy::parallel_groupby;
 use super::order::reorder_single_result_by_key;
 use super::profile::{
     profile_parallel_groupby_firstseen_std_var_impl, profile_parallel_groupby_std_var_impl,
 };
 use super::result::{GroupByResultF64, ProfiledGroupByResult};
+use super::scalar_firstseen::{
+    parallel_groupby_firstseen_legacy_low_u32, parallel_groupby_firstseen_legacy_low_u64,
+};
 
 fn reorder_profiled_result(
     mut profiled: ProfiledGroupByResult<f64>,
@@ -130,14 +131,14 @@ pub fn parallel_groupby_min_f64_firstseen_u32(
     keys: &[i64],
     values: &[f64],
 ) -> PyResult<GroupByResultF64> {
-    parallel_groupby_firstseen_u32::<f64, MinAggF64, f64>(keys, values)
+    parallel_groupby_firstseen_legacy_low_u32::<f64, MinAggF64, f64>(keys, values)
 }
 
 pub fn parallel_groupby_min_f64_firstseen_u64(
     keys: &[i64],
     values: &[f64],
 ) -> PyResult<GroupByResultF64> {
-    parallel_groupby_firstseen_u64::<f64, MinAggF64, f64>(keys, values)
+    parallel_groupby_firstseen_legacy_low_u64::<f64, MinAggF64, f64>(keys, values)
 }
 
 pub fn parallel_groupby_max_f64(keys: &[i64], values: &[f64]) -> PyResult<GroupByResultF64> {
@@ -154,12 +155,12 @@ pub fn parallel_groupby_max_f64_firstseen_u32(
     keys: &[i64],
     values: &[f64],
 ) -> PyResult<GroupByResultF64> {
-    parallel_groupby_firstseen_u32::<f64, MaxAggF64, f64>(keys, values)
+    parallel_groupby_firstseen_legacy_low_u32::<f64, MaxAggF64, f64>(keys, values)
 }
 
 pub fn parallel_groupby_max_f64_firstseen_u64(
     keys: &[i64],
     values: &[f64],
 ) -> PyResult<GroupByResultF64> {
-    parallel_groupby_firstseen_u64::<f64, MaxAggF64, f64>(keys, values)
+    parallel_groupby_firstseen_legacy_low_u64::<f64, MaxAggF64, f64>(keys, values)
 }
