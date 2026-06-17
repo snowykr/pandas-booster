@@ -1,6 +1,6 @@
 use super::routing::{
     should_use_partitioned_firstseen_engine, should_use_partitioned_median_engine,
-    should_use_partitioned_std_var_engine,
+    should_use_partitioned_prod_engine, should_use_partitioned_std_var_engine,
 };
 use super::test_support::{
     assert_float_kernel_bitwise_deterministic, make_partitioned_single_key_float_data,
@@ -49,7 +49,24 @@ fn firstseen_partitioned_routing_keeps_compatibility_wrappers_in_sync() {
         let firstseen = should_use_partitioned_firstseen_engine(keys);
         assert_eq!(should_use_partitioned_std_var_engine(keys), firstseen);
         assert_eq!(should_use_partitioned_median_engine(keys), firstseen);
+        assert_eq!(should_use_partitioned_prod_engine(keys), firstseen);
     }
+}
+
+#[test]
+fn prod_routing_prefers_ordered_low_for_standard_cardinality() {
+    let n = 20_000usize;
+    let keys: Vec<i64> = (0..n).map(|row| (row % 1_000) as i64).collect();
+
+    assert!(!should_use_partitioned_prod_engine(&keys));
+}
+
+#[test]
+fn prod_routing_keeps_partitioned_engine_for_high_uniqueness() {
+    let n = 20_000usize;
+    let keys: Vec<i64> = (0..n).map(|row| row as i64).collect();
+
+    assert!(should_use_partitioned_prod_engine(&keys));
 }
 
 #[test]
