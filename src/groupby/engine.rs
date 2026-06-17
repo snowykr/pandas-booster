@@ -139,9 +139,15 @@ pub(super) fn parallel_groupby_prod_f64_ordered_impl(
     keys: &[i64],
     values: &[f64],
 ) -> PyResult<GroupByResultF64> {
-    if keys.len() <= u32::MAX as usize {
-        parallel_groupby_prod_f64_firstseen_impl::<u32>(keys, values)
+    if should_use_partitioned_prod_engine(keys) {
+        if keys.len() <= u32::MAX as usize {
+            parallel_groupby_partitioned_unordered_impl::<f64, ProdAggF64, f64, u32>(keys, values)
+        } else {
+            parallel_groupby_partitioned_unordered_impl::<f64, ProdAggF64, f64, u64>(keys, values)
+        }
+    } else if keys.len() <= u32::MAX as usize {
+        groupby_prod_f64_ordered_low::<u32>(keys, values)
     } else {
-        parallel_groupby_prod_f64_firstseen_impl::<u64>(keys, values)
+        groupby_prod_f64_ordered_low::<u64>(keys, values)
     }
 }

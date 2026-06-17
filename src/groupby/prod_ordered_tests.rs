@@ -1,5 +1,10 @@
+use crate::aggregation::ProdAggF64;
+
 use super::api_f64::parallel_groupby_prod_f64_sorted;
-use super::engine::parallel_groupby_prod_f64_ordered_impl;
+use super::engine::{
+    parallel_groupby_partitioned_unordered_impl, parallel_groupby_prod_f64_firstseen_impl,
+    parallel_groupby_prod_f64_ordered_impl,
+};
 use super::order::reorder_single_result_by_key;
 use super::prod_ordered::groupby_prod_f64_ordered_low;
 use super::routing::should_use_partitioned_prod_engine;
@@ -36,7 +41,7 @@ fn partitioned_prod_preserves_duplicate_key_row_order_when_firstseen() {
     let (keys, values, target_key) = high_cardinality_duplicate_prod_data();
     assert!(should_use_partitioned_prod_engine(&keys));
 
-    let result = parallel_groupby_prod_f64_ordered_impl(&keys, &values).unwrap();
+    let result = parallel_groupby_prod_f64_firstseen_impl::<u32>(&keys, &values).unwrap();
 
     let target_position = result
         .keys
@@ -62,6 +67,31 @@ fn partitioned_prod_preserves_duplicate_key_row_order_when_sorted() {
     assert_eq!(
         result.values[0].to_bits(),
         row_order_prod_for_key(&keys, &values, target_key).to_bits()
+    );
+}
+
+#[test]
+fn partitioned_prod_base_route_avoids_firstseen_finalization() {
+    let (keys, values, _) = high_cardinality_duplicate_prod_data();
+    assert!(should_use_partitioned_prod_engine(&keys));
+
+    let result = parallel_groupby_prod_f64_ordered_impl(&keys, &values).unwrap();
+    let unordered =
+        parallel_groupby_partitioned_unordered_impl::<f64, ProdAggF64, f64, u32>(&keys, &values)
+            .unwrap();
+
+    assert_eq!(result.keys, unordered.keys);
+    assert_eq!(
+        result
+            .values
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>(),
+        unordered
+            .values
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>()
     );
 }
 
