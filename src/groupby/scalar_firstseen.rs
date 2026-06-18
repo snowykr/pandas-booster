@@ -20,6 +20,7 @@ thread_local! {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ScalarFirstseenRoute {
+    #[cfg(test)]
     DeterministicLow,
     LegacyLow,
     #[cfg(test)]
@@ -78,12 +79,9 @@ where
     A: Aggregator<T, O> + Clone + Default + Send,
     (A, u32): PairwiseReduceValue<T, O, A>,
 {
-    route_firstseen::<T, A, O, u32>(
-        keys,
-        values,
-        ScalarFirstseenRoute::DeterministicLow,
-        parallel_groupby_firstseen_u32_deterministic::<T, A, O>,
-    )
+    #[cfg(test)]
+    record_scalar_firstseen_route_for_test(ScalarFirstseenRoute::DeterministicLow);
+    parallel_groupby_firstseen_u32_deterministic::<T, A, O>(keys, values)
 }
 
 pub(super) fn parallel_groupby_firstseen_deterministic_low_u64<T, A, O>(
@@ -96,12 +94,9 @@ where
     A: Aggregator<T, O> + Clone + Default + Send,
     (A, u64): PairwiseReduceValue<T, O, A>,
 {
-    route_firstseen::<T, A, O, u64>(
-        keys,
-        values,
-        ScalarFirstseenRoute::DeterministicLow,
-        parallel_groupby_firstseen_u64_deterministic::<T, A, O>,
-    )
+    #[cfg(test)]
+    record_scalar_firstseen_route_for_test(ScalarFirstseenRoute::DeterministicLow);
+    parallel_groupby_firstseen_u64_deterministic::<T, A, O>(keys, values)
 }
 
 pub(super) fn parallel_groupby_firstseen_legacy_low_u32<T, A, O>(

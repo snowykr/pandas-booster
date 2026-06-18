@@ -89,7 +89,7 @@ fn deterministic_low_wrapper_selects_low_route_for_low_cardinality() {
 }
 
 #[test]
-fn deterministic_low_wrapper_selects_partitioned_for_high_uniqueness() {
+fn deterministic_low_wrapper_selects_low_route_for_high_uniqueness() {
     let n = 5_000usize;
     let keys: Vec<i64> = (0..n).map(|row| row as i64).collect();
     let values: Vec<f64> = (0..n).map(|row| row as f64).collect();
@@ -100,7 +100,10 @@ fn deterministic_low_wrapper_selects_partitioned_for_high_uniqueness() {
             .unwrap();
 
     assert_eq!(result.keys.len(), n);
-    assert_last_scalar_firstseen_route("u32 deterministic high", ScalarFirstseenRoute::Partitioned);
+    assert_last_scalar_firstseen_route(
+        "u32 deterministic high",
+        ScalarFirstseenRoute::DeterministicLow,
+    );
 
     clear_scalar_firstseen_route_for_test();
     let result =
@@ -108,7 +111,10 @@ fn deterministic_low_wrapper_selects_partitioned_for_high_uniqueness() {
             .unwrap();
 
     assert_eq!(result.keys.len(), n);
-    assert_last_scalar_firstseen_route("u64 deterministic high", ScalarFirstseenRoute::Partitioned);
+    assert_last_scalar_firstseen_route(
+        "u64 deterministic high",
+        ScalarFirstseenRoute::DeterministicLow,
+    );
 }
 
 #[test]
@@ -163,10 +169,6 @@ fn scalar_firstseen_high_uniqueness_routes_target_aggs_to_partitioned() {
     let mut failures = Vec::new();
 
     observe_partitioned_routes!(&keys, &values, &mut failures;
-        "sum_f64_firstseen_u32" => parallel_groupby_sum_f64_firstseen_u32,
-        "sum_f64_firstseen_u64" => parallel_groupby_sum_f64_firstseen_u64,
-        "mean_f64_firstseen_u32" => parallel_groupby_mean_f64_firstseen_u32,
-        "mean_f64_firstseen_u64" => parallel_groupby_mean_f64_firstseen_u64,
         "min_f64_firstseen_u32" => parallel_groupby_min_f64_firstseen_u32,
         "min_f64_firstseen_u64" => parallel_groupby_min_f64_firstseen_u64,
         "max_f64_firstseen_u32" => parallel_groupby_max_f64_firstseen_u32,
@@ -192,6 +194,45 @@ fn scalar_firstseen_high_uniqueness_routes_target_aggs_to_partitioned() {
         "structural route assertion failed: expected Partitioned for every \
          high-uniqueness scalar first-seen target agg; observed {}",
         failures.join(", ")
+    );
+}
+
+#[test]
+fn f64_sum_mean_firstseen_high_uniqueness_stays_deterministic_low() {
+    let n = 20_000usize;
+    let keys: Vec<i64> = (0..n).map(|i| i as i64).collect();
+    let values: Vec<f64> = (0..n).map(|i| i as f64).collect();
+
+    clear_scalar_firstseen_route_for_test();
+    let result = parallel_groupby_sum_f64_firstseen_u32(&keys, &values).unwrap();
+    assert_eq!(result.keys.len(), n);
+    assert_last_scalar_firstseen_route(
+        "sum f64 u32 high uniqueness",
+        ScalarFirstseenRoute::DeterministicLow,
+    );
+
+    clear_scalar_firstseen_route_for_test();
+    let result = parallel_groupby_sum_f64_firstseen_u64(&keys, &values).unwrap();
+    assert_eq!(result.keys.len(), n);
+    assert_last_scalar_firstseen_route(
+        "sum f64 u64 high uniqueness",
+        ScalarFirstseenRoute::DeterministicLow,
+    );
+
+    clear_scalar_firstseen_route_for_test();
+    let result = parallel_groupby_mean_f64_firstseen_u32(&keys, &values).unwrap();
+    assert_eq!(result.keys.len(), n);
+    assert_last_scalar_firstseen_route(
+        "mean f64 u32 high uniqueness",
+        ScalarFirstseenRoute::DeterministicLow,
+    );
+
+    clear_scalar_firstseen_route_for_test();
+    let result = parallel_groupby_mean_f64_firstseen_u64(&keys, &values).unwrap();
+    assert_eq!(result.keys.len(), n);
+    assert_last_scalar_firstseen_route(
+        "mean f64 u64 high uniqueness",
+        ScalarFirstseenRoute::DeterministicLow,
     );
 }
 

@@ -14,6 +14,48 @@ fn assert_f64_values_eq(actual: &[f64], expected: &[f64]) {
     }
 }
 
+fn target_value_bits(result: &GroupByResultF64, target_key: i64) -> u64 {
+    let position = result
+        .keys
+        .iter()
+        .position(|&key| key == target_key)
+        .unwrap();
+    result.values[position].to_bits()
+}
+
+fn make_high_uniqueness_cancellation_data() -> (Vec<i64>, Vec<f64>, i64) {
+    let target_key = -1;
+    let mut keys = Vec::with_capacity(20_004);
+    let mut values = Vec::with_capacity(20_004);
+
+    for key in 0..20_000 {
+        match key {
+            0 => {
+                keys.push(target_key);
+                values.push(1e16);
+            }
+            5_000 => {
+                keys.push(target_key);
+                values.push(1.0);
+            }
+            10_000 => {
+                keys.push(target_key);
+                values.push(-1e16);
+            }
+            15_000 => {
+                keys.push(target_key);
+                values.push(1.0);
+            }
+            _ => {}
+        }
+
+        keys.push(key);
+        values.push(key as f64);
+    }
+
+    (keys, values, target_key)
+}
+
 #[test]
 fn test_sum_f64_sorted_bitwise_deterministic_across_threads() {
     let (keys, values) = make_sensitive_single_key_float_data();
@@ -63,6 +105,25 @@ fn test_mean_f64_firstseen_u64_bitwise_deterministic_across_threads() {
         parallel_groupby_mean_f64_firstseen_u64,
         &keys,
         &values,
+    );
+}
+
+#[test]
+fn test_f64_sum_mean_sort_toggle_preserves_cancellation_sensitive_values() {
+    let (keys, values, target_key) = make_high_uniqueness_cancellation_data();
+
+    let sum_firstseen = parallel_groupby_sum_f64_firstseen_u32(&keys, &values).unwrap();
+    let sum_sorted = parallel_groupby_sum_f64_sorted(&keys, &values).unwrap();
+    assert_eq!(
+        target_value_bits(&sum_firstseen, target_key),
+        target_value_bits(&sum_sorted, target_key),
+    );
+
+    let mean_firstseen = parallel_groupby_mean_f64_firstseen_u64(&keys, &values).unwrap();
+    let mean_sorted = parallel_groupby_mean_f64_sorted(&keys, &values).unwrap();
+    assert_eq!(
+        target_value_bits(&mean_firstseen, target_key),
+        target_value_bits(&mean_sorted, target_key),
     );
 }
 
