@@ -39,3 +39,8 @@ pub(super) fn should_use_partitioned_std_var_engine(keys: &[i64]) -> bool {
 pub(super) fn should_use_partitioned_median_engine(keys: &[i64]) -> bool {
     should_use_partitioned_firstseen_engine(keys)
 }
+
+#[inline]
+pub(super) fn should_use_partitioned_prod_engine(keys: &[i64]) -> bool {
+    should_use_partitioned_firstseen_engine(keys)
+}
