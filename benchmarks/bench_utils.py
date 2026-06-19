@@ -69,6 +69,7 @@ def run_worker_process(
     script_path: Path,
     worker_args: dict[str, Any],
     timeout: int = 300,
+    max_attempts: int = 3,
 ) -> dict[str, Any]:
     """Run a worker process and return its JSON output."""
     file_descriptor, output_file = tempfile.mkstemp(suffix=".json")
@@ -91,39 +92,56 @@ def run_worker_process(
         env = os.environ.copy()
         env.setdefault("PANDAS_BOOSTER_FORCE_PANDAS_SORT", "0")
 
-        result = subprocess.run(
-            cmd,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=True,
-            cwd=str(script_path.parent.parent),  # Ensure running from repo root
-        )
+        for attempt in range(1, max_attempts + 1):
+            if os.path.exists(output_file):
+                with contextlib.suppress(OSError):
+                    os.unlink(output_file)
 
-        try:
-            with open(output_file) as f:
-                content = f.read()
-                if not content.strip():
-                    raise json.JSONDecodeError("Empty file", content, 0)
-                return json.loads(content)
-        except (json.JSONDecodeError, FileNotFoundError):
-            lines = result.stdout.strip().splitlines()
-            for line in reversed(lines):
-                line = line.strip()
-                if not line:
-                    continue
+            try:
+                result = subprocess.run(
+                    cmd,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    check=True,
+                    cwd=str(script_path.parent.parent),  # Ensure running from repo root
+                )
+
                 try:
-                    return json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-            raise
+                    with open(output_file) as f:
+                        content = f.read()
+                        if not content.strip():
+                            raise json.JSONDecodeError("Empty file", content, 0)
+                        return json.loads(content)
+                except (json.JSONDecodeError, FileNotFoundError):
+                    lines = result.stdout.strip().splitlines()
+                    for line in reversed(lines):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            return json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                    raise
 
-    except subprocess.CalledProcessError as e:
-        print(f"Worker failed with return code {e.returncode}", file=sys.stderr)
-        print(f"Stdout: {e.stdout}", file=sys.stderr)
-        print(f"Stderr: {e.stderr}", file=sys.stderr)
-        raise
+            except subprocess.CalledProcessError as e:
+                if attempt < max_attempts:
+                    print(
+                        (
+                            f"Worker failed with return code {e.returncode}; "
+                            f"retrying ({attempt + 1}/{max_attempts})"
+                        ),
+                        file=sys.stderr,
+                    )
+                    continue
+
+                print(f"Worker failed with return code {e.returncode}", file=sys.stderr)
+                print(f"Stdout: {e.stdout}", file=sys.stderr)
+                print(f"Stderr: {e.stderr}", file=sys.stderr)
+                raise
+
     except json.JSONDecodeError as e:
         print(f"Failed to decode worker output: {e}", file=sys.stderr)
         if result:

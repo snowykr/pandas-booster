@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tempfile
 import uuid
@@ -95,3 +96,67 @@ def test_worker_writes_valid_temp_output_file(benchmark_module, monkeypatch):
         }
     finally:
         output_path.unlink(missing_ok=True)
+
+
+def test_run_worker_process_retries_failed_subprocess(benchmark_module, monkeypatch):
+    bench_utils_globals = benchmark_module.run_cold_warm_benchmark.__globals__
+    run_worker_process = bench_utils_globals["run_worker_process"]
+    calls: list[int] = []
+
+    def fake_run(cmd, **_kwargs):
+        calls.append(1)
+        payload = json.loads(cmd[3])
+        output_file = Path(payload["output_file"])
+
+        if len(calls) == 1:
+            raise subprocess.CalledProcessError(
+                returncode=-11,
+                cmd=cmd,
+                output="",
+                stderr="",
+            )
+
+        output_file.write_text(
+            json.dumps({"warm_time_s": 0.12, "correctness": "pass"}),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(bench_utils_globals["subprocess"], "run", fake_run)
+
+    result = run_worker_process(
+        _BENCHMARK_PATH,
+        {"preset_name": "1key", "mode": "warm"},
+        max_attempts=2,
+    )
+
+    assert result == {"warm_time_s": 0.12, "correctness": "pass"}
+    assert len(calls) == 2
+
+
+def test_run_worker_process_raises_after_retry_exhaustion(
+    benchmark_module, monkeypatch
+):
+    bench_utils_globals = benchmark_module.run_cold_warm_benchmark.__globals__
+    run_worker_process = bench_utils_globals["run_worker_process"]
+    calls: list[int] = []
+
+    def fake_run(cmd, **_kwargs):
+        calls.append(1)
+        raise subprocess.CalledProcessError(
+            returncode=-11,
+            cmd=cmd,
+            output="",
+            stderr="",
+        )
+
+    monkeypatch.setattr(bench_utils_globals["subprocess"], "run", fake_run)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        run_worker_process(
+            _BENCHMARK_PATH,
+            {"preset_name": "1key", "mode": "warm"},
+            max_attempts=2,
+        )
+
+    assert len(calls) == 2

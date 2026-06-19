@@ -18,6 +18,7 @@ from reporting_documents import (
     format_performance_section,
     ordered_result_aggs,
 )
+from reporting_environment import collect_benchmark_environment, format_benchmark_duration
 from reporting_io import (
     is_generated_benchmark_report,
     render_generated_markdown,
@@ -38,7 +39,9 @@ __all__ = [
     "STATS_EVIDENCE_SORTS",
     "SUPPORTED_AGGS",
     "benchmark_report_filename",
+    "collect_benchmark_environment",
     "format_benchmark_document",
+    "format_benchmark_duration",
     "format_benchmark_index",
     "format_correctness_section",
     "format_performance_section",

@@ -111,7 +111,10 @@ def format_benchmark_document(
     return "\n\n".join(sections)
 
 
-def format_benchmark_index(aggs: list[str]) -> str:
+def format_benchmark_index(
+    aggs: list[str],
+    environment_lines: list[str] | tuple[str, ...] | None = None,
+) -> str:
     lines = [
         "# Benchmark Reports",
         "",
@@ -123,7 +126,7 @@ def format_benchmark_index(aggs: list[str]) -> str:
     for agg in aggs:
         filename = benchmark_report_filename(agg)
         lines.append(f"| `{agg}` | [{filename}]({filename}) |")
-    lines.extend(["", *BENCHMARK_REPORT_ENVIRONMENT_TEMPLATE_LINES, ""])
+    lines.extend(["", *(environment_lines or BENCHMARK_REPORT_ENVIRONMENT_TEMPLATE_LINES), ""])
     return "\n".join(lines)
 
 

@@ -19,12 +19,12 @@ Each report contains benchmark tables for one aggregation function.
 ## Environment & Configuration
 
 The following environment was used to generate the checked-in benchmark reports.
-When refreshing these reports, replace these values with the environment used for that run.
 
 - **Build Mode**: Release (`maturin develop --release`)
-- **Machine**: MacBook Pro (`Mac15,6`), Apple M3 Pro, 11 CPU cores (5 Performance + 6 Efficiency), 18 GB RAM
-- **Threading**: Default Rayon behavior (uses all available logical cores)
-- **OS**: macOS 26.4.1 (Darwin 25.4.0, arm64)
-- **Python**: 3.11.15
+- **Machine**: AMD Ryzen Threadripper PRO 9995WX 96-Cores, 96 CPU cores / 192 threads, 251 GiB RAM
+- **Threading**: Default Rayon behavior (RAYON_NUM_THREADS unset; uses available logical cores)
+- **OS**: Linux 6.17.0-29-generic (x86_64)
+- **Python**: 3.12.3
 - **Pandas**: 2.3.3
-- **Polars**: 1.40.1
+- **Polars**: 1.41.2
+- **Benchmark Duration**: 7h 20m 21s wall-clock (26,421 seconds), measured around generate_docs.py only

@@ -38,10 +38,22 @@ def test_committed_benchmark_reports_match_generate_docs_contract(benchmark_modu
     )
     assert actual_table == expected_table
     assert "## Environment & Configuration" in index
-    assert "replace these values with the environment used for that run" in index
-    assert "- **Machine**: MacBook Pro (`Mac15,6`)" in actual_environment
-    assert "- **Pandas**: 2.3.3" in actual_environment
-    assert "- **Polars**: 1.40.1" in actual_environment
+    assert (
+        "The following environment was used to generate the checked-in benchmark reports."
+        in index
+    )
+    for field in (
+        "- **Build Mode**:",
+        "- **Machine**:",
+        "- **Threading**:",
+        "- **OS**:",
+        "- **Python**:",
+        "- **Pandas**:",
+        "- **Polars**:",
+        "- **Benchmark Duration**:",
+    ):
+        assert field in actual_environment
+    assert "measured around generate_docs.py only" in actual_environment
 
     for agg in expected_aggs:
         report = (reports_dir / f"{agg}.md").read_text(encoding="utf-8")
@@ -49,6 +61,33 @@ def test_committed_benchmark_reports_match_generate_docs_contract(benchmark_modu
         assert "## Performance" in report
         assert "### Correctness" in report
         assert "Performance characteristics" not in report
+
+
+def test_format_benchmark_duration_uses_wall_clock_seconds(benchmark_module):
+    rendered = benchmark_module.format_benchmark_duration(8022.4)
+
+    assert rendered == (
+        "2h 13m 42s wall-clock (8,022 seconds), "
+        "measured around generate_docs.py only"
+    )
+
+
+def test_format_benchmark_index_accepts_run_environment(benchmark_module):
+    rendered = benchmark_module.format_benchmark_index(
+        ["sum"],
+        environment_lines=(
+            "## Environment & Configuration",
+            "",
+            (
+                "- **Benchmark Duration**: 1s wall-clock (1 seconds), "
+                "measured around generate_docs.py only"
+            ),
+        ),
+    )
+
+    assert "- **Benchmark Duration**: 1s wall-clock" in rendered
+    assert "replace this template" not in rendered
+
 
 def test_format_performance_section_separates_multiple_aggs(benchmark_module):
     results = [
