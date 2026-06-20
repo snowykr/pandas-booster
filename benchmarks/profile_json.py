@@ -43,6 +43,8 @@ REQUIRED_MULTI_KEY_SORTED_PHASES = (
     "sort_key_construction_s",
     "radix_sort_s",
     "sorted_materialization_s",
+    "sort_first_permutation_s",
+    "sort_first_segment_scan_s",
     "conversion_s",
     "pandas_index_construction_s",
 )
@@ -120,6 +122,8 @@ def _measure_booster_multi_key_sorted_breakdown(
     partial_group_total = 0
     final_group_count = 0
     partial_to_final_ratio = 0.0
+    route = "hash_first"
+    sort_first_segment_scan_count = 0
 
     for _ in range(n_samples):
         total_start = time.perf_counter()
@@ -178,10 +182,13 @@ def _measure_booster_multi_key_sorted_breakdown(
         partial_group_total = int(profile["partial_group_total"])
         final_group_count = int(profile["final_group_count"])
         partial_to_final_ratio = float(profile["partial_to_final_ratio"])
+        route = str(profile.get("route", "hash_first"))
+        sort_first_segment_scan_count = int(profile.get("sort_first_segment_scan_count", 0))
 
     stats = {name: compute_stats(samples) for name, samples in phase_samples.items()}
     return {
         "profile_kind": "multi_key_sorted",
+        "route": route,
         "execution": f"booster->rust.{profile_func_name}",
         "phases": {name: stats[name] for name in REQUIRED_MULTI_KEY_SORTED_PHASES},
         "rust_total_s": stats["rust_total_s"].mean,
@@ -190,6 +197,7 @@ def _measure_booster_multi_key_sorted_breakdown(
         "partial_group_total": partial_group_total,
         "final_group_count": final_group_count,
         "partial_to_final_ratio": partial_to_final_ratio,
+        "sort_first_segment_scan_count": sort_first_segment_scan_count,
     }
 
 

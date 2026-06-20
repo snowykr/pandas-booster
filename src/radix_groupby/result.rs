@@ -14,6 +14,7 @@ pub struct GroupByMultiResult<V> {
 
 #[derive(Debug, Clone)]
 pub struct MultiKeySortedPhaseProfile {
+    pub route_label: &'static str,
     pub hash_build_s: f64,
     pub partition_scatter_s: f64,
     pub partition_aggregation_s: f64,
@@ -21,6 +22,9 @@ pub struct MultiKeySortedPhaseProfile {
     pub sort_key_construction_s: f64,
     pub radix_sort_s: f64,
     pub sorted_materialization_s: f64,
+    pub sort_first_permutation_s: f64,
+    pub sort_first_segment_scan_s: f64,
+    pub sort_first_segment_scan_count: usize,
     pub partial_group_total: usize,
     pub final_group_count: usize,
 }

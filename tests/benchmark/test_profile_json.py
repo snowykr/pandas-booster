@@ -7,7 +7,8 @@ import sys
 import types
 
 import pytest
-from conftest import (
+
+from ._report_output_helpers import (
     _loaded_benchmark_module,
     _make_breakdown,
     _make_result,
@@ -21,6 +22,8 @@ _REQUIRED_MULTI_KEY_SORTED_PHASES = (
     "sort_key_construction_s",
     "radix_sort_s",
     "sorted_materialization_s",
+    "sort_first_permutation_s",
+    "sort_first_segment_scan_s",
     "conversion_s",
     "pandas_index_construction_s",
 )
@@ -48,6 +51,7 @@ def _make_multi_key_sorted_breakdown(benchmark_module) -> dict:
     stats = benchmark_module.compute_stats([0.1])
     return {
         "profile_kind": "multi_key_sorted",
+        "route": "sort_first",
         "execution": "booster->rust.profile_groupby_multi_max_f64_sorted",
         "phases": dict.fromkeys(_REQUIRED_MULTI_KEY_SORTED_PHASES, stats),
         "rust_total_s": 0.7,
@@ -56,6 +60,7 @@ def _make_multi_key_sorted_breakdown(benchmark_module) -> dict:
         "partial_group_total": 900,
         "final_group_count": 900,
         "partial_to_final_ratio": 1.0,
+        "sort_first_segment_scan_count": 1,
     }
 
 
@@ -209,6 +214,8 @@ def test_build_profile_json_payload_exposes_multi_key_sorted_profile_section(
     )
     assert payload["multi_key_sorted_high"]["preset"] == "high_cardinality_3key"
     assert payload["multi_key_sorted_high"]["aggs"] == ["max"]
+    assert payload["multi_key_sorted_high"]["route"] == "sort_first"
+    assert payload["multi_key_sorted_high"]["per_agg"]["max"]["route"] == "sort_first"
     assert payload["metadata"]["selected_aggs"] == ["max"]
 
 

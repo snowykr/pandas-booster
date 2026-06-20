@@ -15,9 +15,7 @@ mod order;
 mod partition;
 mod profile;
 mod result;
-#[cfg(test)]
 mod sort_first;
-#[cfg(test)]
 mod sort_first_routing;
 
 #[cfg(test)]
@@ -30,6 +28,8 @@ mod dispatch_tests;
 mod order_tests;
 #[cfg(test)]
 mod partition_tests;
+#[cfg(test)]
+mod sort_first_dispatch_tests;
 #[cfg(test)]
 mod sort_first_routing_tests;
 #[cfg(test)]

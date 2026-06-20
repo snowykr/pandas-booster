@@ -34,12 +34,15 @@ def summarize_profile_cases(cases: list[dict[str, Any]]) -> dict[str, Any] | Non
         for phase_name in phase_names
     }
     first_breakdown = profiled_cases[0]["breakdown"]
+    routes = {str(case["breakdown"].get("route", "hash_first")) for case in profiled_cases}
+    route = routes.pop() if len(routes) == 1 else "mixed"
 
     return {
         "preset": profiled_cases[0]["preset"],
         "workload": profiled_cases[0]["workload"],
         "sort": profiled_cases[0]["sort"],
         "aggs": [case["agg"] for case in profiled_cases],
+        "route": route,
         "phases": phase_means,
         "rust_total_s": sum(case["breakdown"]["rust_total_s"] for case in profiled_cases)
         / len(profiled_cases),
@@ -53,6 +56,7 @@ def summarize_profile_cases(cases: list[dict[str, Any]]) -> dict[str, Any] | Non
         "per_agg": {
             case["agg"]: {
                 "execution": case["breakdown"]["execution"],
+                "route": case["breakdown"].get("route", "hash_first"),
                 "phases": stats_mean_map(case["breakdown"]["phases"]),
                 "rust_total_s": case["breakdown"]["rust_total_s"],
                 "python_total_s": case["breakdown"]["python_total_s"],
@@ -60,6 +64,10 @@ def summarize_profile_cases(cases: list[dict[str, Any]]) -> dict[str, Any] | Non
                 "partial_group_total": case["breakdown"]["partial_group_total"],
                 "final_group_count": case["breakdown"]["final_group_count"],
                 "partial_to_final_ratio": case["breakdown"]["partial_to_final_ratio"],
+                "sort_first_segment_scan_count": case["breakdown"].get(
+                    "sort_first_segment_scan_count",
+                    0,
+                ),
             }
             for case in profiled_cases
         },
@@ -154,6 +162,7 @@ def build_profile_json_payload(
                 if breakdown is None
                 else {
                     "profile_kind": breakdown.get("profile_kind", "single_key"),
+                    "route": breakdown.get("route", "hash_first"),
                     "execution": breakdown["execution"],
                     "phases": serialize_phase_stats(breakdown["phases"]),
                     "phase_means": stats_mean_map(breakdown["phases"]),
@@ -163,6 +172,10 @@ def build_profile_json_payload(
                     "partial_group_total": breakdown["partial_group_total"],
                     "final_group_count": breakdown["final_group_count"],
                     "partial_to_final_ratio": breakdown["partial_to_final_ratio"],
+                    "sort_first_segment_scan_count": breakdown.get(
+                        "sort_first_segment_scan_count",
+                        0,
+                    ),
                 },
             }
         )

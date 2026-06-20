@@ -1,8 +1,12 @@
 use std::cmp::Ordering;
+use std::time::Instant;
 
-use crate::aggregation::{Aggregator, CountAggI64, MaxAggF64, MinAggF64, SumAggF64};
+use crate::aggregation::{Aggregator, CountAggF64, CountAggI64, MaxAggF64, MaxAggI64};
+#[cfg(test)]
+use crate::aggregation::{MinAggF64, SumAggF64};
 
 use super::result::GroupByMultiResult;
+use super::sort_first_routing::MAX_KEY_COLUMNS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct SortFirstDiagnostics {
@@ -11,11 +15,26 @@ pub(super) struct SortFirstDiagnostics {
     pub post_aggregation_sort_count: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct SortFirstPhaseTimings {
+    pub lexicographic_permutation_s: f64,
+    pub segment_scan_s: f64,
+}
+
+#[cfg(test)]
 pub(super) fn sort_first_groupby_sum_f64(
     key_slices: &[&[i64]],
     values: &[f64],
 ) -> Result<(GroupByMultiResult<f64>, SortFirstDiagnostics), String> {
     sort_first_groupby::<f64, SumAggF64, f64>(key_slices, values)
+}
+
+#[cfg(test)]
+pub(super) fn sort_first_groupby_min_f64(
+    key_slices: &[&[i64]],
+    values: &[f64],
+) -> Result<(GroupByMultiResult<f64>, SortFirstDiagnostics), String> {
+    sort_first_groupby::<f64, MinAggF64, f64>(key_slices, values)
 }
 
 pub(super) fn sort_first_groupby_max_f64(
@@ -25,11 +44,18 @@ pub(super) fn sort_first_groupby_max_f64(
     sort_first_groupby::<f64, MaxAggF64, f64>(key_slices, values)
 }
 
-pub(super) fn sort_first_groupby_min_f64(
+pub(super) fn sort_first_groupby_max_i64(
+    key_slices: &[&[i64]],
+    values: &[i64],
+) -> Result<(GroupByMultiResult<i64>, SortFirstDiagnostics), String> {
+    sort_first_groupby::<i64, MaxAggI64, i64>(key_slices, values)
+}
+
+pub(super) fn sort_first_groupby_count_f64(
     key_slices: &[&[i64]],
     values: &[f64],
-) -> Result<(GroupByMultiResult<f64>, SortFirstDiagnostics), String> {
-    sort_first_groupby::<f64, MinAggF64, f64>(key_slices, values)
+) -> Result<(GroupByMultiResult<i64>, SortFirstDiagnostics), String> {
+    sort_first_groupby::<f64, CountAggF64, i64>(key_slices, values)
 }
 
 pub(super) fn sort_first_groupby_count_i64(
@@ -37,6 +63,34 @@ pub(super) fn sort_first_groupby_count_i64(
     values: &[i64],
 ) -> Result<(GroupByMultiResult<i64>, SortFirstDiagnostics), String> {
     sort_first_groupby::<i64, CountAggI64, i64>(key_slices, values)
+}
+
+pub(super) fn sort_first_groupby_max_f64_profiled(
+    key_slices: &[&[i64]],
+    values: &[f64],
+) -> Result<
+    (
+        GroupByMultiResult<f64>,
+        SortFirstDiagnostics,
+        SortFirstPhaseTimings,
+    ),
+    String,
+> {
+    sort_first_groupby_profiled::<f64, MaxAggF64, f64>(key_slices, values)
+}
+
+pub(super) fn sort_first_groupby_max_i64_profiled(
+    key_slices: &[&[i64]],
+    values: &[i64],
+) -> Result<
+    (
+        GroupByMultiResult<i64>,
+        SortFirstDiagnostics,
+        SortFirstPhaseTimings,
+    ),
+    String,
+> {
+    sort_first_groupby_profiled::<i64, MaxAggI64, i64>(key_slices, values)
 }
 
 fn sort_first_groupby<T, A, O>(
@@ -48,22 +102,58 @@ where
     O: Copy,
     A: Aggregator<T, O>,
 {
+    let (result, diagnostics, _timings) =
+        sort_first_groupby_profiled::<T, A, O>(key_slices, values)?;
+    Ok((result, diagnostics))
+}
+
+fn sort_first_groupby_profiled<T, A, O>(
+    key_slices: &[&[i64]],
+    values: &[T],
+) -> Result<
+    (
+        GroupByMultiResult<O>,
+        SortFirstDiagnostics,
+        SortFirstPhaseTimings,
+    ),
+    String,
+>
+where
+    T: Copy,
+    O: Copy,
+    A: Aggregator<T, O>,
+{
     validate_inputs(key_slices, values.len())?;
 
+    let permutation_start = Instant::now();
     let permutation = build_lexicographic_permutation(key_slices, values.len());
+    let lexicographic_permutation_s = permutation_start.elapsed().as_secs_f64();
+
+    let segment_start = Instant::now();
     let result = aggregate_segments::<T, A, O>(key_slices, values, &permutation);
+    let segment_scan_s = segment_start.elapsed().as_secs_f64();
     let diagnostics = SortFirstDiagnostics {
         lexicographic_permutation_built: true,
         segment_scan_count: 1,
         post_aggregation_sort_count: 0,
     };
+    let timings = SortFirstPhaseTimings {
+        lexicographic_permutation_s,
+        segment_scan_s,
+    };
 
-    Ok((result, diagnostics))
+    Ok((result, diagnostics, timings))
 }
 
 fn validate_inputs(key_slices: &[&[i64]], n_rows: usize) -> Result<(), String> {
     if key_slices.is_empty() {
         return Err("sort-first groupby requires at least one key column".to_owned());
+    }
+
+    if key_slices.len() > MAX_KEY_COLUMNS {
+        return Err(format!(
+            "sort-first groupby supports at most {MAX_KEY_COLUMNS} key columns"
+        ));
     }
 
     for (idx, col) in key_slices.iter().enumerate() {

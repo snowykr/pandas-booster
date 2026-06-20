@@ -43,6 +43,7 @@ where
                 perm: None,
             },
             profile: MultiKeySortedPhaseProfile {
+                route_label: "hash_first",
                 hash_build_s: 0.0,
                 partition_scatter_s: 0.0,
                 partition_aggregation_s: 0.0,
@@ -50,6 +51,9 @@ where
                 sort_key_construction_s: 0.0,
                 radix_sort_s: 0.0,
                 sorted_materialization_s: 0.0,
+                sort_first_permutation_s: 0.0,
+                sort_first_segment_scan_s: 0.0,
+                sort_first_segment_scan_count: 0,
                 partial_group_total: 0,
                 final_group_count: 0,
             },
@@ -118,6 +122,7 @@ where
     Ok(ProfiledGroupByMultiResult {
         result,
         profile: MultiKeySortedPhaseProfile {
+            route_label: "hash_first",
             hash_build_s,
             partition_scatter_s,
             partition_aggregation_s,
@@ -125,6 +130,9 @@ where
             sort_key_construction_s: sort_profile.sort_key_construction_s,
             radix_sort_s: sort_profile.radix_sort_s,
             sorted_materialization_s: sort_profile.sorted_materialization_s,
+            sort_first_permutation_s: 0.0,
+            sort_first_segment_scan_s: 0.0,
+            sort_first_segment_scan_count: 0,
             partial_group_total,
             final_group_count,
         },

@@ -1,6 +1,7 @@
 use super::sort_first_routing::{
     choose_sort_first_route, SortFirstFallbackReason, SortFirstReducer, SortFirstRoute,
-    MIN_SAMPLE_ROWS, SAMPLE_SIZE, UNIQUE_RATIO_DENOMINATOR, UNIQUE_RATIO_NUMERATOR,
+    MAX_KEY_COLUMNS, MIN_SAMPLE_ROWS, SAMPLE_SIZE, UNIQUE_RATIO_DENOMINATOR,
+    UNIQUE_RATIO_NUMERATOR,
 };
 
 fn key_slices<'a>(left: &'a [i64], right: &'a [i64]) -> Vec<&'a [i64]> {
@@ -41,7 +42,7 @@ fn routing_low_tuple_ratio_stays_hash_first() {
     let keys = key_slices(&left, &right);
 
     // When the route predicate estimates tuple uniqueness.
-    let decision = choose_sort_first_route(SortFirstReducer::SumF64, &keys, left.len());
+    let decision = choose_sort_first_route(SortFirstReducer::MaxF64, &keys, left.len());
 
     // Then low sampled tuple ratio falls back to hash-first.
     assert_eq!(decision.route, SortFirstRoute::HashFirst);
@@ -54,21 +55,47 @@ fn routing_low_tuple_ratio_stays_hash_first() {
 }
 
 #[test]
+fn routing_medium_tuple_ratio_below_threshold_stays_hash_first() {
+    // Given enough rows with sampled tuple uniqueness just below the 3/4 threshold.
+    let n_rows = 5_000i64;
+    let unique_tuples = 3_700i64;
+    let left: Vec<i64> = (0..n_rows).map(|row| row % unique_tuples).collect();
+    let right: Vec<i64> = (0..n_rows).map(|row| row % unique_tuples).collect();
+    let keys = key_slices(&left, &right);
+
+    // When the route predicate estimates tuple uniqueness.
+    let decision = choose_sort_first_route(SortFirstReducer::MaxF64, &keys, left.len());
+
+    // Then a medium ratio below the route cutoff still falls back to hash-first.
+    assert!(
+        (unique_tuples as usize).saturating_mul(UNIQUE_RATIO_DENOMINATOR)
+            < left.len().saturating_mul(UNIQUE_RATIO_NUMERATOR)
+    );
+    assert_eq!(decision.route, SortFirstRoute::HashFirst);
+    assert_eq!(
+        decision.fallback_reason,
+        Some(SortFirstFallbackReason::LowTupleRatio)
+    );
+    assert_eq!(decision.sample_rows, left.len());
+    assert_eq!(decision.sample_unique_tuples, unique_tuples as usize);
+}
+
+#[test]
 fn routing_high_tuple_ratio_selects_sort_first_for_supported_reducers() {
     // Given high-cardinality-like tuple samples.
     let (left, right) = high_unique_keys(5_000);
     let keys = key_slices(&left, &right);
 
-    // When each initial T7 reducer is checked.
+    // When each T8 production-routed reducer is checked.
     for reducer in [
-        SortFirstReducer::SumF64,
         SortFirstReducer::MaxF64,
-        SortFirstReducer::MinF64,
+        SortFirstReducer::MaxI64,
+        SortFirstReducer::CountF64,
         SortFirstReducer::CountI64,
     ] {
         let decision = choose_sort_first_route(reducer, &keys, left.len());
 
-        // Then every supported reducer selects sort-first confidently.
+        // Then every production-routed reducer selects sort-first confidently.
         assert_eq!(decision.route, SortFirstRoute::SortFirst);
         assert_eq!(decision.fallback_reason, None);
         assert_eq!(decision.sample_unique_tuples, left.len());
@@ -118,7 +145,7 @@ fn routing_reverse_sorted_high_ratio_still_selects_sort_first() {
     let keys = key_slices(&left, &right);
 
     // When routing estimates tuple uniqueness.
-    let decision = choose_sort_first_route(SortFirstReducer::MinF64, &keys, left.len());
+    let decision = choose_sort_first_route(SortFirstReducer::MaxF64, &keys, left.len());
 
     // Then input order does not prevent confident sort-first selection.
     assert_eq!(decision.route, SortFirstRoute::SortFirst);
@@ -155,15 +182,41 @@ fn routing_unsupported_key_count_or_invalid_lengths_stay_hash_first() {
 
     // When routing checks key count and shape.
     assert_hash_first(
-        SortFirstReducer::SumF64,
+        SortFirstReducer::MaxF64,
         &single_key,
         left.len(),
         SortFirstFallbackReason::UnsupportedKeyCount,
     );
     assert_hash_first(
-        SortFirstReducer::SumF64,
+        SortFirstReducer::MaxF64,
         &invalid_multi_key,
         left.len(),
         SortFirstFallbackReason::InvalidInput,
     );
+}
+
+#[test]
+fn routing_more_than_max_key_columns_stays_hash_first_before_sampling() {
+    // Given high-cardinality-like tuples across one more key than the project supports.
+    let n_rows = 5_000usize;
+    let keys_storage: Vec<Vec<i64>> = (0..=MAX_KEY_COLUMNS)
+        .map(|col| {
+            (0..n_rows as i64)
+                .map(|row| row.wrapping_mul(17) + col as i64)
+                .collect()
+        })
+        .collect();
+    let keys: Vec<&[i64]> = keys_storage.iter().map(Vec::as_slice).collect();
+
+    // When routing sees the over-cap key count.
+    let decision = choose_sort_first_route(SortFirstReducer::MaxF64, &keys, n_rows);
+
+    // Then it falls back before sampling can select sort-first.
+    assert_eq!(decision.route, SortFirstRoute::HashFirst);
+    assert_eq!(
+        decision.fallback_reason,
+        Some(SortFirstFallbackReason::UnsupportedKeyCount)
+    );
+    assert_eq!(decision.sample_rows, 0);
+    assert_eq!(decision.sample_unique_tuples, 0);
 }
