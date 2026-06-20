@@ -37,6 +37,7 @@ fn test_radix_groupby_sorted() {
 
     assert_eq!(result.n_keys, 2);
     assert_eq!(result.values.len(), 3);
+    assert!(result.perm.is_none());
 
     // Verify sorted order: (1,10), (2,20), (3,30)
     assert_eq!(key_at_out(&result, 0, 0), 1);
@@ -190,4 +191,56 @@ fn test_firstseen_large_output_returns_perm_without_materialized_reorder() {
     for (out_g, &src_g) in perm.iter().enumerate().take(n_groups) {
         assert_eq!(result.values[src_g], out_g as f64);
     }
+}
+
+#[test]
+fn sorted_large_output_returns_perm_without_materialized_reorder() {
+    let n_groups = 120_000usize;
+    let k1: Vec<i64> = (0..n_groups).map(|i| (n_groups - i) as i64).collect();
+    let k2: Vec<i64> = (0..n_groups).map(|i| i as i64).collect();
+    let values: Vec<f64> = k1.iter().map(|&key| key as f64).collect();
+
+    let key_slices: Vec<&[i64]> = vec![&k1, &k2];
+    let result = radix_groupby_sum_f64_sorted(&key_slices, &values).unwrap();
+
+    assert_eq!(result.n_keys, 2);
+    assert_eq!(result.values.len(), n_groups);
+    assert_eq!(result.keys_flat.len(), n_groups * 2);
+    let Some(perm) = result.perm.as_ref() else {
+        panic!("sorted large-output result should keep grouped buffers and set perm");
+    };
+    assert_eq!(perm.len(), n_groups);
+
+    for out_g in 0..n_groups {
+        let expected_k1 = (out_g + 1) as i64;
+        let expected_k2 = (n_groups - out_g - 1) as i64;
+        assert_eq!(key_at_out(&result, out_g, 0), expected_k1);
+        assert_eq!(key_at_out(&result, out_g, 1), expected_k2);
+        assert_eq!(value_at_out(&result, out_g), expected_k1 as f64);
+    }
+}
+
+#[test]
+fn profiled_sorted_large_output_defers_materialization() {
+    let n_groups = 120_000usize;
+    let mut result = GroupByMultiResult {
+        keys_flat: Vec::with_capacity(n_groups * 2),
+        n_keys: 2,
+        values: Vec::with_capacity(n_groups),
+        perm: None,
+    };
+
+    for idx in 0..n_groups {
+        let key = (n_groups - idx) as i64;
+        result.keys_flat.push(key);
+        result.keys_flat.push(idx as i64);
+        result.values.push(key as f64);
+    }
+
+    let profile = super::order::sort_groupby_result_profiled(&mut result);
+
+    assert_eq!(profile.sorted_materialization_s, 0.0);
+    assert!(result.perm.is_some());
+    assert_eq!(key_at_out(&result, 0, 0), 1);
+    assert_eq!(key_at_out(&result, n_groups - 1, 0), n_groups as i64);
 }

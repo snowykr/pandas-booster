@@ -117,6 +117,11 @@ pub(super) fn sort_groupby_result<V: Copy>(result: &mut GroupByMultiResult<V>) {
         }
     }
 
+    if n_groups.saturating_mul(n_keys) > SMALL_DIRECT_THRESHOLD_ELEMS {
+        result.perm = Some(perm);
+        return;
+    }
+
     let mut sorted_keys = Vec::with_capacity(result.keys_flat.len());
     let mut sorted_values = Vec::with_capacity(result.values.len());
 
@@ -171,6 +176,15 @@ pub(super) fn sort_groupby_result_profiled<V: Copy>(
             perm = radix_sort_perm_by_u64_for_indices_par(&col_keys, &perm);
             radix_sort_s += sort_start.elapsed().as_secs_f64();
         }
+    }
+
+    if n_groups.saturating_mul(n_keys) > SMALL_DIRECT_THRESHOLD_ELEMS {
+        result.perm = Some(perm);
+        return SortPhaseProfile {
+            sort_key_construction_s,
+            radix_sort_s,
+            sorted_materialization_s: 0.0,
+        };
     }
 
     let materialize_start = Instant::now();
