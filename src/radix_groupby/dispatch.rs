@@ -26,6 +26,9 @@ pub(super) struct SortedDispatchDiagnostics {
     pub sort_first: Option<SortFirstDiagnostics>,
 }
 
+type SortFirstDispatchFn<T, O> =
+    fn(&[&[i64]], &[T]) -> Result<(GroupByMultiResult<O>, SortFirstDiagnostics), String>;
+
 pub(super) fn radix_groupby_fixed<const N: usize, T, A, O>(
     key_slices: &[&[i64]],
     values: &[T],
@@ -256,10 +259,7 @@ pub(super) fn radix_groupby_sorted_with_diagnostics<T, A, O>(
     key_slices: &[&[i64]],
     values: &[T],
     reducer: SortFirstReducer,
-    sort_first_fn: fn(
-        &[&[i64]],
-        &[T],
-    ) -> Result<(GroupByMultiResult<O>, SortFirstDiagnostics), String>,
+    sort_first_fn: SortFirstDispatchFn<T, O>,
 ) -> Result<(GroupByMultiResult<O>, SortedDispatchDiagnostics), String>
 where
     T: Copy + Send + Sync,
