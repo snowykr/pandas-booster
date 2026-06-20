@@ -15,6 +15,10 @@ mod order;
 mod partition;
 mod profile;
 mod result;
+#[cfg(test)]
+mod sort_first;
+#[cfg(test)]
+mod sort_first_routing;
 
 #[cfg(test)]
 mod api_basic_tests;
@@ -26,6 +30,10 @@ mod dispatch_tests;
 mod order_tests;
 #[cfg(test)]
 mod partition_tests;
+#[cfg(test)]
+mod sort_first_routing_tests;
+#[cfg(test)]
+mod sort_first_tests;
 #[cfg(test)]
 mod test_support;
 
