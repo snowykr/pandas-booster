@@ -35,6 +35,19 @@ from profile_json_payload import (
 from reporting import STATS_EVIDENCE_PRESETS
 from runner import benchmark_single, resolve_sorts, resolve_stats_evidence_aggs
 
+REQUIRED_MULTI_KEY_SORTED_PHASES = (
+    "hash_build_s",
+    "partition_scatter_s",
+    "partition_aggregation_s",
+    "flatten_s",
+    "sort_key_construction_s",
+    "radix_sort_s",
+    "sorted_materialization_s",
+    "conversion_s",
+    "pandas_index_construction_s",
+)
+MULTI_KEY_SORTED_HIGH_PRESET = "high_cardinality_3key"
+
 
 def stats_evidence_workload_label(preset_name: str) -> str:
     if preset_name == STATS_EVIDENCE_PRESETS["standard"]:
@@ -42,6 +55,142 @@ def stats_evidence_workload_label(preset_name: str) -> str:
     if preset_name == STATS_EVIDENCE_PRESETS["high"]:
         return "high"
     return preset_name
+
+
+def _profile_evidence_aggs(
+    selected_aggs: list[str] | None,
+    *,
+    cardinality: str,
+    sort_mode: str,
+) -> list[str]:
+    evidence_aggs = resolve_stats_evidence_aggs(selected_aggs)
+    selected = selected_aggs if selected_aggs is not None else []
+    should_profile_multi_key_max = (
+        "max" in selected and cardinality in {"all", "high"} and sort_mode in {"all", "sorted"}
+    )
+    if should_profile_multi_key_max and "max" not in evidence_aggs:
+        evidence_aggs.append("max")
+    return evidence_aggs
+
+
+def _stats_evidence_preset_name(preset_name: str, agg: str, sort: bool) -> str:
+    if preset_name == STATS_EVIDENCE_PRESETS["high"] and agg == "max" and sort:
+        return MULTI_KEY_SORTED_HIGH_PRESET
+    return preset_name
+
+
+def _profile_float_phase_samples() -> dict[str, list[float]]:
+    return {phase_name: [] for phase_name in REQUIRED_MULTI_KEY_SORTED_PHASES} | {
+        "rust_total_s": [],
+        "python_total_s": [],
+        "total_pipeline_s": [],
+    }
+
+
+def _measure_booster_multi_key_sorted_breakdown(
+    df: pd.DataFrame,
+    key_cols: list[str],
+    agg: str,
+    sort: bool,
+    n_samples: int,
+) -> dict[str, Any] | None:
+    import pandas_booster._abi_compat as abi_compat
+    import pandas_booster._rust as rust
+    from pandas_booster import _groupby_accel as groupby_accel
+
+    if agg != "max" or not sort:
+        return None
+
+    val_col = cast(pd.Series, df["value"])
+    key_series = [cast(pd.Series, df[col]) for col in key_cols]
+    key_dtypes = [groupby_accel.capture_key_numpy_dtype(key_col) for key_col in key_series]
+    value_dtype = groupby_accel.capture_value_numpy_dtype(val_col)
+    is_val_int = pd.api.types.is_integer_dtype(val_col)
+    dispatch = resolve_booster_benchmark_dispatch(df, key_cols, "value", agg, sort)
+    rust_func = dispatch["rust_func"]
+    if rust_func is None or bool(dispatch["needs_python_sort"]):
+        return None
+
+    profile_func_name = f"profile_{rust_func.__name__}"
+    profile_func = getattr(rust, profile_func_name, None)
+    if profile_func is None:
+        return None
+
+    phase_samples = _profile_float_phase_samples()
+    partial_group_total = 0
+    final_group_count = 0
+    partial_to_final_ratio = 0.0
+
+    for _ in range(n_samples):
+        total_start = time.perf_counter()
+        keys = [
+            groupby_accel.to_i64_contiguous(key_col.to_numpy(copy=False))
+            for key_col in key_series
+        ]
+        if is_val_int:
+            values = np.ascontiguousarray(val_col.to_numpy(dtype=np.int64))
+        else:
+            values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
+
+        result_keys, result_values, profile = profile_func(keys, values)
+        conversion_start = time.perf_counter()
+        result_values_arr = abi_compat.normalize_result_values(
+            result_values,
+            agg=agg,
+            is_val_int=is_val_int,
+            context="benchmark",
+        )
+        keys_cols = abi_compat.normalize_multi_keys_cols(
+            result_keys,
+            n_groups=result_values_arr.shape[0],
+            n_keys=len(key_cols),
+            context="benchmark",
+        )
+        conversion_s = float(profile["conversion_s"]) + (
+            time.perf_counter() - conversion_start
+        )
+
+        index_start = time.perf_counter()
+        _ = groupby_accel.build_series_from_multi_result(
+            keys_cols,
+            result_values_arr,
+            by_cols=key_cols,
+            key_dtypes=key_dtypes,
+            name=val_col.name,
+            value_dtype=value_dtype,
+            agg=agg,
+            is_val_int=is_val_int,
+            sort=sort,
+            needs_python_sort=False,
+        )
+        pandas_index_construction_s = time.perf_counter() - index_start
+
+        for phase_name in REQUIRED_MULTI_KEY_SORTED_PHASES:
+            if phase_name == "conversion_s":
+                phase_samples[phase_name].append(conversion_s)
+            elif phase_name == "pandas_index_construction_s":
+                phase_samples[phase_name].append(pandas_index_construction_s)
+            else:
+                phase_samples[phase_name].append(float(profile[phase_name]))
+        phase_samples["rust_total_s"].append(float(profile["rust_total_s"]))
+        phase_samples["python_total_s"].append(conversion_s + pandas_index_construction_s)
+        phase_samples["total_pipeline_s"].append(time.perf_counter() - total_start)
+        partial_group_total = int(profile["partial_group_total"])
+        final_group_count = int(profile["final_group_count"])
+        partial_to_final_ratio = float(profile["partial_to_final_ratio"])
+
+    stats = {name: compute_stats(samples) for name, samples in phase_samples.items()}
+    return {
+        "profile_kind": "multi_key_sorted",
+        "execution": f"booster->rust.{profile_func_name}",
+        "phases": {name: stats[name] for name in REQUIRED_MULTI_KEY_SORTED_PHASES},
+        "rust_total_s": stats["rust_total_s"].mean,
+        "python_total_s": stats["python_total_s"].mean,
+        "total_pipeline_s": stats["total_pipeline_s"].mean,
+        "partial_group_total": partial_group_total,
+        "final_group_count": final_group_count,
+        "partial_to_final_ratio": partial_to_final_ratio,
+    }
 
 
 def measure_booster_single_key_breakdown(
@@ -60,7 +209,7 @@ def measure_booster_single_key_breakdown(
     df = generate_multi_key_dataset(**config)
     key_cols = [col for col, _ in config["key_configs"]]
     if len(key_cols) != 1:
-        raise ValueError("Breakdown evidence only supports single-key presets")
+        return _measure_booster_multi_key_sorted_breakdown(df, key_cols, agg, sort, n_samples)
 
     key_col = cast(pd.Series, df[key_cols[0]])
     val_col = cast(pd.Series, df["value"])
@@ -178,7 +327,11 @@ def collect_stats_evidence(
     measure_booster_single_key_breakdown_func=measure_booster_single_key_breakdown,
 ) -> list[dict[str, Any]]:
     evidence: list[dict[str, Any]] = []
-    evidence_aggs = resolve_stats_evidence_aggs(selected_aggs)
+    evidence_aggs = _profile_evidence_aggs(
+        selected_aggs,
+        cardinality=cardinality,
+        sort_mode=sort_mode,
+    )
     if not evidence_aggs:
         return evidence
 
@@ -196,8 +349,11 @@ def collect_stats_evidence(
         workload = stats_evidence_workload_label(preset_name)
         for agg in evidence_aggs:
             for sort in sorts:
+                benchmark_preset_name = _stats_evidence_preset_name(preset_name, agg, sort)
+                config = PRESETS[benchmark_preset_name]
+                key_cols = [col for col, _ in config["key_configs"]]
                 result = benchmark_single_func(
-                    preset_name,
+                    benchmark_preset_name,
                     agg=agg,
                     sort=sort,
                     n_samples=n_samples,
@@ -212,14 +368,14 @@ def collect_stats_evidence(
                     execution["polars"] = f"polars.group_by.agg({agg})"
                 evidence.append(
                     {
-                        "preset": preset_name,
+                        "preset": benchmark_preset_name,
                         "workload": workload,
                         "agg": agg,
                         "sort": sort,
                         "result": result,
                         "execution": execution,
                         "breakdown": measure_booster_single_key_breakdown_func(
-                            preset_name,
+                            benchmark_preset_name,
                             agg,
                             sort,
                             n_samples,

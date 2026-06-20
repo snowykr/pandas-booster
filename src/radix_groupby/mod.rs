@@ -13,6 +13,7 @@ mod firstseen_u64;
 mod keys;
 mod order;
 mod partition;
+mod profile;
 mod result;
 
 #[cfg(test)]
@@ -31,4 +32,4 @@ mod test_support;
 pub use api::*;
 pub use api_sorted::*;
 pub(crate) use partition::{stable_scatter_by_partition, SMALL_DIRECT_THRESHOLD_ELEMS};
-pub use result::GroupByMultiResult;
+pub use result::{GroupByMultiResult, MultiKeySortedPhaseProfile, ProfiledGroupByMultiResult};

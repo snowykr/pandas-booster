@@ -13,6 +13,9 @@ SingleProfileReturnF64 = tuple[NDArray[np.int64], NDArray[np.float64], SinglePro
 MultiKeys = list[NDArray[np.int64]]
 MultiReturnF64 = tuple[MultiKeys, NDArray[np.float64]]
 MultiReturnI64 = tuple[MultiKeys, NDArray[np.int64]]
+MultiProfile = dict[str, float | int | str]
+MultiProfileReturnF64 = tuple[MultiKeys, NDArray[np.float64], MultiProfile]
+MultiProfileReturnI64 = tuple[MultiKeys, NDArray[np.int64], MultiProfile]
 
 def get_fallback_threshold() -> int: ...
 def get_thread_count() -> int: ...
@@ -397,6 +400,10 @@ def groupby_multi_max_f64_sorted(
     key_arrays: Sequence[NDArray[np.int64]],
     values: NDArray[np.float64],
 ) -> MultiReturnF64: ...
+def profile_groupby_multi_max_f64_sorted(
+    key_arrays: Sequence[NDArray[np.int64]],
+    values: NDArray[np.float64],
+) -> MultiProfileReturnF64: ...
 def groupby_multi_count_f64_sorted(
     key_arrays: Sequence[NDArray[np.int64]],
     values: NDArray[np.float64],
@@ -541,6 +548,10 @@ def groupby_multi_max_i64_sorted(
     key_arrays: Sequence[NDArray[np.int64]],
     values: NDArray[np.int64],
 ) -> MultiReturnI64: ...
+def profile_groupby_multi_max_i64_sorted(
+    key_arrays: Sequence[NDArray[np.int64]],
+    values: NDArray[np.int64],
+) -> MultiProfileReturnI64: ...
 def groupby_multi_count_i64_sorted(
     key_arrays: Sequence[NDArray[np.int64]],
     values: NDArray[np.int64],

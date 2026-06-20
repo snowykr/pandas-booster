@@ -199,6 +199,9 @@ def _expected_profile_exports() -> set[str]:
         f"profile_groupby_{agg}_f64{suffix}"
         for agg in ("var", "std")
         for suffix in ("_sorted", "_firstseen_u32", "_firstseen_u64")
+    } | {
+        "profile_groupby_multi_max_f64_sorted",
+        "profile_groupby_multi_max_i64_sorted",
     }
 
 

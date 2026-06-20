@@ -66,6 +66,38 @@ def summarize_profile_cases(cases: list[dict[str, Any]]) -> dict[str, Any] | Non
     }
 
 
+def _profile_kind(case: dict[str, Any]) -> str:
+    breakdown = case["breakdown"]
+    if breakdown is None:
+        return "unprofiled"
+    return str(breakdown.get("profile_kind", "single_key"))
+
+
+def _metadata_selected_aggs(
+    evidence: list[dict[str, Any]],
+    selected_aggs: list[str] | None,
+) -> list[str]:
+    profiled_aggs = {
+        item["agg"] for item in evidence if item["breakdown"] is not None
+    }
+    stats_aggs = set(resolve_stats_evidence_aggs(selected_aggs))
+    eligible_aggs = stats_aggs | profiled_aggs
+
+    if selected_aggs is None:
+        ordered_aggs = list(resolve_stats_evidence_aggs(None))
+        for item in evidence:
+            agg = item["agg"]
+            if item["breakdown"] is not None and agg not in ordered_aggs:
+                ordered_aggs.append(agg)
+        return ordered_aggs
+
+    ordered_selected_aggs: list[str] = []
+    for agg in selected_aggs:
+        if agg in eligible_aggs and agg not in ordered_selected_aggs:
+            ordered_selected_aggs.append(agg)
+    return ordered_selected_aggs
+
+
 def build_profile_json_payload(
     evidence: list[dict[str, Any]],
     *,
@@ -79,14 +111,18 @@ def build_profile_json_payload(
             "cardinality": cardinality,
             "sort_mode": sort_mode,
             "samples": n_samples,
-            "selected_aggs": resolve_stats_evidence_aggs(selected_aggs),
+            "selected_aggs": _metadata_selected_aggs(evidence, selected_aggs),
         },
         "cases": [],
     }
 
     grouped: dict[tuple[str, bool], list[dict[str, Any]]] = {}
+    multi_key_sorted: dict[str, list[dict[str, Any]]] = {}
     for item in evidence:
-        grouped.setdefault((item["workload"], item["sort"]), []).append(item)
+        if _profile_kind(item) == "multi_key_sorted":
+            multi_key_sorted.setdefault(item["workload"], []).append(item)
+        else:
+            grouped.setdefault((item["workload"], item["sort"]), []).append(item)
         breakdown = item["breakdown"]
         payload["cases"].append(
             {
@@ -117,6 +153,7 @@ def build_profile_json_payload(
                 "breakdown": None
                 if breakdown is None
                 else {
+                    "profile_kind": breakdown.get("profile_kind", "single_key"),
                     "execution": breakdown["execution"],
                     "phases": serialize_phase_stats(breakdown["phases"]),
                     "phase_means": stats_mean_map(breakdown["phases"]),
@@ -139,6 +176,11 @@ def build_profile_json_payload(
             summary = summarize_profile_cases(cases)
             if summary is not None:
                 payload[f"single_key_{suffix}_{workload}"] = summary
+
+    for workload, cases in multi_key_sorted.items():
+        summary = summarize_profile_cases(cases)
+        if summary is not None:
+            payload[f"multi_key_sorted_{workload}"] = summary
 
     if "single_key_unsorted_high" in payload:
         payload["single_key_unsorted"] = payload["single_key_unsorted_high"]

@@ -8,6 +8,13 @@ use super::result::GroupByMultiResult;
 
 const RADIX_SORT_THRESHOLD: usize = 2048;
 
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct SortPhaseProfile {
+    pub sort_key_construction_s: f64,
+    pub radix_sort_s: f64,
+    pub sorted_materialization_s: f64,
+}
+
 pub(super) fn reorder_result_by_first_seen_u32<V: Copy>(
     result: &mut GroupByMultiResult<V>,
     first_seen: &[u32],
@@ -121,4 +128,67 @@ pub(super) fn sort_groupby_result<V: Copy>(result: &mut GroupByMultiResult<V>) {
     result.keys_flat = sorted_keys;
     result.values = sorted_values;
     result.perm = None;
+}
+
+pub(super) fn sort_groupby_result_profiled<V: Copy>(
+    result: &mut GroupByMultiResult<V>,
+) -> SortPhaseProfile {
+    use std::time::Instant;
+
+    if result.values.is_empty() {
+        return SortPhaseProfile::default();
+    }
+
+    let n_keys = result.n_keys;
+    let n_groups = result.values.len();
+
+    debug_assert_eq!(result.keys_flat.len(), n_groups * n_keys);
+
+    let keys_flat = &result.keys_flat;
+    let mut perm: Vec<usize> = (0..n_groups).collect();
+    let mut sort_key_construction_s = 0.0;
+    let mut radix_sort_s = 0.0;
+
+    if n_groups < RADIX_SORT_THRESHOLD {
+        let sort_start = Instant::now();
+        perm.sort_unstable_by(|&i, &j| {
+            let k_i = &keys_flat[i * n_keys..(i + 1) * n_keys];
+            let k_j = &keys_flat[j * n_keys..(j + 1) * n_keys];
+            k_i.cmp(k_j).then(i.cmp(&j))
+        });
+        radix_sort_s = sort_start.elapsed().as_secs_f64();
+    } else {
+        for col in (0..n_keys).rev() {
+            let key_start = Instant::now();
+            let mut col_keys = Vec::with_capacity(n_groups);
+            for group in 0..n_groups {
+                let key = keys_flat[group * n_keys + col];
+                col_keys.push(i64_to_sortable_u64(key));
+            }
+            sort_key_construction_s += key_start.elapsed().as_secs_f64();
+
+            let sort_start = Instant::now();
+            perm = radix_sort_perm_by_u64_for_indices_par(&col_keys, &perm);
+            radix_sort_s += sort_start.elapsed().as_secs_f64();
+        }
+    }
+
+    let materialize_start = Instant::now();
+    let mut sorted_keys = Vec::with_capacity(result.keys_flat.len());
+    let mut sorted_values = Vec::with_capacity(result.values.len());
+
+    for &idx in &perm {
+        sorted_keys.extend_from_slice(&keys_flat[idx * n_keys..(idx + 1) * n_keys]);
+        sorted_values.push(result.values[idx]);
+    }
+
+    result.keys_flat = sorted_keys;
+    result.values = sorted_values;
+    result.perm = None;
+
+    SortPhaseProfile {
+        sort_key_construction_s,
+        radix_sort_s,
+        sorted_materialization_s: materialize_start.elapsed().as_secs_f64(),
+    }
 }

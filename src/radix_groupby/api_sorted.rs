@@ -5,7 +5,8 @@ use crate::aggregation::{
 };
 
 use super::dispatch::radix_groupby_sorted;
-use super::result::GroupByMultiResult;
+use super::profile::profile_radix_groupby_sorted;
+use super::result::{GroupByMultiResult, ProfiledGroupByMultiResult};
 
 pub fn radix_groupby_sum_f64_sorted(
     key_slices: &[&[i64]],
@@ -63,6 +64,13 @@ pub fn radix_groupby_max_f64_sorted(
     radix_groupby_sorted::<f64, MaxAggF64, f64>(key_slices, values)
 }
 
+pub fn profile_radix_groupby_max_f64_sorted(
+    key_slices: &[&[i64]],
+    values: &[f64],
+) -> Result<ProfiledGroupByMultiResult<f64>, String> {
+    profile_radix_groupby_sorted::<f64, MaxAggF64, f64>(key_slices, values)
+}
+
 pub fn radix_groupby_sum_i64_sorted(
     key_slices: &[&[i64]],
     values: &[i64],
@@ -117,6 +125,13 @@ pub fn radix_groupby_max_i64_sorted(
     values: &[i64],
 ) -> Result<GroupByMultiResult<i64>, String> {
     radix_groupby_sorted::<i64, MaxAggI64, i64>(key_slices, values)
+}
+
+pub fn profile_radix_groupby_max_i64_sorted(
+    key_slices: &[&[i64]],
+    values: &[i64],
+) -> Result<ProfiledGroupByMultiResult<i64>, String> {
+    profile_radix_groupby_sorted::<i64, MaxAggI64, i64>(key_slices, values)
 }
 
 pub fn radix_groupby_count_f64_sorted(
