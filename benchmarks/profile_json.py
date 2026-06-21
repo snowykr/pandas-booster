@@ -15,6 +15,9 @@ from dispatch import (
     resolve_booster_benchmark_dispatch,
 )
 from profile_json_payload import (
+    PHASE_NAMES,
+)
+from profile_json_payload import (
     build_profile_json_payload as build_profile_json_payload,
 )
 from profile_json_payload import (
@@ -53,7 +56,6 @@ def measure_booster_single_key_breakdown(
     ignore_force_pandas_sort: bool = False,
 ) -> dict[str, Any] | None:
     import pandas_booster._abi_compat as abi_compat
-    import pandas_booster._rust as rust
     from pandas_booster import _groupby_accel as groupby_accel
 
     config = PRESETS[preset_name]
@@ -64,9 +66,6 @@ def measure_booster_single_key_breakdown(
 
     key_col = cast(pd.Series, df[key_cols[0]])
     val_col = cast(pd.Series, df["value"])
-    key_dtype = groupby_accel.capture_key_numpy_dtype(key_col)
-    value_dtype = groupby_accel.capture_value_numpy_dtype(val_col)
-    is_val_int = pd.api.types.is_integer_dtype(val_col)
     dispatch = resolve_booster_benchmark_dispatch(
         df,
         key_cols,
@@ -79,27 +78,21 @@ def measure_booster_single_key_breakdown(
     if rust_func is None:
         return None
 
+    key_dtype = groupby_accel.capture_key_numpy_dtype(key_col)
+    value_dtype = groupby_accel.capture_value_numpy_dtype(val_col)
+    is_val_int = pd.api.types.is_integer_dtype(val_col)
     needs_python_sort = bool(dispatch["needs_python_sort"])
     if needs_python_sort and sort:
         return None
+
+    import pandas_booster._rust as rust
 
     profile_func_name = f"profile_{rust_func.__name__}"
     profile_func = getattr(rust, profile_func_name, None)
     if profile_func is None:
         return None
 
-    phase_samples: dict[str, list[float]] = {
-        "prepare_inputs_s": [],
-        "local_build_s": [],
-        "merge_s": [],
-        "reorder_s": [],
-        "materialize_s": [],
-        "python_normalize_s": [],
-        "python_series_build_s": [],
-        "rust_total_s": [],
-        "python_total_s": [],
-        "total_pipeline_s": [],
-    }
+    phase_samples: dict[str, list[float]] = {name: [] for name in PHASE_NAMES}
     partial_group_total = 0
     final_group_count = 0
     partial_to_final_ratio = 0.0
@@ -116,11 +109,20 @@ def measure_booster_single_key_breakdown(
         phase_samples["prepare_inputs_s"].append(time.perf_counter() - prepare_start)
 
         result_keys, result_values, profile = profile_func(keys, values)
-        phase_samples["local_build_s"].append(float(profile["local_build_s"]))
-        phase_samples["merge_s"].append(float(profile["merge_s"]))
-        phase_samples["reorder_s"].append(float(profile["reorder_s"]))
-        phase_samples["materialize_s"].append(float(profile["materialize_s"]))
-        phase_samples["rust_total_s"].append(float(profile["rust_total_s"]))
+        for phase_name in (
+            "unique_build_s",
+            "key_sort_s",
+            "count_s",
+            "buffer_setup_s",
+            "scatter_s",
+            "median_select_s",
+            "local_build_s",
+            "merge_s",
+            "reorder_s",
+            "materialize_s",
+            "rust_total_s",
+        ):
+            phase_samples[phase_name].append(float(profile.get(phase_name, 0.0)))
         partial_group_total = int(profile["partial_group_total"])
         final_group_count = int(profile["final_group_count"])
         partial_to_final_ratio = float(profile["partial_to_final_ratio"])

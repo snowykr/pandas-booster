@@ -209,7 +209,7 @@ To ensure correctness and performance, the following constraints apply:
 
 The library is designed for large datasets where multi-core parallelism can be fully utilized.
 
-- `sort=True`: single-key groupby uses Rayon's parallel map-reduce; multi-key groupby uses a radix-partitioning algorithm that eliminates merge overhead.
+- `sort=True`: single-key mergeable reductions use Rayon's parallel map-reduce; certified sorted single-key `median` workloads use a direct median path with dense-key offset indexing when the key range is compact, or a sparse remap fallback for smaller non-dense inputs. Larger sparse single-key `median` workloads keep the existing deterministic route when it is faster. Multi-key groupby uses a radix-partitioning algorithm that eliminates merge overhead.
 - `sort=False`: results preserve Pandas appearance order (first-seen group order). Internally, this path tracks the first-seen row index per group and reorders groups with an integer radix sort to avoid `O(G log G)` comparison sorting.
 
 **Benchmark methodology:**
@@ -221,7 +221,7 @@ The library is designed for large datasets where multi-core parallelism can be f
 - **Warm:** Average of the requested fresh process executions. Each process runs Cold once and a Warmup once (both discarded), then measures the next run (steady state).
 - **Correctness:** Booster and Polars outputs are validated against a Pandas baseline. For `sort=False`, benchmarks validate Pandas-compatible appearance order (first-seen group order).
 - **Polars sort handling:** Polars does not have a `sort` parameter in `group_by`. For fair comparison, I define `sort=True` as "groupby+agg followed by sorting the result by keys" (cost included in timing), and `sort=False` as "groupby+agg with Pandas-compatible appearance order (first-seen group order)". This ensures all three engines (Pandas, Polars, Booster) are measured under identical conditions.
-- **Profile evidence:** `--profile-json` writes internal single-key `std`/`var` phase timings for the Rust path (`local_build`, `merge`, `reorder`, `materialize`, and Python post-processing) so benchmark reports can separate kernel time from conversion and Series construction overhead.
+- **Profile evidence:** `--profile-json` writes internal single-key `std`/`var` phase timings by default, and also writes selected median phase timings when `--agg median` is requested. These Rust-path diagnostics include legacy mergeable phases (`local_build`, `merge`, `reorder`, `materialize`), direct median phases when that route is selected (`unique_build`, `key_sort`, `count`, `buffer_setup`, `scatter`, `median_select`), and Python post-processing so benchmark reports can separate kernel time from conversion and Series construction overhead.
 - **Speedup baseline:** All speedup values (`x`) use **Pandas** as the baseline (1.0x) within each sort mode.
 - **Optional Polars:** Polars is included in the benchmarks for comparison if installed. If not installed, the benchmark suite proceeds with Pandas vs Booster only.
 
@@ -268,8 +268,11 @@ python benchmarks/benchmark.py --samples 20 --output benchmarks/reports
 python benchmarks/benchmark.py --agg std --agg var --samples 20 --output benchmarks/reports
 python benchmarks/benchmark.py --agg median --samples 20 --output benchmarks/reports
 
-# Save single-key std/var phase-profile evidence as JSON
+# Save default single-key std/var phase-profile evidence as JSON
 python benchmarks/benchmark.py --agg std --agg var --samples 20 --profile-json profile.json
+
+# Save selected median phase-profile evidence as JSON
+python benchmarks/benchmark.py --agg median --samples 1 --profile-json profile-median.json
 
 # Include threshold diagnostics as well
 python benchmarks/benchmark.py --cardinality all --diagnostic threshold --sort-mode unsorted --samples 20 --output benchmarks/reports
@@ -426,21 +429,27 @@ python benchmarks/generate_docs.py
 # Save internal single-key std/var profile evidence to JSON
 python benchmarks/benchmark.py --agg std --agg var --profile-json profile.json
 
+# Save selected median profile evidence to JSON while iterating locally
+python benchmarks/benchmark.py --agg median --samples 1 --profile-json profile-median.json
+
 # Adjust sample count (applies to both cold and warm; default: 5)
 python benchmarks/benchmark.py --samples 20
 ```
 
 Note: `--agg` is repeatable and filters the benchmark to only the selected aggregation functions.
 If omitted, benchmark reports default to `sum`. Single-key evidence sections are included in
-Markdown reports only when selected `std`/`var` aggregations are emitted.
+Markdown reports when selected profile-backed aggregations are emitted (`std`/`var` by default,
+or explicit `median` selection).
 
-Note: `median` is fully supported by `--agg` selection for benchmark runs and correctness checks.
-The dedicated `--profile-json` diagnostics remain focused on the single-key `std`/`var` evidence lane.
+Note: `median` is fully supported by `--agg` selection for benchmark runs, correctness checks,
+and selected single-key phase-profile diagnostics through `--profile-json`.
 
 Note: `--profile-json` is an internal benchmark diagnostics output. By default it includes
-single-key `std`/`var` evidence cases, plus phase breakdowns when a
-Rust-only Booster profile hook is available. Cases that fall back to pandas or require Python
-sorting remain in the JSON with `breakdown: null`.
+single-key `std`/`var` evidence cases. Explicit `--agg median --profile-json` selection includes
+the selected median evidence lane when a Rust-only Booster profile hook is available. Cases that
+fall back to pandas or require Python sorting remain in the JSON with `breakdown: null`. Phase
+maps use one stable schema across legacy mergeable `std`/`var` lanes and direct median lanes,
+including `buffer_setup_s` for median group-buffer setup.
 
 Note: `--cardinality` is for workload classes (`standard`, `high`, `all`), while
 `--diagnostic` is for internal boundary checks (`none`, `threshold`).

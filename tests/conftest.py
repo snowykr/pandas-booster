@@ -141,6 +141,12 @@ def _make_breakdown(
         "execution": execution,
         "phases": {
             "prepare_inputs_s": stats,
+            "unique_build_s": stats,
+            "key_sort_s": stats,
+            "count_s": stats,
+            "buffer_setup_s": stats,
+            "scatter_s": stats,
+            "median_select_s": stats,
             "local_build_s": stats,
             "merge_s": stats,
             "reorder_s": stats,

@@ -124,7 +124,8 @@ Environment:
         choices=SUPPORTED_AGGS,
         help=(
             "Aggregation function to benchmark. Repeatable. "
-            "Defaults to core=sum for benchmark reports; profile JSON defaults to std/var evidence."
+            "Defaults to core=sum for benchmark reports; profile JSON defaults to std/var "
+            "evidence and includes median evidence when --agg median is selected."
         ),
     )
     parser.add_argument(
@@ -140,7 +141,10 @@ Environment:
     parser.add_argument(
         "--profile-json",
         type=str,
-        help="Internal-use profile JSON output path for single-key std/var evidence",
+        help=(
+            "Internal-use profile JSON output path for single-key std/var evidence "
+            "and selected median evidence"
+        ),
     )
     parser.add_argument(
         "--worker",

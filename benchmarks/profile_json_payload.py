@@ -9,17 +9,45 @@ from typing import Any
 from bench_utils import BenchmarkStats
 from runner import resolve_stats_evidence_aggs
 
+PHASE_NAMES: tuple[str, ...] = (
+    "prepare_inputs_s",
+    "unique_build_s",
+    "key_sort_s",
+    "count_s",
+    "buffer_setup_s",
+    "scatter_s",
+    "median_select_s",
+    "local_build_s",
+    "merge_s",
+    "reorder_s",
+    "materialize_s",
+    "python_normalize_s",
+    "python_series_build_s",
+    "rust_total_s",
+    "python_total_s",
+    "total_pipeline_s",
+)
+
+
+def zero_phase_stats() -> BenchmarkStats:
+    return BenchmarkStats(0.0, 0.0, 0.0, 0.0, [])
+
+
+def normalize_phase_stats(phases: dict[str, BenchmarkStats]) -> dict[str, BenchmarkStats]:
+    zero = zero_phase_stats()
+    return {name: phases.get(name, zero) for name in PHASE_NAMES}
+
 
 def serialize_stats(stats: BenchmarkStats) -> dict[str, Any]:
     return stats.to_dict()
 
 
 def serialize_phase_stats(phases: dict[str, BenchmarkStats]) -> dict[str, dict[str, Any]]:
-    return {name: serialize_stats(stats) for name, stats in phases.items()}
+    return {name: serialize_stats(stats) for name, stats in normalize_phase_stats(phases).items()}
 
 
 def stats_mean_map(phases: dict[str, BenchmarkStats]) -> dict[str, float]:
-    return {name: stats.mean for name, stats in phases.items()}
+    return {name: stats.mean for name, stats in normalize_phase_stats(phases).items()}
 
 
 def summarize_profile_cases(cases: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -27,11 +55,13 @@ def summarize_profile_cases(cases: list[dict[str, Any]]) -> dict[str, Any] | Non
     if not profiled_cases:
         return None
 
-    phase_names = list(profiled_cases[0]["breakdown"]["phases"].keys())
+    normalized_phase_maps = [
+        normalize_phase_stats(case["breakdown"]["phases"]) for case in profiled_cases
+    ]
     phase_means = {
-        phase_name: sum(case["breakdown"]["phases"][phase_name].mean for case in profiled_cases)
-        / len(profiled_cases)
-        for phase_name in phase_names
+        phase_name: sum(phases[phase_name].mean for phases in normalized_phase_maps)
+        / len(normalized_phase_maps)
+        for phase_name in PHASE_NAMES
     }
     first_breakdown = profiled_cases[0]["breakdown"]
 
@@ -66,6 +96,22 @@ def summarize_profile_cases(cases: list[dict[str, Any]]) -> dict[str, Any] | Non
     }
 
 
+def _requires_selected_median_sorted_breakdown(
+    item: dict[str, Any],
+    *,
+    selected_aggs: list[str] | None,
+) -> bool:
+    booster_execution = item["execution"]["booster"]
+    return (
+        selected_aggs is not None
+        and "median" in resolve_stats_evidence_aggs(selected_aggs)
+        and item["agg"] == "median"
+        and item["sort"] is True
+        and booster_execution == "booster->rust.groupby_median_f64_sorted"
+        and item["breakdown"] is None
+    )
+
+
 def build_profile_json_payload(
     evidence: list[dict[str, Any]],
     *,
@@ -86,6 +132,12 @@ def build_profile_json_payload(
 
     grouped: dict[tuple[str, bool], list[dict[str, Any]]] = {}
     for item in evidence:
+        if _requires_selected_median_sorted_breakdown(item, selected_aggs=selected_aggs):
+            raise ValueError(
+                "selected median sorted profile breakdown is unavailable; "
+                "profile JSON would omit required median evidence"
+            )
+
         grouped.setdefault((item["workload"], item["sort"]), []).append(item)
         breakdown = item["breakdown"]
         payload["cases"].append(
