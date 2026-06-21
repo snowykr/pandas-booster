@@ -59,9 +59,23 @@ pub(crate) fn build_single_profile_dict<'py>(
     } else {
         partial_group_total as f64 / final_group_count as f64
     };
-    let rust_total_s = profile.local_build_s + profile.merge_s + profile.reorder_s + materialize_s;
+    let legacy_phase_sum =
+        profile.local_build_s + profile.merge_s + profile.reorder_s + profile.materialize_s;
+    let direct_phase_sum = profile.unique_build_s
+        + profile.key_sort_s
+        + profile.count_s
+        + profile.buffer_setup_s
+        + profile.scatter_s
+        + profile.median_select_s;
+    let rust_total_s = legacy_phase_sum + direct_phase_sum + materialize_conversion_s;
 
     profile_dict.set_item("local_build_s", profile.local_build_s)?;
+    profile_dict.set_item("unique_build_s", profile.unique_build_s)?;
+    profile_dict.set_item("key_sort_s", profile.key_sort_s)?;
+    profile_dict.set_item("count_s", profile.count_s)?;
+    profile_dict.set_item("buffer_setup_s", profile.buffer_setup_s)?;
+    profile_dict.set_item("scatter_s", profile.scatter_s)?;
+    profile_dict.set_item("median_select_s", profile.median_select_s)?;
     profile_dict.set_item("merge_s", profile.merge_s)?;
     profile_dict.set_item("reorder_s", profile.reorder_s)?;
     profile_dict.set_item("materialize_s", materialize_s)?;

@@ -13,9 +13,11 @@ use super::legacy::{
 };
 use super::order::reorder_single_result_by_key;
 use super::result::{GroupByResultF64, GroupByResultI64};
+use super::routing::should_use_direct_sorted_median_engine;
 use super::scalar_firstseen::{
     parallel_groupby_firstseen_legacy_low_u32, parallel_groupby_firstseen_legacy_low_u64,
 };
+use super::sorted_median::groupby_median_i64_sorted_direct;
 
 pub fn parallel_groupby_sum_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultI64> {
     parallel_groupby::<i64, SumAggI64, i64>(keys, values)
@@ -103,6 +105,10 @@ pub fn parallel_groupby_median_i64_sorted(
     keys: &[i64],
     values: &[i64],
 ) -> PyResult<GroupByResultF64> {
+    if should_use_direct_sorted_median_engine(keys) {
+        return groupby_median_i64_sorted_direct(keys, values);
+    }
+
     let mut result = parallel_groupby_median_i64(keys, values)?;
     reorder_single_result_by_key(&mut result);
     Ok(result)

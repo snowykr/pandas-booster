@@ -12,6 +12,7 @@ from ._helpers import (
     _accessor_groupby_result,
     _patch_multi_std_var_kernel,
     _patch_pandas_series_groupby_agg_to_raise,
+    _patch_single_std_var_firstseen_only_kernel,
     _patch_single_std_var_kernel,
     _proxy_groupby_result,
 )
@@ -88,6 +89,44 @@ class TestMedianRollbackContracts:
         accessor_result = _accessor_groupby_result(df, "key", "val", "median")
         proxy_result = _proxy_groupby_result(df, "key", "val", "median")
 
+        pd.testing.assert_series_equal(accessor_result, expected, check_exact=False, rtol=1e-12)
+        pd.testing.assert_series_equal(proxy_result, expected, check_exact=False, rtol=1e-12)
+
+    def test_float_rollback_scope_does_not_broaden_to_sort_false_int_median(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        import pandas_booster._rust as rust
+
+        monkeypatch.setenv("PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY", "1")
+
+        df = pd.DataFrame(
+            {
+                "key": [3, 1, 3, 2, 1, 2],
+                "val": np.array([9, 1, 3, 10, 5, 14], dtype=np.int64),
+            }
+        )
+        expected = df.groupby("key", sort=False)["val"].median()
+        calls: list[str] = []
+
+        _patch_single_std_var_firstseen_only_kernel(
+            monkeypatch,
+            rust,
+            expected,
+            "median",
+            kernel="i64",
+            result_dtype=np.dtype(np.float64),
+            calls=calls,
+        )
+        _patch_pandas_series_groupby_agg_to_raise(
+            monkeypatch,
+            "median",
+            "float rollback env must not broaden to sort=False int-backed median fallback",
+        )
+
+        accessor_result = _accessor_groupby_result(df, "key", "val", "median", sort=False)
+        proxy_result = _proxy_groupby_result(df, "key", "val", "median", sort=False)
+
+        assert calls == ["firstseen", "firstseen"]
         pd.testing.assert_series_equal(accessor_result, expected, check_exact=False, rtol=1e-12)
         pd.testing.assert_series_equal(proxy_result, expected, check_exact=False, rtol=1e-12)
 

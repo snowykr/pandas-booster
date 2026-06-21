@@ -11,8 +11,40 @@ pub struct SingleKeyPhaseProfile {
     pub merge_s: f64,
     pub reorder_s: f64,
     pub materialize_s: f64,
+    pub unique_build_s: f64,
+    pub key_sort_s: f64,
+    pub count_s: f64,
+    pub buffer_setup_s: f64,
+    pub scatter_s: f64,
+    pub median_select_s: f64,
     pub partial_group_total: usize,
     pub final_group_count: usize,
+}
+
+impl SingleKeyPhaseProfile {
+    pub(crate) fn legacy(
+        local_build_s: f64,
+        merge_s: f64,
+        reorder_s: f64,
+        materialize_s: f64,
+        partial_group_total: usize,
+        final_group_count: usize,
+    ) -> Self {
+        Self {
+            local_build_s,
+            merge_s,
+            reorder_s,
+            materialize_s,
+            unique_build_s: 0.0,
+            key_sort_s: 0.0,
+            count_s: 0.0,
+            buffer_setup_s: 0.0,
+            scatter_s: 0.0,
+            median_select_s: 0.0,
+            partial_group_total,
+            final_group_count,
+        }
+    }
 }
 
 #[derive(Debug)]

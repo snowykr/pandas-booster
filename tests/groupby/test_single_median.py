@@ -45,6 +45,7 @@ class TestMedianSingleKeyAccessor:
         booster_result = cast(BoosterAccessor, df.booster).groupby("key", "val", "median")
         pandas_result = df.groupby("key")["val"].median()
 
+        assert booster_result.index.tolist() == pandas_result.index.tolist() == [1, 2, 3, 4, 5]
         booster_sorted = booster_result.sort_index()
         pandas_sorted = pandas_result.sort_index()
 
