@@ -13,6 +13,9 @@ use super::legacy::{
 };
 use super::order::reorder_single_result_by_key;
 use super::result::{GroupByResultF64, GroupByResultI64};
+use super::scalar_firstseen::{
+    parallel_groupby_firstseen_legacy_low_u32, parallel_groupby_firstseen_legacy_low_u64,
+};
 
 pub fn parallel_groupby_sum_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultI64> {
     parallel_groupby::<i64, SumAggI64, i64>(keys, values)
@@ -28,14 +31,14 @@ pub fn parallel_groupby_sum_i64_firstseen_u32(
     keys: &[i64],
     values: &[i64],
 ) -> PyResult<GroupByResultI64> {
-    parallel_groupby_firstseen_u32::<i64, SumAggI64, i64>(keys, values)
+    parallel_groupby_firstseen_legacy_low_u32::<i64, SumAggI64, i64>(keys, values)
 }
 
 pub fn parallel_groupby_sum_i64_firstseen_u64(
     keys: &[i64],
     values: &[i64],
 ) -> PyResult<GroupByResultI64> {
-    parallel_groupby_firstseen_u64::<i64, SumAggI64, i64>(keys, values)
+    parallel_groupby_firstseen_legacy_low_u64::<i64, SumAggI64, i64>(keys, values)
 }
 
 pub fn parallel_groupby_prod_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultI64> {
@@ -82,14 +85,14 @@ pub fn parallel_groupby_mean_i64_firstseen_u32(
     keys: &[i64],
     values: &[i64],
 ) -> PyResult<GroupByResultF64> {
-    parallel_groupby_firstseen_u32::<i64, MeanAggI64, f64>(keys, values)
+    parallel_groupby_firstseen_legacy_low_u32::<i64, MeanAggI64, f64>(keys, values)
 }
 
 pub fn parallel_groupby_mean_i64_firstseen_u64(
     keys: &[i64],
     values: &[i64],
 ) -> PyResult<GroupByResultF64> {
-    parallel_groupby_firstseen_u64::<i64, MeanAggI64, f64>(keys, values)
+    parallel_groupby_firstseen_legacy_low_u64::<i64, MeanAggI64, f64>(keys, values)
 }
 
 pub fn parallel_groupby_median_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultF64> {
@@ -181,14 +184,14 @@ pub fn parallel_groupby_min_i64_firstseen_u32(
     keys: &[i64],
     values: &[i64],
 ) -> PyResult<GroupByResultI64> {
-    parallel_groupby_firstseen_u32::<i64, MinAggI64, i64>(keys, values)
+    parallel_groupby_firstseen_legacy_low_u32::<i64, MinAggI64, i64>(keys, values)
 }
 
 pub fn parallel_groupby_min_i64_firstseen_u64(
     keys: &[i64],
     values: &[i64],
 ) -> PyResult<GroupByResultI64> {
-    parallel_groupby_firstseen_u64::<i64, MinAggI64, i64>(keys, values)
+    parallel_groupby_firstseen_legacy_low_u64::<i64, MinAggI64, i64>(keys, values)
 }
 
 pub fn parallel_groupby_max_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultI64> {
@@ -205,12 +208,12 @@ pub fn parallel_groupby_max_i64_firstseen_u32(
     keys: &[i64],
     values: &[i64],
 ) -> PyResult<GroupByResultI64> {
-    parallel_groupby_firstseen_u32::<i64, MaxAggI64, i64>(keys, values)
+    parallel_groupby_firstseen_legacy_low_u32::<i64, MaxAggI64, i64>(keys, values)
 }
 
 pub fn parallel_groupby_max_i64_firstseen_u64(
     keys: &[i64],
     values: &[i64],
 ) -> PyResult<GroupByResultI64> {
-    parallel_groupby_firstseen_u64::<i64, MaxAggI64, i64>(keys, values)
+    parallel_groupby_firstseen_legacy_low_u64::<i64, MaxAggI64, i64>(keys, values)
 }

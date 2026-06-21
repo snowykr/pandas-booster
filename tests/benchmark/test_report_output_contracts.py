@@ -25,9 +25,23 @@ def test_committed_benchmark_reports_match_generate_docs_contract(benchmark_modu
     assert actual_files == expected_files
 
     index = (reports_dir / "README.md").read_text(encoding="utf-8")
-    assert index == _generated_markdown(
+    expected_index = _generated_markdown(
         benchmark_module.format_benchmark_index(list(expected_aggs))
     )
+    expected_table, _expected_environment = expected_index.split(
+        "## Environment & Configuration",
+        maxsplit=1,
+    )
+    actual_table, actual_environment = index.split(
+        "## Environment & Configuration",
+        maxsplit=1,
+    )
+    assert actual_table == expected_table
+    assert "## Environment & Configuration" in index
+    assert "replace these values with the environment used for that run" in index
+    assert "- **Machine**: MacBook Pro (`Mac15,6`)" in actual_environment
+    assert "- **Pandas**: 2.3.3" in actual_environment
+    assert "- **Polars**: 1.40.1" in actual_environment
 
     for agg in expected_aggs:
         report = (reports_dir / f"{agg}.md").read_text(encoding="utf-8")

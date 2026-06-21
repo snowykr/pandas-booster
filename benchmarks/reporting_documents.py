@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from reporting_constants import BACKEND_DISPLAY_ORDER
+from reporting_constants import BACKEND_DISPLAY_ORDER, BENCHMARK_REPORT_ENVIRONMENT_TEMPLATE_LINES
 from reporting_stats import render_stats_evidence_section
 from reporting_tables import render_high_table, render_standard_table, render_threshold_table
 
@@ -123,7 +123,7 @@ def format_benchmark_index(aggs: list[str]) -> str:
     for agg in aggs:
         filename = benchmark_report_filename(agg)
         lines.append(f"| `{agg}` | [{filename}]({filename}) |")
-    lines.append("")
+    lines.extend(["", *BENCHMARK_REPORT_ENVIRONMENT_TEMPLATE_LINES, ""])
     return "\n".join(lines)
 
 

@@ -214,7 +214,8 @@ The library is designed for large datasets where multi-core parallelism can be f
 
 **Benchmark methodology:**
 - **Process Isolation:** Benchmarks use rigorous process isolation to ensure accurate results.
-- **Host machine:** MacBook Pro (Mac15,6), Apple M3 Pro, 11 CPU cores (5 Performance + 6 Efficiency), 18 GB RAM, macOS 26.4.1.
+- **Comparability:** Benchmarks are relative comparisons against Pandas within the same benchmark run.
+- **Timing variability:** Absolute timings vary by CPU, core count, memory bandwidth, software versions, and Rayon thread settings.
 - **Samples:** The checked-in benchmark reports are publication-quality local artifacts generated with `--samples 20 --cardinality all --sort-mode all`. Each sample runs in a fresh Python process.
 - **Cold:** Average of the requested fresh process executions (1st run measured immediately).
 - **Warm:** Average of the requested fresh process executions. Each process runs Cold once and a Warmup once (both discarded), then measures the next run (steady state).
@@ -275,16 +276,10 @@ python benchmarks/benchmark.py --cardinality all --diagnostic threshold --sort-m
 ```
 
 #### Environment & Configuration
-The following environment was used to generate the checked-in benchmark reports.
-(Note: These are **not** the minimum requirements for using the library, but strictly the environment used for reproduction).
-
-- **Build Mode**: Release (`maturin develop --release`)
-- **Machine**: MacBook Pro (`Mac15,6`), Apple M3 Pro, 11 CPU cores (5 Performance + 6 Efficiency), 18 GB RAM
-- **Threading**: Default Rayon behavior (uses all available logical cores)
-- **OS**: macOS 26.4.1 (Darwin 25.4.0, arm64)
-- **Python**: 3.11.15
-- **Pandas**: 2.3.3
-- **Polars**: 1.40.1
+The checked-in benchmark reports are local artifacts, not minimum requirements
+for using the library. Full machine and software metadata belong with the generated benchmark reports under [`benchmarks/reports/`](benchmarks/reports/).
+When publishing refreshed reports, record the machine, OS, Python, Pandas,
+Polars, build mode, and thread settings alongside those generated reports.
 
 **Note**: The benchmark scripts use rigorous process isolation (fresh process per sample) for both Cold and Warm measurements to ensure accurate results.
 

@@ -14,10 +14,12 @@ mod engine;
 mod legacy;
 mod order;
 mod partitioned;
+mod prod_ordered;
 mod profile;
 mod reduce;
 mod result;
 mod routing;
+mod scalar_firstseen;
 
 #[cfg(test)]
 mod api_float_tests;
@@ -27,6 +29,8 @@ mod api_i64_tests;
 mod determinism_tests;
 #[cfg(test)]
 mod engine_tests;
+#[cfg(test)]
+mod prod_ordered_tests;
 #[cfg(test)]
 mod routing_tests;
 #[cfg(test)]
