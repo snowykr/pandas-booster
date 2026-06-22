@@ -7,13 +7,17 @@
 mod api;
 mod api_sorted;
 mod dispatch;
+mod dispatch_sorted;
 mod engine;
 mod firstseen_u32;
 mod firstseen_u64;
 mod keys;
 mod order;
 mod partition;
+mod profile;
 mod result;
+mod sort_first;
+mod sort_first_routing;
 
 #[cfg(test)]
 mod api_basic_tests;
@@ -22,13 +26,21 @@ mod api_stats_tests;
 #[cfg(test)]
 mod dispatch_tests;
 #[cfg(test)]
+mod order_sort_strategy_tests;
+#[cfg(test)]
 mod order_tests;
 #[cfg(test)]
 mod partition_tests;
+#[cfg(test)]
+mod sort_first_dispatch_tests;
+#[cfg(test)]
+mod sort_first_routing_tests;
+#[cfg(test)]
+mod sort_first_tests;
 #[cfg(test)]
 mod test_support;
 
 pub use api::*;
 pub use api_sorted::*;
 pub(crate) use partition::{stable_scatter_by_partition, SMALL_DIRECT_THRESHOLD_ELEMS};
-pub use result::GroupByMultiResult;
+pub use result::{GroupByMultiResult, MultiKeySortedPhaseProfile, ProfiledGroupByMultiResult};

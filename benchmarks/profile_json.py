@@ -14,6 +14,10 @@ from dispatch import (
     describe_booster_execution,
     resolve_booster_benchmark_dispatch,
 )
+from profile_json_multi_key import (
+    MULTI_KEY_SORTED_HIGH_PRESET,
+    measure_booster_multi_key_sorted_breakdown,
+)
 from profile_json_payload import (
     build_profile_json_payload as build_profile_json_payload,
 )
@@ -44,6 +48,28 @@ def stats_evidence_workload_label(preset_name: str) -> str:
     return preset_name
 
 
+def _profile_evidence_aggs(
+    selected_aggs: list[str] | None,
+    *,
+    cardinality: str,
+    sort_mode: str,
+) -> list[str]:
+    evidence_aggs = resolve_stats_evidence_aggs(selected_aggs)
+    selected = selected_aggs if selected_aggs is not None else []
+    should_profile_multi_key_max = (
+        "max" in selected and cardinality in {"all", "high"} and sort_mode in {"all", "sorted"}
+    )
+    if should_profile_multi_key_max and "max" not in evidence_aggs:
+        evidence_aggs.append("max")
+    return evidence_aggs
+
+
+def _stats_evidence_preset_name(preset_name: str, agg: str, sort: bool) -> str:
+    if preset_name == STATS_EVIDENCE_PRESETS["high"] and agg == "max" and sort:
+        return MULTI_KEY_SORTED_HIGH_PRESET
+    return preset_name
+
+
 def measure_booster_single_key_breakdown(
     preset_name: str,
     agg: str,
@@ -60,7 +86,7 @@ def measure_booster_single_key_breakdown(
     df = generate_multi_key_dataset(**config)
     key_cols = [col for col, _ in config["key_configs"]]
     if len(key_cols) != 1:
-        raise ValueError("Breakdown evidence only supports single-key presets")
+        return measure_booster_multi_key_sorted_breakdown(df, key_cols, agg, sort, n_samples)
 
     key_col = cast(pd.Series, df[key_cols[0]])
     val_col = cast(pd.Series, df["value"])
@@ -156,6 +182,7 @@ def measure_booster_single_key_breakdown(
     stats = {name: compute_stats(samples) for name, samples in phase_samples.items()}
     return {
         "execution": dispatch["execution"],
+        "route": "hash_first",
         "phases": stats,
         "rust_total_s": stats["rust_total_s"].mean,
         "python_total_s": stats["python_total_s"].mean,
@@ -163,6 +190,9 @@ def measure_booster_single_key_breakdown(
         "partial_group_total": partial_group_total,
         "final_group_count": final_group_count,
         "partial_to_final_ratio": partial_to_final_ratio,
+        "sort_first_segment_scan_count": 0,
+        "selected_sort_strategy": "not_applicable",
+        "sort_key_bit_widths": [],
     }
 
 
@@ -178,7 +208,11 @@ def collect_stats_evidence(
     measure_booster_single_key_breakdown_func=measure_booster_single_key_breakdown,
 ) -> list[dict[str, Any]]:
     evidence: list[dict[str, Any]] = []
-    evidence_aggs = resolve_stats_evidence_aggs(selected_aggs)
+    evidence_aggs = _profile_evidence_aggs(
+        selected_aggs,
+        cardinality=cardinality,
+        sort_mode=sort_mode,
+    )
     if not evidence_aggs:
         return evidence
 
@@ -196,8 +230,11 @@ def collect_stats_evidence(
         workload = stats_evidence_workload_label(preset_name)
         for agg in evidence_aggs:
             for sort in sorts:
+                benchmark_preset_name = _stats_evidence_preset_name(preset_name, agg, sort)
+                config = PRESETS[benchmark_preset_name]
+                key_cols = [col for col, _ in config["key_configs"]]
                 result = benchmark_single_func(
-                    preset_name,
+                    benchmark_preset_name,
                     agg=agg,
                     sort=sort,
                     n_samples=n_samples,
@@ -212,14 +249,14 @@ def collect_stats_evidence(
                     execution["polars"] = f"polars.group_by.agg({agg})"
                 evidence.append(
                     {
-                        "preset": preset_name,
+                        "preset": benchmark_preset_name,
                         "workload": workload,
                         "agg": agg,
                         "sort": sort,
                         "result": result,
                         "execution": execution,
                         "breakdown": measure_booster_single_key_breakdown_func(
-                            preset_name,
+                            benchmark_preset_name,
                             agg,
                             sort,
                             n_samples,

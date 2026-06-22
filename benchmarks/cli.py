@@ -150,6 +150,9 @@ Environment:
 
     args = parser.parse_args()
 
+    if args.samples < 1:
+        parser.error("--samples must be at least 1")
+
     if args.diagnostic == "threshold" and args.sort_mode != "unsorted":
         parser.error(
             "--diagnostic threshold requires --sort-mode unsorted "

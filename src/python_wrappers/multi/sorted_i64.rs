@@ -132,6 +132,34 @@ pub(crate) fn groupby_multi_max_i64_sorted<'py>(
     convert_multi_result_i64(py, result)
 }
 
+#[pyfunction]
+pub(crate) fn profile_groupby_multi_max_i64_sorted<'py>(
+    py: Python<'py>,
+    key_cols: Vec<PyReadonlyArray1<'py, i64>>,
+    values: PyReadonlyArray1<'py, i64>,
+) -> PyResult<MultiGroupByProfileReturnI64<'py>> {
+    let values_slice = zero_copy::get_slice_i64(&values)?;
+    let key_slices: Vec<&[i64]> = key_cols
+        .iter()
+        .map(|col| zero_copy::get_slice_i64(col))
+        .collect::<PyResult<Vec<_>>>()?;
+
+    let key_lengths: Vec<usize> = key_slices.iter().map(|s| s.len()).collect();
+    validate_multi_inputs(&key_lengths, values_slice.len())?;
+
+    let profiled = py.detach(|| {
+        groupby_multi::profile_multi_groupby_max_i64_sorted(&key_slices, values_slice)
+    })?;
+    let conversion_start = Instant::now();
+    let (key_arrays, values_1d) = convert_multi_result_i64(py, profiled.result)?;
+    let profile_dict = build_multi_sorted_profile_dict(
+        py,
+        &profiled.profile,
+        conversion_start.elapsed().as_secs_f64(),
+    )?;
+    Ok((key_arrays, values_1d, profile_dict))
+}
+
 /// Multi-column groupby count for i64 values (sorted by key tuple).
 #[pyfunction]
 pub(crate) fn groupby_multi_count_i64_sorted<'py>(

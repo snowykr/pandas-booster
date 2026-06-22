@@ -36,6 +36,8 @@ pub mod groupby_multi;
 mod python_wrappers;
 pub mod radix_groupby;
 pub mod radix_sort;
+mod radix_sort_digit;
+mod radix_sort_multi_key;
 pub mod zero_copy;
 
 #[pymodule]

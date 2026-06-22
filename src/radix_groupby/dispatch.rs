@@ -1,5 +1,10 @@
 use crate::aggregation::Aggregator;
 
+#[cfg(test)]
+pub(super) use super::dispatch_sorted::SortedDispatchRoute;
+pub(super) use super::dispatch_sorted::{
+    radix_groupby_sorted_with_diagnostics, SortedDispatchDiagnostics,
+};
 use super::engine::radix_groupby_engine;
 use super::firstseen_u32::radix_groupby_engine_firstseen_u32;
 use super::firstseen_u64::radix_groupby_engine_firstseen_u64;
