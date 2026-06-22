@@ -7,6 +7,7 @@
 mod api;
 mod api_sorted;
 mod dispatch;
+mod dispatch_sorted;
 mod engine;
 mod firstseen_u32;
 mod firstseen_u64;

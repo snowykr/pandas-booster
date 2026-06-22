@@ -13,7 +13,7 @@ SingleProfileReturnF64 = tuple[NDArray[np.int64], NDArray[np.float64], SinglePro
 MultiKeys = list[NDArray[np.int64]]
 MultiReturnF64 = tuple[MultiKeys, NDArray[np.float64]]
 MultiReturnI64 = tuple[MultiKeys, NDArray[np.int64]]
-MultiProfile = dict[str, float | int | str]
+MultiProfile = dict[str, float | int | str | list[int]]
 MultiProfileReturnF64 = tuple[MultiKeys, NDArray[np.float64], MultiProfile]
 MultiProfileReturnI64 = tuple[MultiKeys, NDArray[np.int64], MultiProfile]
 

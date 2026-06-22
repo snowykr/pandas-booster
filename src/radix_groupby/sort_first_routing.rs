@@ -24,7 +24,6 @@ pub(super) enum SortFirstReducer {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SortFirstRoute {
     HashFirst,
-    SortFirst,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +33,7 @@ pub(super) enum SortFirstFallbackReason {
     InvalidInput,
     TooFewRows,
     LowTupleRatio,
+    SortFirstNotCertified,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,12 +77,11 @@ pub(super) fn choose_sort_first_route(
         );
     }
 
-    SortFirstRoutingDecision {
-        route: SortFirstRoute::SortFirst,
+    hash_first(
+        SortFirstFallbackReason::SortFirstNotCertified,
         sample_rows,
         sample_unique_tuples,
-        fallback_reason: None,
-    }
+    )
 }
 
 const fn is_supported_reducer(reducer: SortFirstReducer) -> bool {

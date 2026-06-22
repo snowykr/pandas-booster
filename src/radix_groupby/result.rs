@@ -22,6 +22,8 @@ pub struct MultiKeySortedPhaseProfile {
     pub sort_key_construction_s: f64,
     pub radix_sort_s: f64,
     pub sorted_materialization_s: f64,
+    pub selected_sort_strategy: &'static str,
+    pub sort_key_bit_widths: Vec<u32>,
     pub sort_first_permutation_s: f64,
     pub sort_first_segment_scan_s: f64,
     pub sort_first_segment_scan_count: usize,

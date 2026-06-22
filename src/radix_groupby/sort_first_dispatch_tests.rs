@@ -21,17 +21,19 @@ fn key_slices<'a>(left: &'a [i64], right: &'a [i64]) -> Vec<&'a [i64]> {
     vec![left, right]
 }
 
-fn assert_sort_first_route(diagnostics: &super::dispatch::SortedDispatchDiagnostics) {
-    assert_eq!(diagnostics.route, SortedDispatchRoute::SortFirst);
-    assert_eq!(diagnostics.hash_first_aggregation_count, 0);
-    assert_eq!(diagnostics.post_aggregation_sort_count, 0);
-    assert_eq!(diagnostics.routing_decision.fallback_reason, None);
-    let sort_first = diagnostics
-        .sort_first
-        .expect("sort-first route should include sort-first diagnostics");
-    assert!(sort_first.lexicographic_permutation_built);
-    assert_eq!(sort_first.segment_scan_count, 1);
-    assert_eq!(sort_first.post_aggregation_sort_count, 0);
+fn assert_sort_first_not_reached_for_target_route(
+    diagnostics: &super::dispatch::SortedDispatchDiagnostics,
+) {
+    assert_eq!(diagnostics.route, SortedDispatchRoute::HashFirst);
+    assert_eq!(diagnostics.hash_first_aggregation_count, 1);
+    assert_eq!(diagnostics.post_aggregation_sort_count, 1);
+    assert_eq!(
+        diagnostics.routing_decision.fallback_reason,
+        Some(SortFirstFallbackReason::SortFirstNotCertified)
+    );
+    assert!(diagnostics.sort_first.is_none());
+    assert_eq!(diagnostics.routing_decision.sample_rows, 5_000);
+    assert_eq!(diagnostics.routing_decision.sample_unique_tuples, 5_000);
 }
 
 fn assert_hash_first_route(
@@ -46,7 +48,7 @@ fn assert_hash_first_route(
 }
 
 #[test]
-fn production_routing_high_ratio_max_uses_sort_first_without_hash_or_output_sort() {
+fn production_routing_high_ratio_max_uses_hash_first_until_sort_first_is_certified() {
     // Given high tuple uniqueness in reverse lexicographic order.
     let (left, right) = high_ratio_keys(5_000);
     let values_f64: Vec<f64> = left.iter().map(|&key| key as f64).collect();
@@ -61,9 +63,9 @@ fn production_routing_high_ratio_max_uses_sort_first_without_hash_or_output_sort
         super::api_sorted::radix_groupby_max_i64_sorted_with_diagnostics(&keys, &values_i64)
             .expect("high-ratio i64 max should dispatch");
 
-    // Then both value dtypes use sort-first and emit sorted groups directly.
-    assert_sort_first_route(&float_diagnostics);
-    assert_sort_first_route(&integer_diagnostics);
+    // Then both value dtypes use certified hash-first plus post-aggregation sort.
+    assert_sort_first_not_reached_for_target_route(&float_diagnostics);
+    assert_sort_first_not_reached_for_target_route(&integer_diagnostics);
     assert_eq!(key_at_out(&float_result, 0, 0), 0);
     assert_eq!(key_at_out(&integer_result, 0, 0), 0);
     assert_eq!(value_at_out(&float_result, 0), 0.0);
@@ -71,7 +73,7 @@ fn production_routing_high_ratio_max_uses_sort_first_without_hash_or_output_sort
 }
 
 #[test]
-fn production_routing_high_ratio_count_uses_sort_first_without_hash_or_output_sort() {
+fn production_routing_high_ratio_count_uses_hash_first_until_sort_first_is_certified() {
     // Given high tuple uniqueness with values that exercise f64 NaN count semantics.
     let (left, right) = high_ratio_keys(5_000);
     let values_f64: Vec<f64> = (0..left.len())
@@ -88,9 +90,9 @@ fn production_routing_high_ratio_count_uses_sort_first_without_hash_or_output_so
         super::api_sorted::radix_groupby_count_i64_sorted_with_diagnostics(&keys, &values_i64)
             .expect("high-ratio i64 count should dispatch");
 
-    // Then both value dtypes use sort-first without hash aggregation or output sorting.
-    assert_sort_first_route(&float_diagnostics);
-    assert_sort_first_route(&integer_diagnostics);
+    // Then both value dtypes use certified hash-first plus post-aggregation sort.
+    assert_sort_first_not_reached_for_target_route(&float_diagnostics);
+    assert_sort_first_not_reached_for_target_route(&integer_diagnostics);
     assert_eq!(key_at_out(&float_result, 0, 0), 0);
     assert_eq!(key_at_out(&integer_result, 0, 0), 0);
     assert_eq!(value_at_out(&float_result, 0), 1);
@@ -194,7 +196,7 @@ fn production_routing_more_than_ten_keys_stays_hash_first_before_sort_first() {
 }
 
 #[test]
-fn production_routing_profile_high_ratio_max_labels_sort_first() {
+fn production_routing_profile_high_ratio_max_labels_hash_first() {
     // Given a high tuple ratio max profile workload.
     let (left, right) = high_ratio_keys(5_000);
     let values: Vec<f64> = left.iter().map(|&key| key as f64).collect();
@@ -204,11 +206,10 @@ fn production_routing_profile_high_ratio_max_labels_sort_first() {
     let profiled = profile_radix_groupby_max_f64_sorted(&keys, &values)
         .expect("profiled high-ratio max should dispatch");
 
-    // Then its route label describes the same sort-first path as production dispatch.
-    assert_eq!(profiled.profile.route_label, "sort_first");
-    assert_eq!(profiled.profile.hash_build_s, 0.0);
-    assert_eq!(profiled.profile.partition_scatter_s, 0.0);
-    assert_eq!(profiled.profile.partition_aggregation_s, 0.0);
-    assert_eq!(profiled.profile.sort_first_segment_scan_count, 1);
+    // Then its route label describes the certified hash-first sorted-output path.
+    assert_eq!(profiled.profile.route_label, "hash_first");
+    assert_eq!(profiled.profile.sort_first_permutation_s, 0.0);
+    assert_eq!(profiled.profile.sort_first_segment_scan_s, 0.0);
+    assert_eq!(profiled.profile.sort_first_segment_scan_count, 0);
     assert_eq!(profiled.result.values.len(), left.len());
 }

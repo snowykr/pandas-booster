@@ -1,11 +1,14 @@
+#[cfg(test)]
 use std::cmp::Ordering;
+#[cfg(test)]
 use std::time::Instant;
 
-use crate::aggregation::{Aggregator, CountAggF64, CountAggI64, MaxAggF64, MaxAggI64};
 #[cfg(test)]
-use crate::aggregation::{MinAggF64, SumAggF64};
+use crate::aggregation::{Aggregator, CountAggI64, MaxAggF64, MinAggF64, SumAggF64};
 
+#[cfg(test)]
 use super::result::GroupByMultiResult;
+#[cfg(test)]
 use super::sort_first_routing::MAX_KEY_COLUMNS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,6 +18,7 @@ pub(super) struct SortFirstDiagnostics {
     pub post_aggregation_sort_count: usize,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct SortFirstPhaseTimings {
     pub lexicographic_permutation_s: f64,
@@ -37,6 +41,7 @@ pub(super) fn sort_first_groupby_min_f64(
     sort_first_groupby::<f64, MinAggF64, f64>(key_slices, values)
 }
 
+#[cfg(test)]
 pub(super) fn sort_first_groupby_max_f64(
     key_slices: &[&[i64]],
     values: &[f64],
@@ -44,20 +49,7 @@ pub(super) fn sort_first_groupby_max_f64(
     sort_first_groupby::<f64, MaxAggF64, f64>(key_slices, values)
 }
 
-pub(super) fn sort_first_groupby_max_i64(
-    key_slices: &[&[i64]],
-    values: &[i64],
-) -> Result<(GroupByMultiResult<i64>, SortFirstDiagnostics), String> {
-    sort_first_groupby::<i64, MaxAggI64, i64>(key_slices, values)
-}
-
-pub(super) fn sort_first_groupby_count_f64(
-    key_slices: &[&[i64]],
-    values: &[f64],
-) -> Result<(GroupByMultiResult<i64>, SortFirstDiagnostics), String> {
-    sort_first_groupby::<f64, CountAggF64, i64>(key_slices, values)
-}
-
+#[cfg(test)]
 pub(super) fn sort_first_groupby_count_i64(
     key_slices: &[&[i64]],
     values: &[i64],
@@ -65,34 +57,7 @@ pub(super) fn sort_first_groupby_count_i64(
     sort_first_groupby::<i64, CountAggI64, i64>(key_slices, values)
 }
 
-pub(super) fn sort_first_groupby_max_f64_profiled(
-    key_slices: &[&[i64]],
-    values: &[f64],
-) -> Result<
-    (
-        GroupByMultiResult<f64>,
-        SortFirstDiagnostics,
-        SortFirstPhaseTimings,
-    ),
-    String,
-> {
-    sort_first_groupby_profiled::<f64, MaxAggF64, f64>(key_slices, values)
-}
-
-pub(super) fn sort_first_groupby_max_i64_profiled(
-    key_slices: &[&[i64]],
-    values: &[i64],
-) -> Result<
-    (
-        GroupByMultiResult<i64>,
-        SortFirstDiagnostics,
-        SortFirstPhaseTimings,
-    ),
-    String,
-> {
-    sort_first_groupby_profiled::<i64, MaxAggI64, i64>(key_slices, values)
-}
-
+#[cfg(test)]
 fn sort_first_groupby<T, A, O>(
     key_slices: &[&[i64]],
     values: &[T],
@@ -107,6 +72,7 @@ where
     Ok((result, diagnostics))
 }
 
+#[cfg(test)]
 fn sort_first_groupby_profiled<T, A, O>(
     key_slices: &[&[i64]],
     values: &[T],
@@ -145,6 +111,7 @@ where
     Ok((result, diagnostics, timings))
 }
 
+#[cfg(test)]
 fn validate_inputs(key_slices: &[&[i64]], n_rows: usize) -> Result<(), String> {
     if key_slices.is_empty() {
         return Err("sort-first groupby requires at least one key column".to_owned());
@@ -168,12 +135,14 @@ fn validate_inputs(key_slices: &[&[i64]], n_rows: usize) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
 fn build_lexicographic_permutation(key_slices: &[&[i64]], n_rows: usize) -> Vec<usize> {
     let mut permutation: Vec<usize> = (0..n_rows).collect();
     permutation.sort_by(|left, right| compare_rows(key_slices, *left, *right));
     permutation
 }
 
+#[cfg(test)]
 fn compare_rows(key_slices: &[&[i64]], left: usize, right: usize) -> Ordering {
     for col in key_slices {
         match col[left].cmp(&col[right]) {
@@ -185,6 +154,7 @@ fn compare_rows(key_slices: &[&[i64]], left: usize, right: usize) -> Ordering {
     left.cmp(&right)
 }
 
+#[cfg(test)]
 fn aggregate_segments<T, A, O>(
     key_slices: &[&[i64]],
     values: &[T],
@@ -224,6 +194,7 @@ where
     }
 }
 
+#[cfg(test)]
 fn rows_have_same_key(key_slices: &[&[i64]], left: usize, right: usize) -> bool {
     key_slices.iter().all(|col| col[left] == col[right])
 }

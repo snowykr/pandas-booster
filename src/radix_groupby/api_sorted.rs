@@ -6,13 +6,8 @@ use crate::aggregation::{
 
 use super::dispatch::{radix_groupby_sorted, radix_groupby_sorted_with_diagnostics};
 use super::profile::profile_radix_groupby_sorted;
-use super::result::{GroupByMultiResult, MultiKeySortedPhaseProfile, ProfiledGroupByMultiResult};
-use super::sort_first::{
-    sort_first_groupby_count_f64, sort_first_groupby_count_i64, sort_first_groupby_max_f64,
-    sort_first_groupby_max_f64_profiled, sort_first_groupby_max_i64,
-    sort_first_groupby_max_i64_profiled, SortFirstDiagnostics, SortFirstPhaseTimings,
-};
-use super::sort_first_routing::{choose_sort_first_route, SortFirstReducer, SortFirstRoute};
+use super::result::{GroupByMultiResult, ProfiledGroupByMultiResult};
+use super::sort_first_routing::SortFirstReducer;
 
 pub fn radix_groupby_sum_f64_sorted(
     key_slices: &[&[i64]],
@@ -85,7 +80,6 @@ pub(super) fn radix_groupby_max_f64_sorted_with_diagnostics(
         key_slices,
         values,
         SortFirstReducer::MaxF64,
-        sort_first_groupby_max_f64,
     )
 }
 
@@ -93,14 +87,7 @@ pub fn profile_radix_groupby_max_f64_sorted(
     key_slices: &[&[i64]],
     values: &[f64],
 ) -> Result<ProfiledGroupByMultiResult<f64>, String> {
-    let routing_decision =
-        choose_sort_first_route(SortFirstReducer::MaxF64, key_slices, values.len());
-    if routing_decision.route == SortFirstRoute::HashFirst {
-        return profile_radix_groupby_sorted::<f64, MaxAggF64, f64>(key_slices, values);
-    }
-
-    let (result, diagnostics, timings) = sort_first_groupby_max_f64_profiled(key_slices, values)?;
-    Ok(profile_sort_first_result(result, diagnostics, timings))
+    profile_radix_groupby_sorted::<f64, MaxAggF64, f64>(key_slices, values)
 }
 
 pub fn radix_groupby_sum_i64_sorted(
@@ -174,7 +161,6 @@ pub(super) fn radix_groupby_max_i64_sorted_with_diagnostics(
         key_slices,
         values,
         SortFirstReducer::MaxI64,
-        sort_first_groupby_max_i64,
     )
 }
 
@@ -182,14 +168,7 @@ pub fn profile_radix_groupby_max_i64_sorted(
     key_slices: &[&[i64]],
     values: &[i64],
 ) -> Result<ProfiledGroupByMultiResult<i64>, String> {
-    let routing_decision =
-        choose_sort_first_route(SortFirstReducer::MaxI64, key_slices, values.len());
-    if routing_decision.route == SortFirstRoute::HashFirst {
-        return profile_radix_groupby_sorted::<i64, MaxAggI64, i64>(key_slices, values);
-    }
-
-    let (result, diagnostics, timings) = sort_first_groupby_max_i64_profiled(key_slices, values)?;
-    Ok(profile_sort_first_result(result, diagnostics, timings))
+    profile_radix_groupby_sorted::<i64, MaxAggI64, i64>(key_slices, values)
 }
 
 pub fn radix_groupby_count_f64_sorted(
@@ -215,7 +194,6 @@ pub(super) fn radix_groupby_count_f64_sorted_with_diagnostics(
         key_slices,
         values,
         SortFirstReducer::CountF64,
-        sort_first_groupby_count_f64,
     )
 }
 
@@ -242,32 +220,5 @@ pub(super) fn radix_groupby_count_i64_sorted_with_diagnostics(
         key_slices,
         values,
         SortFirstReducer::CountI64,
-        sort_first_groupby_count_i64,
     )
-}
-
-fn profile_sort_first_result<V>(
-    result: GroupByMultiResult<V>,
-    diagnostics: SortFirstDiagnostics,
-    timings: SortFirstPhaseTimings,
-) -> ProfiledGroupByMultiResult<V> {
-    let final_group_count = result.values.len();
-    ProfiledGroupByMultiResult {
-        result,
-        profile: MultiKeySortedPhaseProfile {
-            route_label: "sort_first",
-            hash_build_s: 0.0,
-            partition_scatter_s: 0.0,
-            partition_aggregation_s: 0.0,
-            flatten_s: 0.0,
-            sort_key_construction_s: 0.0,
-            radix_sort_s: 0.0,
-            sorted_materialization_s: 0.0,
-            sort_first_permutation_s: timings.lexicographic_permutation_s,
-            sort_first_segment_scan_s: timings.segment_scan_s,
-            sort_first_segment_scan_count: diagnostics.segment_scan_count,
-            partial_group_total: final_group_count,
-            final_group_count,
-        },
-    }
 }

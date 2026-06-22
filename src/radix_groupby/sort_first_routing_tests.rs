@@ -81,12 +81,12 @@ fn routing_medium_tuple_ratio_below_threshold_stays_hash_first() {
 }
 
 #[test]
-fn routing_high_tuple_ratio_selects_sort_first_for_supported_reducers() {
+fn routing_high_tuple_ratio_uses_hash_first_until_sort_first_is_certified() {
     // Given high-cardinality-like tuple samples.
     let (left, right) = high_unique_keys(5_000);
     let keys = key_slices(&left, &right);
 
-    // When each T8 production-routed reducer is checked.
+    // When each production reducer sees high sampled tuple uniqueness.
     for reducer in [
         SortFirstReducer::MaxF64,
         SortFirstReducer::MaxI64,
@@ -95,9 +95,14 @@ fn routing_high_tuple_ratio_selects_sort_first_for_supported_reducers() {
     ] {
         let decision = choose_sort_first_route(reducer, &keys, left.len());
 
-        // Then every production-routed reducer selects sort-first confidently.
-        assert_eq!(decision.route, SortFirstRoute::SortFirst);
-        assert_eq!(decision.fallback_reason, None);
+        // Then unique ratio alone is not enough to certify the current
+        // sequential comparator sort-first implementation for production.
+        assert_eq!(decision.route, SortFirstRoute::HashFirst);
+        assert_eq!(
+            decision.fallback_reason,
+            Some(SortFirstFallbackReason::SortFirstNotCertified)
+        );
+        assert_eq!(decision.sample_rows, left.len());
         assert_eq!(decision.sample_unique_tuples, left.len());
     }
 }
@@ -137,8 +142,8 @@ fn routing_too_few_rows_stays_hash_first_even_for_high_ratio() {
 }
 
 #[test]
-fn routing_reverse_sorted_high_ratio_still_selects_sort_first() {
-    // Given high-cardinality-like tuples in reverse lexicographic order.
+fn routing_one_hundred_percent_unique_sample_still_requires_certification() {
+    // Given 100% unique sampled tuples in reverse lexicographic order.
     let n_rows = 5_000i64;
     let left: Vec<i64> = (0..n_rows).rev().collect();
     let right: Vec<i64> = (0..n_rows).map(|row| -row).collect();
@@ -147,9 +152,14 @@ fn routing_reverse_sorted_high_ratio_still_selects_sort_first() {
     // When routing estimates tuple uniqueness.
     let decision = choose_sort_first_route(SortFirstReducer::MaxF64, &keys, left.len());
 
-    // Then input order does not prevent confident sort-first selection.
-    assert_eq!(decision.route, SortFirstRoute::SortFirst);
-    assert_eq!(decision.fallback_reason, None);
+    // Then even a perfect unique sample stays hash-first until a certified
+    // physical sort-first algorithm replaces the regressed sequential path.
+    assert_eq!(decision.route, SortFirstRoute::HashFirst);
+    assert_eq!(
+        decision.fallback_reason,
+        Some(SortFirstFallbackReason::SortFirstNotCertified)
+    );
+    assert_eq!(decision.sample_rows, left.len());
     assert_eq!(decision.sample_unique_tuples, left.len());
 }
 

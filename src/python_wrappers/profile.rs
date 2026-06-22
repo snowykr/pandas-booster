@@ -32,6 +32,8 @@ pub(crate) fn build_multi_sorted_profile_dict<'py>(
     profile_dict.set_item("sort_key_construction_s", profile.sort_key_construction_s)?;
     profile_dict.set_item("radix_sort_s", profile.radix_sort_s)?;
     profile_dict.set_item("sorted_materialization_s", profile.sorted_materialization_s)?;
+    profile_dict.set_item("selected_sort_strategy", profile.selected_sort_strategy)?;
+    profile_dict.set_item("sort_key_bit_widths", profile.sort_key_bit_widths.clone())?;
     profile_dict.set_item("sort_first_permutation_s", profile.sort_first_permutation_s)?;
     profile_dict.set_item(
         "sort_first_segment_scan_s",

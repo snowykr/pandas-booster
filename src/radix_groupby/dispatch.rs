@@ -1,33 +1,16 @@
 use crate::aggregation::Aggregator;
 
+#[cfg(test)]
+pub(super) use super::dispatch_sorted::SortedDispatchRoute;
+pub(super) use super::dispatch_sorted::{
+    radix_groupby_sorted_with_diagnostics, SortedDispatchDiagnostics,
+};
 use super::engine::radix_groupby_engine;
 use super::firstseen_u32::radix_groupby_engine_firstseen_u32;
 use super::firstseen_u64::radix_groupby_engine_firstseen_u64;
 use super::keys::{CompositeKeyOps, FixedKeyOps, RadixKeyOps};
 use super::order::sort_groupby_result;
 use super::result::GroupByMultiResult;
-use super::sort_first::SortFirstDiagnostics;
-use super::sort_first_routing::{
-    choose_sort_first_route, SortFirstReducer, SortFirstRoute, SortFirstRoutingDecision,
-};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SortedDispatchRoute {
-    HashFirst,
-    SortFirst,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct SortedDispatchDiagnostics {
-    pub route: SortedDispatchRoute,
-    pub routing_decision: SortFirstRoutingDecision,
-    pub hash_first_aggregation_count: usize,
-    pub post_aggregation_sort_count: usize,
-    pub sort_first: Option<SortFirstDiagnostics>,
-}
-
-type SortFirstDispatchFn<T, O> =
-    fn(&[&[i64]], &[T]) -> Result<(GroupByMultiResult<O>, SortFirstDiagnostics), String>;
 
 pub(super) fn radix_groupby_fixed<const N: usize, T, A, O>(
     key_slices: &[&[i64]],
@@ -253,50 +236,6 @@ where
     let mut result = radix_groupby_dispatch::<T, A, O>(key_slices, values)?;
     sort_groupby_result(&mut result);
     Ok(result)
-}
-
-pub(super) fn radix_groupby_sorted_with_diagnostics<T, A, O>(
-    key_slices: &[&[i64]],
-    values: &[T],
-    reducer: SortFirstReducer,
-    sort_first_fn: SortFirstDispatchFn<T, O>,
-) -> Result<(GroupByMultiResult<O>, SortedDispatchDiagnostics), String>
-where
-    T: Copy + Send + Sync,
-    O: Copy + Send + Sync,
-    A: Aggregator<T, O> + Clone + Default + Send,
-{
-    let routing_decision = choose_sort_first_route(reducer, key_slices, values.len());
-
-    match routing_decision.route {
-        SortFirstRoute::SortFirst => {
-            let (result, sort_first) = sort_first_fn(key_slices, values)?;
-            Ok((
-                result,
-                SortedDispatchDiagnostics {
-                    route: SortedDispatchRoute::SortFirst,
-                    routing_decision,
-                    hash_first_aggregation_count: 0,
-                    post_aggregation_sort_count: sort_first.post_aggregation_sort_count,
-                    sort_first: Some(sort_first),
-                },
-            ))
-        }
-        SortFirstRoute::HashFirst => {
-            let mut result = radix_groupby_dispatch::<T, A, O>(key_slices, values)?;
-            sort_groupby_result(&mut result);
-            Ok((
-                result,
-                SortedDispatchDiagnostics {
-                    route: SortedDispatchRoute::HashFirst,
-                    routing_decision,
-                    hash_first_aggregation_count: 1,
-                    post_aggregation_sort_count: 1,
-                    sort_first: None,
-                },
-            ))
-        }
-    }
 }
 
 // Public API - unsorted (fastest)
