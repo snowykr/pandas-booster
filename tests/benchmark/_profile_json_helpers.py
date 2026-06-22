@@ -39,7 +39,7 @@ def make_multi_key_sorted_breakdown(benchmark_module) -> dict:
     stats = benchmark_module.compute_stats([0.1])
     return {
         "profile_kind": "multi_key_sorted",
-        "route": "sort_first",
+        "route": "hash_first",
         "execution": "booster->rust.profile_groupby_multi_max_f64_sorted",
         "phases": dict.fromkeys(REQUIRED_MULTI_KEY_SORTED_PHASES, stats),
         "rust_total_s": 0.7,
@@ -48,5 +48,7 @@ def make_multi_key_sorted_breakdown(benchmark_module) -> dict:
         "partial_group_total": 900,
         "final_group_count": 900,
         "partial_to_final_ratio": 1.0,
-        "sort_first_segment_scan_count": 1,
+        "sort_first_segment_scan_count": 0,
+        "selected_sort_strategy": "packed_u64",
+        "sort_key_bit_widths": [9, 9, 9],
     }

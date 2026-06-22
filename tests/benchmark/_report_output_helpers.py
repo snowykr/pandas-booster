@@ -97,6 +97,7 @@ def _make_breakdown(
     stats = benchmark_module.compute_stats([0.1])
     return {
         "execution": execution,
+        "route": "hash_first",
         "phases": {
             "prepare_inputs_s": stats,
             "local_build_s": stats,
@@ -115,4 +116,7 @@ def _make_breakdown(
         "partial_group_total": 1,
         "final_group_count": 1,
         "partial_to_final_ratio": 1.0,
+        "sort_first_segment_scan_count": 0,
+        "selected_sort_strategy": "not_applicable",
+        "sort_key_bit_widths": [],
     }
