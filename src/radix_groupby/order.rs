@@ -1,6 +1,6 @@
 use crate::radix_sort::{
-    i64_to_sortable_u64, radix_sort_perm_by_u32, radix_sort_perm_by_u64,
-    radix_sort_perm_by_u64_for_indices_par,
+    multi_key_sort_perm_with_profile, multi_key_sort_perm_with_proof, radix_sort_perm_by_u32,
+    radix_sort_perm_by_u64,
 };
 
 use super::partition::SMALL_DIRECT_THRESHOLD_ELEMS;
@@ -8,11 +8,13 @@ use super::result::GroupByMultiResult;
 
 const RADIX_SORT_THRESHOLD: usize = 2048;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub(super) struct SortPhaseProfile {
     pub sort_key_construction_s: f64,
     pub radix_sort_s: f64,
     pub sorted_materialization_s: f64,
+    pub selected_sort_strategy: &'static str,
+    pub sort_key_bit_widths: Vec<u32>,
 }
 
 pub(super) fn reorder_result_by_first_seen_u32<V: Copy>(
@@ -107,14 +109,7 @@ pub(super) fn sort_groupby_result<V: Copy>(result: &mut GroupByMultiResult<V>) {
             k_i.cmp(k_j).then(i.cmp(&j))
         });
     } else {
-        for col in (0..n_keys).rev() {
-            let mut col_keys = Vec::with_capacity(n_groups);
-            for group in 0..n_groups {
-                let key = keys_flat[group * n_keys + col];
-                col_keys.push(i64_to_sortable_u64(key));
-            }
-            perm = radix_sort_perm_by_u64_for_indices_par(&col_keys, &perm);
-        }
+        perm = multi_key_sort_perm_with_proof(keys_flat, n_keys).0;
     }
 
     if n_groups.saturating_mul(n_keys) > SMALL_DIRECT_THRESHOLD_ELEMS {
@@ -141,7 +136,10 @@ pub(super) fn sort_groupby_result_profiled<V: Copy>(
     use std::time::Instant;
 
     if result.values.is_empty() {
-        return SortPhaseProfile::default();
+        return SortPhaseProfile {
+            selected_sort_strategy: "empty",
+            ..SortPhaseProfile::default()
+        };
     }
 
     let n_keys = result.n_keys;
@@ -153,6 +151,8 @@ pub(super) fn sort_groupby_result_profiled<V: Copy>(
     let mut perm: Vec<usize> = (0..n_groups).collect();
     let mut sort_key_construction_s = 0.0;
     let mut radix_sort_s = 0.0;
+    let mut selected_sort_strategy = "small_comparator";
+    let mut sort_key_bit_widths = Vec::new();
 
     if n_groups < RADIX_SORT_THRESHOLD {
         let sort_start = Instant::now();
@@ -163,19 +163,13 @@ pub(super) fn sort_groupby_result_profiled<V: Copy>(
         });
         radix_sort_s = sort_start.elapsed().as_secs_f64();
     } else {
-        for col in (0..n_keys).rev() {
-            let key_start = Instant::now();
-            let mut col_keys = Vec::with_capacity(n_groups);
-            for group in 0..n_groups {
-                let key = keys_flat[group * n_keys + col];
-                col_keys.push(i64_to_sortable_u64(key));
-            }
-            sort_key_construction_s += key_start.elapsed().as_secs_f64();
-
-            let sort_start = Instant::now();
-            perm = radix_sort_perm_by_u64_for_indices_par(&col_keys, &perm);
-            radix_sort_s += sort_start.elapsed().as_secs_f64();
-        }
+        let (sorted_perm, proof, construction_s, sort_s) =
+            multi_key_sort_perm_with_profile(keys_flat, n_keys);
+        sort_key_construction_s += construction_s;
+        radix_sort_s += sort_s;
+        selected_sort_strategy = proof.strategy.label();
+        sort_key_bit_widths = proof.bit_widths;
+        perm = sorted_perm;
     }
 
     if n_groups.saturating_mul(n_keys) > SMALL_DIRECT_THRESHOLD_ELEMS {
@@ -184,6 +178,8 @@ pub(super) fn sort_groupby_result_profiled<V: Copy>(
             sort_key_construction_s,
             radix_sort_s,
             sorted_materialization_s: 0.0,
+            selected_sort_strategy,
+            sort_key_bit_widths,
         };
     }
 
@@ -204,5 +200,7 @@ pub(super) fn sort_groupby_result_profiled<V: Copy>(
         sort_key_construction_s,
         radix_sort_s,
         sorted_materialization_s: materialize_start.elapsed().as_secs_f64(),
+        selected_sort_strategy,
+        sort_key_bit_widths,
     }
 }

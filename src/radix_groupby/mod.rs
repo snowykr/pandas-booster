@@ -25,6 +25,8 @@ mod api_stats_tests;
 #[cfg(test)]
 mod dispatch_tests;
 #[cfg(test)]
+mod order_sort_strategy_tests;
+#[cfg(test)]
 mod order_tests;
 #[cfg(test)]
 mod partition_tests;
