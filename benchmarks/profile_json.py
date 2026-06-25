@@ -174,6 +174,10 @@ def measure_booster_single_key_breakdown(
     }
 
 
+def _profile_evidence_verifies_correctness(config: dict[str, Any]) -> bool:
+    return float(config.get("nan_rate", 0.0)) == 0.0
+
+
 def collect_stats_evidence(
     n_samples: int,
     cardinality: str,
@@ -190,48 +194,51 @@ def collect_stats_evidence(
     if not evidence_aggs:
         return evidence
 
-    preset_names: list[str] = []
+    base_preset_names: list[str] = []
     if cardinality in {"all", "standard"}:
-        preset_names.append(STATS_EVIDENCE_PRESETS["standard"])
+        base_preset_names.append(STATS_EVIDENCE_PRESETS["standard"])
     if cardinality in {"all", "high"}:
-        preset_names.append(STATS_EVIDENCE_PRESETS["high"])
-    if "median" in evidence_aggs:
-        median_diagnostic_presets = [
-            "median_dense_1key_5m_1k",
-            "median_sparse_gap_1key_5m_1k",
-            "median_sparse_gap_1key_5m_10k",
-            "median_sparse_gap_1key_5m_50k",
-            "median_near_unique_1key_5m",
-            "median_skewed_zipf_1key_5m",
-            "median_skewed_dominant_1key_5m",
-            "median_nan_dense_1key_5m_1k_p0",
-            "median_nan_dense_1key_5m_1k_p50",
-            "median_nan_dense_1key_5m_1k_p95",
-            "median_nan_dense_1key_5m_1k_p100",
-            "median_boundary_rows_100k_1k",
-            "median_boundary_rows_300k_1k",
-            "median_boundary_rows_1m_1k",
-            "median_negative_huge_sparse_1key",
-            "median_false_low_sample_tail_unique",
-        ]
-        for preset_name in median_diagnostic_presets:
-            if preset_name not in preset_names:
-                preset_names.append(preset_name)
+        base_preset_names.append(STATS_EVIDENCE_PRESETS["high"])
+    median_diagnostic_presets = [
+        "median_dense_1key_5m_1k",
+        "median_sparse_gap_1key_5m_1k",
+        "median_sparse_gap_1key_5m_10k",
+        "median_sparse_gap_1key_5m_50k",
+        "median_near_unique_1key_5m",
+        "median_skewed_zipf_1key_5m",
+        "median_skewed_dominant_1key_5m",
+        "median_nan_dense_1key_5m_1k_p0",
+        "median_nan_dense_1key_5m_1k_p50",
+        "median_nan_dense_1key_5m_1k_p95",
+        "median_nan_dense_1key_5m_1k_p100",
+        "median_boundary_rows_100k_1k",
+        "median_boundary_rows_300k_1k",
+        "median_boundary_rows_1m_1k",
+        "median_negative_huge_sparse_1key",
+        "median_false_low_sample_tail_unique",
+    ]
 
     sorts = resolve_sorts(sort_mode)
 
-    for preset_name in preset_names:
-        config = PRESETS[preset_name]
-        key_cols = [col for col, _ in config["key_configs"]]
-        workload = stats_evidence_workload_label(preset_name)
-        for agg in evidence_aggs:
+    for agg in evidence_aggs:
+        preset_names = list(base_preset_names)
+        if agg == "median":
+            preset_names.extend(
+                preset_name
+                for preset_name in median_diagnostic_presets
+                if preset_name not in preset_names
+            )
+        for preset_name in preset_names:
+            config = PRESETS[preset_name]
+            key_cols = [col for col, _ in config["key_configs"]]
+            workload = stats_evidence_workload_label(preset_name)
             for sort in sorts:
                 result = benchmark_single_func(
                     preset_name,
                     agg=agg,
                     sort=sort,
                     n_samples=n_samples,
-                    verify_correctness=True,
+                    verify_correctness=_profile_evidence_verifies_correctness(config),
                 )
                 df = generate_multi_key_dataset_func(**config)
                 execution = {

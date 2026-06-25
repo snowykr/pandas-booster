@@ -148,16 +148,31 @@ def collect_stats_evidence(
     cardinality: str,
     sort_mode: str,
     selected_aggs: list[str] | None = None,
+    *,
+    benchmark_single_func=None,
+    generate_multi_key_dataset_func=None,
+    describe_booster_execution_func=None,
+    measure_booster_single_key_breakdown_func=None,
 ):
+    benchmark_single_func = benchmark_single_func or benchmark_single
+    generate_multi_key_dataset_func = (
+        generate_multi_key_dataset_func or generate_multi_key_dataset
+    )
+    describe_booster_execution_func = (
+        describe_booster_execution_func or describe_booster_execution
+    )
+    measure_booster_single_key_breakdown_func = (
+        measure_booster_single_key_breakdown_func or measure_booster_single_key_breakdown
+    )
     return _collect_stats_evidence(
         n_samples,
         cardinality,
         sort_mode,
         selected_aggs,
-        benchmark_single_func=benchmark_single,
-        generate_multi_key_dataset_func=generate_multi_key_dataset,
-        describe_booster_execution_func=describe_booster_execution,
-        measure_booster_single_key_breakdown_func=measure_booster_single_key_breakdown,
+        benchmark_single_func=benchmark_single_func,
+        generate_multi_key_dataset_func=generate_multi_key_dataset_func,
+        describe_booster_execution_func=describe_booster_execution_func,
+        measure_booster_single_key_breakdown_func=measure_booster_single_key_breakdown_func,
     )
 
 

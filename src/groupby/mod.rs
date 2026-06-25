@@ -19,6 +19,8 @@ mod profile;
 mod reduce;
 mod result;
 mod routing;
+mod routing_median;
+mod routing_median_estimates;
 mod scalar_firstseen;
 mod sorted_median;
 mod sorted_median_dense;

@@ -11,7 +11,7 @@ K = Sequence[I]
 
 RF = tuple[I, F]
 RI = tuple[I, I]
-P = dict[str, float | int]
+P = dict[str, float | int | str]
 PReturnF64 = tuple[I, F, P]
 
 MK = list[I]
