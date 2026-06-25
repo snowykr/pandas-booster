@@ -83,6 +83,8 @@ def _make_breakdown(
     stats = benchmark_module.compute_stats([0.1])
     return {
         "execution": execution,
+        "route_kind": "direct_dense" if "median" in execution else "",
+        "route_reason": "dense_span_memory_safe" if "median" in execution else "",
         "phases": {
             "prepare_inputs_s": stats,
             "unique_build_s": stats,

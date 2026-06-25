@@ -118,7 +118,7 @@ def test_readme_documents_explicit_smoke_reports_separately_from_default_full_ge
         "# Run the checked-in publication-quality reports for all supported aggregations",
         "python benchmarks/generate_docs.py --samples 20 --cardinality all --sort-mode all",
         "# Run lightweight smoke reports when iterating locally",
-        "python benchmarks/generate_docs.py --samples 1 --cardinality standard --sort-mode sorted",
+        "python benchmarks/generate_docs.py --samples 2 --cardinality standard --sort-mode sorted",
         "# Run default sum benchmark only (standard + high)",
         "python benchmarks/benchmark.py --samples 20 --output benchmarks/reports",
     )

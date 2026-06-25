@@ -186,9 +186,10 @@ fn sorted_median_large_dense_standard_cardinality_uses_direct_engine() {
 }
 
 #[test]
-fn sorted_median_large_sparse_standard_cardinality_keeps_existing_route() {
+fn sorted_median_large_sparse_standard_cardinality_uses_sparse_direct_engine() {
     // Given: low-cardinality rows with a sparse i64 key range where dense
-    // offset addressing would allocate far more groups than are present.
+    // offset addressing would allocate far more groups than are present, but
+    // exact sparse remapping is still memory-safe.
     let n = 300_001usize;
     let keys: Vec<i64> = (0..n)
         .map(|row| ((row % 1_000) as i64).saturating_mul(1_000_000_000))
@@ -196,15 +197,16 @@ fn sorted_median_large_sparse_standard_cardinality_keeps_existing_route() {
     let values: Vec<f64> = (0..n).map(|row| row as f64).collect();
 
     assert!(!should_use_partitioned_median_engine(&keys));
-    assert!(!should_use_direct_sorted_median_engine(&keys));
+    assert!(should_use_direct_sorted_median_engine(&keys));
 
     reset_sorted_median_direct_call_count();
 
     // When: the public sorted median route runs.
     let result = parallel_groupby_median_f64_sorted(&keys, &values).unwrap();
 
-    // Then: it avoids the dense direct path and still returns sorted keys.
-    assert_eq!(sorted_median_direct_call_count(), 0);
+    // Then: it avoids dense offset addressing while still using the direct
+    // sparse remap path and returning sorted keys.
+    assert_eq!(sorted_median_direct_call_count(), 1);
     assert_eq!(result.keys.len(), 1_000);
     assert_eq!(result.keys[0], 0);
     assert_eq!(result.keys[999], 999_000_000_000);
@@ -213,9 +215,11 @@ fn sorted_median_large_sparse_standard_cardinality_keeps_existing_route() {
 #[test]
 fn sorted_median_high_cardinality_keeps_partitioned_route() {
     // Given: high-cardinality inputs that satisfy the partitioned-engine
-    // predicate.
+    // predicate and whose sparse span makes dense direct memory-unsafe.
     let n = 20_000usize;
-    let keys: Vec<i64> = (0..20_000).map(i64::from).collect();
+    let keys: Vec<i64> = (0..20_000)
+        .map(|row| i64::from(row) * 1_000_000_000)
+        .collect();
     let values_f64: Vec<f64> = (0..20_000).map(f64::from).collect();
     let values_i64: Vec<i64> = (0..20_000).map(i64::from).collect();
 
@@ -234,8 +238,8 @@ fn sorted_median_high_cardinality_keeps_partitioned_route() {
     assert_eq!(result_i64.keys.len(), n);
     assert_eq!(result_f64.keys[0], 0);
     assert_eq!(result_i64.keys[0], 0);
-    assert_eq!(result_f64.keys[n - 1], 19_999);
-    assert_eq!(result_i64.keys[n - 1], 19_999);
+    assert_eq!(result_f64.keys[n - 1], 19_999_000_000_000);
+    assert_eq!(result_i64.keys[n - 1], 19_999_000_000_000);
 }
 
 #[test]

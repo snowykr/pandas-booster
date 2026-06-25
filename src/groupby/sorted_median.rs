@@ -4,6 +4,7 @@ use rayon::prelude::*;
 use crate::aggregation::median::{median_f64_from_mut_slice, median_i64_from_mut_slice};
 
 use super::result::GroupByResultF64;
+use super::routing::SortedMedianRouteKind;
 use super::sorted_median_dense::{groupby_median_dense_direct_with_stats, DenseKeyRange};
 use super::sorted_median_sparse::groupby_median_sparse_direct_with_stats;
 
@@ -66,6 +67,7 @@ impl SortedMedianValue for i64 {
     }
 }
 
+#[cfg(test)]
 pub(super) fn groupby_median_f64_sorted_direct(
     keys: &[i64],
     values: &[f64],
@@ -74,6 +76,7 @@ pub(super) fn groupby_median_f64_sorted_direct(
     Ok(groupby_median_sorted_direct_with_stats(keys, values)?.result)
 }
 
+#[cfg(test)]
 pub(super) fn groupby_median_i64_sorted_direct(
     keys: &[i64],
     values: &[i64],
@@ -81,14 +84,79 @@ pub(super) fn groupby_median_i64_sorted_direct(
     record_sorted_median_direct_call();
     Ok(groupby_median_sorted_direct_with_stats(keys, values)?.result)
 }
+pub(super) fn groupby_median_f64_sorted_with_decision(
+    keys: &[i64],
+    values: &[f64],
+    decision: &super::routing::SortedMedianRouteDecision,
+) -> PyResult<GroupByResultF64> {
+    record_sorted_median_direct_call();
+    Ok(groupby_median_sorted_direct_with_decision(keys, values, decision)?.result)
+}
 
+pub(super) fn groupby_median_i64_sorted_with_decision(
+    keys: &[i64],
+    values: &[i64],
+    decision: &super::routing::SortedMedianRouteDecision,
+) -> PyResult<GroupByResultF64> {
+    record_sorted_median_direct_call();
+    Ok(groupby_median_sorted_direct_with_decision(keys, values, decision)?.result)
+}
+
+pub(super) fn groupby_median_f64_sorted_with_decision_and_stats(
+    keys: &[i64],
+    values: &[f64],
+    decision: &super::routing::SortedMedianRouteDecision,
+) -> PyResult<ProfiledSortedMedianDirect> {
+    groupby_median_sorted_direct_with_decision(keys, values, decision)
+}
+
+#[cfg(test)]
 pub(super) fn groupby_median_f64_sorted_direct_with_stats(
     keys: &[i64],
     values: &[f64],
 ) -> PyResult<ProfiledSortedMedianDirect> {
     groupby_median_sorted_direct_with_stats(keys, values)
 }
+fn groupby_median_sorted_direct_with_decision<T>(
+    keys: &[i64],
+    values: &[T],
+    decision: &super::routing::SortedMedianRouteDecision,
+) -> PyResult<ProfiledSortedMedianDirect>
+where
+    T: SortedMedianValue,
+{
+    if keys.len() != values.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "keys and values must have same length",
+        ));
+    }
 
+    if keys.is_empty() {
+        return Ok(ProfiledSortedMedianDirect {
+            result: GroupByResultF64 {
+                keys: Vec::new(),
+                values: Vec::new(),
+            },
+            stats: SortedMedianDirectStats::default(),
+        });
+    }
+
+    match decision.kind {
+        SortedMedianRouteKind::DirectDense => {
+            let min_key = decision.dense_min_key.ok_or_else(remap_incomplete_error)?;
+            let len = decision.dense_span.ok_or_else(remap_incomplete_error)?;
+            groupby_median_dense_direct_with_stats(keys, values, DenseKeyRange::new(min_key, len))
+        }
+        SortedMedianRouteKind::DirectSparse => {
+            groupby_median_sparse_direct_with_stats(keys, values)
+        }
+        _ => Err(pyo3::exceptions::PyRuntimeError::new_err(
+            "sorted median route decision does not select direct execution",
+        )),
+    }
+}
+
+#[cfg(test)]
 fn groupby_median_sorted_direct_with_stats<T>(
     keys: &[i64],
     values: &[T],

@@ -80,6 +80,8 @@ pub(crate) fn build_single_profile_dict<'py>(
     profile_dict.set_item("reorder_s", profile.reorder_s)?;
     profile_dict.set_item("materialize_s", materialize_s)?;
     profile_dict.set_item("rust_total_s", rust_total_s)?;
+    profile_dict.set_item("route_kind", profile.route_kind.unwrap_or(""))?;
+    profile_dict.set_item("route_reason", profile.route_reason.unwrap_or(""))?;
     profile_dict.set_item("partial_group_total", partial_group_total)?;
     profile_dict.set_item("final_group_count", final_group_count)?;
     profile_dict.set_item("partial_to_final_ratio", partial_to_final_ratio)?;

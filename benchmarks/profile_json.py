@@ -96,6 +96,8 @@ def measure_booster_single_key_breakdown(
     partial_group_total = 0
     final_group_count = 0
     partial_to_final_ratio = 0.0
+    route_kind = ""
+    route_reason = ""
 
     for _ in range(n_samples):
         total_start = time.perf_counter()
@@ -126,6 +128,8 @@ def measure_booster_single_key_breakdown(
         partial_group_total = int(profile["partial_group_total"])
         final_group_count = int(profile["final_group_count"])
         partial_to_final_ratio = float(profile["partial_to_final_ratio"])
+        route_kind = str(profile.get("route_kind", ""))
+        route_reason = str(profile.get("route_reason", ""))
 
         normalize_start = time.perf_counter()
         result_values_arr = abi_compat.normalize_result_values(
@@ -165,6 +169,8 @@ def measure_booster_single_key_breakdown(
         "partial_group_total": partial_group_total,
         "final_group_count": final_group_count,
         "partial_to_final_ratio": partial_to_final_ratio,
+        "route_kind": route_kind,
+        "route_reason": route_reason,
     }
 
 
@@ -189,6 +195,28 @@ def collect_stats_evidence(
         preset_names.append(STATS_EVIDENCE_PRESETS["standard"])
     if cardinality in {"all", "high"}:
         preset_names.append(STATS_EVIDENCE_PRESETS["high"])
+    if "median" in evidence_aggs:
+        median_diagnostic_presets = [
+            "median_dense_1key_5m_1k",
+            "median_sparse_gap_1key_5m_1k",
+            "median_sparse_gap_1key_5m_10k",
+            "median_sparse_gap_1key_5m_50k",
+            "median_near_unique_1key_5m",
+            "median_skewed_zipf_1key_5m",
+            "median_skewed_dominant_1key_5m",
+            "median_nan_dense_1key_5m_1k_p0",
+            "median_nan_dense_1key_5m_1k_p50",
+            "median_nan_dense_1key_5m_1k_p95",
+            "median_nan_dense_1key_5m_1k_p100",
+            "median_boundary_rows_100k_1k",
+            "median_boundary_rows_300k_1k",
+            "median_boundary_rows_1m_1k",
+            "median_negative_huge_sparse_1key",
+            "median_false_low_sample_tail_unique",
+        ]
+        for preset_name in median_diagnostic_presets:
+            if preset_name not in preset_names:
+                preset_names.append(preset_name)
 
     sorts = resolve_sorts(sort_mode)
 

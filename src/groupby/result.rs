@@ -17,6 +17,8 @@ pub struct SingleKeyPhaseProfile {
     pub buffer_setup_s: f64,
     pub scatter_s: f64,
     pub median_select_s: f64,
+    pub route_kind: Option<&'static str>,
+    pub route_reason: Option<&'static str>,
     pub partial_group_total: usize,
     pub final_group_count: usize,
 }
@@ -41,6 +43,8 @@ impl SingleKeyPhaseProfile {
             buffer_setup_s: 0.0,
             scatter_s: 0.0,
             median_select_s: 0.0,
+            route_kind: None,
+            route_reason: None,
             partial_group_total,
             final_group_count,
         }

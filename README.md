@@ -259,7 +259,7 @@ uv run --with "maturin>=1.13,<2.0" maturin develop --release
 python benchmarks/generate_docs.py --samples 20 --cardinality all --sort-mode all
 
 # Run lightweight smoke reports when iterating locally
-python benchmarks/generate_docs.py --samples 1 --cardinality standard --sort-mode sorted
+python benchmarks/generate_docs.py --samples 2 --cardinality standard --sort-mode sorted
 
 # Run default sum benchmark only (standard + high)
 python benchmarks/benchmark.py --samples 20 --output benchmarks/reports
@@ -272,7 +272,7 @@ python benchmarks/benchmark.py --agg median --samples 20 --output benchmarks/rep
 python benchmarks/benchmark.py --agg std --agg var --samples 20 --profile-json profile.json
 
 # Save selected median phase-profile evidence as JSON
-python benchmarks/benchmark.py --agg median --samples 1 --profile-json profile-median.json
+python benchmarks/benchmark.py --agg median --samples 2 --profile-json profile-median.json
 
 # Include threshold diagnostics as well
 python benchmarks/benchmark.py --cardinality all --diagnostic threshold --sort-mode unsorted --samples 20 --output benchmarks/reports
@@ -430,7 +430,7 @@ python benchmarks/generate_docs.py
 python benchmarks/benchmark.py --agg std --agg var --profile-json profile.json
 
 # Save selected median profile evidence to JSON while iterating locally
-python benchmarks/benchmark.py --agg median --samples 1 --profile-json profile-median.json
+python benchmarks/benchmark.py --agg median --samples 2 --profile-json profile-median.json
 
 # Adjust sample count (applies to both cold and warm; default: 5)
 python benchmarks/benchmark.py --samples 20

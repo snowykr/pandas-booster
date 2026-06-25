@@ -133,6 +133,126 @@ PRESETS: dict[str, dict] = {
         "value_dtype": "float64",
         "seed": 42,
     },
+    # Median route diagnostics: keep dense, sparse, skewed, NaN-heavy, and
+    # adversarial shapes separate so sorted single-key median reports cannot
+    # collapse dense-coded wins into a generic median claim.
+    "median_dense_1key_5m_1k": {
+        "n_rows": 5_000_000,
+        "key_configs": [("key", 1000)],
+        "value_dtype": "float64",
+        "seed": 42,
+        "key_generation": "dense",
+    },
+    "median_sparse_gap_1key_5m_1k": {
+        "n_rows": 5_000_000,
+        "key_configs": [("key", 1000)],
+        "value_dtype": "float64",
+        "seed": 42,
+        "key_generation": "sparse_gap",
+        "key_gap": 1_000_000_000,
+    },
+    "median_sparse_gap_1key_5m_10k": {
+        "n_rows": 5_000_000,
+        "key_configs": [("key", 10_000)],
+        "value_dtype": "float64",
+        "seed": 42,
+        "key_generation": "sparse_gap",
+        "key_gap": 1_000_000_000,
+    },
+    "median_sparse_gap_1key_5m_50k": {
+        "n_rows": 5_000_000,
+        "key_configs": [("key", 50_000)],
+        "value_dtype": "float64",
+        "seed": 42,
+        "key_generation": "sparse_gap",
+        "key_gap": 1_000_000_000,
+    },
+    "median_near_unique_1key_5m": {
+        "n_rows": 5_000_000,
+        "key_configs": [("key", 5_000_000)],
+        "value_dtype": "float64",
+        "seed": 42,
+        "key_generation": "dense",
+    },
+    "median_skewed_zipf_1key_5m": {
+        "n_rows": 5_000_000,
+        "key_configs": [("key", 10_000)],
+        "value_dtype": "float64",
+        "seed": 42,
+        "key_generation": "zipf",
+    },
+    "median_skewed_dominant_1key_5m": {
+        "n_rows": 5_000_000,
+        "key_configs": [("key", 10_000)],
+        "value_dtype": "float64",
+        "seed": 42,
+        "key_generation": "dominant_tail",
+    },
+    "median_nan_dense_1key_5m_1k_p0": {
+        "n_rows": 5_000_000,
+        "key_configs": [("key", 1000)],
+        "value_dtype": "float64",
+        "seed": 42,
+        "nan_rate": 0.0,
+        "key_generation": "dense",
+    },
+    "median_nan_dense_1key_5m_1k_p50": {
+        "n_rows": 5_000_000,
+        "key_configs": [("key", 1000)],
+        "value_dtype": "float64",
+        "seed": 42,
+        "nan_rate": 0.50,
+        "key_generation": "dense",
+    },
+    "median_nan_dense_1key_5m_1k_p95": {
+        "n_rows": 5_000_000,
+        "key_configs": [("key", 1000)],
+        "value_dtype": "float64",
+        "seed": 42,
+        "nan_rate": 0.95,
+        "key_generation": "dense",
+    },
+    "median_nan_dense_1key_5m_1k_p100": {
+        "n_rows": 5_000_000,
+        "key_configs": [("key", 1000)],
+        "value_dtype": "float64",
+        "seed": 42,
+        "nan_rate": 1.0,
+        "key_generation": "dense",
+    },
+    "median_boundary_rows_100k_1k": {
+        "n_rows": 100_000,
+        "key_configs": [("key", 1000)],
+        "value_dtype": "float64",
+        "seed": 42,
+    },
+    "median_boundary_rows_300k_1k": {
+        "n_rows": 300_000,
+        "key_configs": [("key", 1000)],
+        "value_dtype": "float64",
+        "seed": 42,
+    },
+    "median_boundary_rows_1m_1k": {
+        "n_rows": 1_000_000,
+        "key_configs": [("key", 1000)],
+        "value_dtype": "float64",
+        "seed": 42,
+    },
+    "median_negative_huge_sparse_1key": {
+        "n_rows": 5_000_000,
+        "key_configs": [("key", 1000)],
+        "value_dtype": "float64",
+        "seed": 42,
+        "key_generation": "negative_huge_sparse",
+        "key_gap": 1_000_000_000,
+    },
+    "median_false_low_sample_tail_unique": {
+        "n_rows": 5_000_000,
+        "key_configs": [("key", 500_000)],
+        "value_dtype": "float64",
+        "seed": 42,
+        "key_generation": "false_low_sample_tail_unique",
+    },
 }
 
 
@@ -142,6 +262,16 @@ def generate_multi_key_dataset(
     value_dtype: Literal["float64", "int64"] = "float64",
     seed: int = 42,
     value_col_name: str = "value",
+    key_generation: Literal[
+        "dense",
+        "sparse_gap",
+        "zipf",
+        "dominant_tail",
+        "negative_huge_sparse",
+        "false_low_sample_tail_unique",
+    ] = "dense",
+    key_gap: int = 1,
+    nan_rate: float = 0.0,
 ) -> pd.DataFrame:
     """Generate a reproducible dataset for multi-key groupby benchmarks.
 
@@ -173,15 +303,62 @@ def generate_multi_key_dataset(
 
     # Generate key columns
     for col_name, n_unique in key_configs:
-        data[col_name] = np.random.randint(0, n_unique, size=n_rows, dtype=np.int64)
+        data[col_name] = _generate_key_column(
+            n_rows=n_rows,
+            n_unique=n_unique,
+            key_generation=key_generation,
+            key_gap=key_gap,
+        )
 
     # Generate value column
     if value_dtype == "float64":
-        data[value_col_name] = np.random.random(size=n_rows) * 1000
+        values = np.random.random(size=n_rows) * 1000
+        if nan_rate:
+            nan_mask = np.random.random(size=n_rows) < nan_rate
+            values[nan_mask] = np.nan
+        data[value_col_name] = values
     else:
         data[value_col_name] = np.random.randint(0, 10000, size=n_rows, dtype=np.int64)
 
     return pd.DataFrame(data)
+
+
+def _generate_key_column(
+    *,
+    n_rows: int,
+    n_unique: int,
+    key_generation: str,
+    key_gap: int,
+) -> np.ndarray:
+    if key_generation == "dense":
+        return np.random.randint(0, n_unique, size=n_rows, dtype=np.int64)
+
+    if key_generation == "sparse_gap":
+        base = np.random.randint(0, n_unique, size=n_rows, dtype=np.int64)
+        return base * np.int64(key_gap)
+
+    if key_generation == "negative_huge_sparse":
+        base = np.random.randint(0, n_unique, size=n_rows, dtype=np.int64)
+        return base * np.int64(key_gap) - np.int64(key_gap * (n_unique // 2))
+
+    if key_generation == "zipf":
+        raw = np.random.zipf(1.25, size=n_rows).astype(np.int64)
+        return (raw - 1) % np.int64(n_unique)
+
+    if key_generation == "dominant_tail":
+        dominant_mask = np.random.random(size=n_rows) < 0.90
+        tail = np.random.randint(1, n_unique, size=n_rows, dtype=np.int64)
+        return np.where(dominant_mask, np.int64(0), tail)
+
+    if key_generation == "false_low_sample_tail_unique":
+        keys = np.random.randint(0, min(n_unique, 1024), size=n_rows, dtype=np.int64)
+        tail_start = n_rows // 2
+        tail_len = n_rows - tail_start
+        if tail_len > 0:
+            keys[tail_start:] = np.arange(tail_len, dtype=np.int64) % np.int64(n_unique)
+        return keys
+
+    raise ValueError(f"Unsupported key_generation: {key_generation!r}")
 
 
 def get_dataset_info(df: pd.DataFrame, key_cols: list[str]) -> dict:

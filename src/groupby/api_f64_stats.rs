@@ -11,13 +11,11 @@ use super::profile::{
     profile_parallel_groupby_partitioned_unordered_impl, profile_parallel_groupby_std_var_impl,
 };
 use super::result::{GroupByResultF64, ProfiledGroupByResult, SingleKeyPhaseProfile};
-use super::routing::{
-    should_use_direct_sorted_median_engine, should_use_partitioned_median_engine,
-};
+use super::routing::{sorted_median_route_decision, SortedMedianRouteKind, SortedMedianValueKind};
 use super::scalar_firstseen::{
     parallel_groupby_firstseen_legacy_low_u32, parallel_groupby_firstseen_legacy_low_u64,
 };
-use super::sorted_median::groupby_median_f64_sorted_direct_with_stats;
+use super::sorted_median::groupby_median_f64_sorted_with_decision_and_stats;
 
 fn reorder_profiled_result(
     mut profiled: ProfiledGroupByResult<f64>,
@@ -126,8 +124,12 @@ pub fn profile_parallel_groupby_median_f64_sorted(
     keys: &[i64],
     values: &[f64],
 ) -> PyResult<ProfiledGroupByResult<f64>> {
-    if should_use_direct_sorted_median_engine(keys) {
-        let profiled = groupby_median_f64_sorted_direct_with_stats(keys, values)?;
+    let decision = sorted_median_route_decision(keys, SortedMedianValueKind::F64);
+    if matches!(
+        decision.kind,
+        SortedMedianRouteKind::DirectDense | SortedMedianRouteKind::DirectSparse
+    ) {
+        let profiled = groupby_median_f64_sorted_with_decision_and_stats(keys, values, &decision)?;
 
         return Ok(ProfiledGroupByResult {
             result: profiled.result,
@@ -142,35 +144,40 @@ pub fn profile_parallel_groupby_median_f64_sorted(
                 buffer_setup_s: profiled.stats.buffer_setup_s,
                 scatter_s: profiled.stats.scatter_s,
                 median_select_s: profiled.stats.median_select_s,
+                route_kind: Some(decision.kind.as_str()),
+                route_reason: Some(decision.reason.as_str()),
                 partial_group_total: profiled.stats.partial_group_total,
                 final_group_count: profiled.stats.final_group_count,
             },
         });
     }
 
-    if should_use_partitioned_median_engine(keys) {
+    let mut profiled = if matches!(decision.kind, SortedMedianRouteKind::PartitionedFallback) {
         if keys.len() <= u32::MAX as usize {
             reorder_profiled_result(profile_parallel_groupby_partitioned_unordered_impl::<
                 f64,
                 MedianAggF64,
                 f64,
                 u32,
-            >(keys, values)?)
+            >(keys, values)?)?
         } else {
             reorder_profiled_result(profile_parallel_groupby_partitioned_unordered_impl::<
                 f64,
                 MedianAggF64,
                 f64,
                 u64,
-            >(keys, values)?)
+            >(keys, values)?)?
         }
     } else {
         reorder_profiled_result(profile_parallel_groupby_deterministic::<
             f64,
             MedianAggF64,
             f64,
-        >(keys, values)?)
-    }
+        >(keys, values)?)?
+    };
+    profiled.profile.route_kind = Some(decision.kind.as_str());
+    profiled.profile.route_reason = Some(decision.reason.as_str());
+    Ok(profiled)
 }
 
 pub fn parallel_groupby_min_f64(keys: &[i64], values: &[f64]) -> PyResult<GroupByResultF64> {

@@ -18,6 +18,8 @@ fn single_profile_dict_counts_direct_phases_and_conversion_once() -> PyResult<()
             buffer_setup_s: 2.0,
             scatter_s: 3.0,
             median_select_s: 4.0,
+            route_kind: Some("direct_sparse"),
+            route_reason: Some("sparse_exact_low_cardinality_memory_safe"),
             partial_group_total: 2,
             final_group_count: 2,
         };
@@ -36,9 +38,20 @@ fn single_profile_dict_counts_direct_phases_and_conversion_once() -> PyResult<()
             .expect("buffer_setup_s exists")
             .extract::<f64>()?;
 
+        let route_kind = dict
+            .get_item("route_kind")?
+            .expect("route_kind exists")
+            .extract::<String>()?;
+        let route_reason = dict
+            .get_item("route_reason")?
+            .expect("route_reason exists")
+            .extract::<String>()?;
+
         assert_eq!(rust_total_s, 12.5);
         assert_eq!(materialize_s, 0.5);
         assert_eq!(buffer_setup_s, 2.0);
+        assert_eq!(route_kind, "direct_sparse");
+        assert_eq!(route_reason, "sparse_exact_low_cardinality_memory_safe");
         Ok(())
     })
 }

@@ -2,7 +2,8 @@ use pyo3::prelude::*;
 use std::time::Instant;
 
 use super::result::GroupByResultF64;
-use super::routing::{dense_sorted_median_key_range_len, DIRECT_SORTED_MEDIAN_MAX_DENSE_KEY_RANGE};
+#[cfg(test)]
+use super::routing::dense_sorted_median_key_range_len;
 use super::sorted_median::{
     checked_total, count_overflow, materialize_group_medians_from_pairs, remap_incomplete_error,
     ProfiledSortedMedianDirect, SortedMedianDirectStats, SortedMedianValue,
@@ -18,6 +19,10 @@ pub(super) struct DenseKeyRange {
 }
 
 impl DenseKeyRange {
+    pub(super) fn new(min_key: i64, len: usize) -> Self {
+        Self { min_key, len }
+    }
+    #[cfg(test)]
     pub(super) fn from_keys(keys: &[i64]) -> Option<Self> {
         let (&first, rest) = keys.split_first()?;
         let mut min_key = first;
@@ -29,9 +34,6 @@ impl DenseKeyRange {
         }
 
         let len = dense_sorted_median_key_range_len(keys)?;
-        if len > DIRECT_SORTED_MEDIAN_MAX_DENSE_KEY_RANGE {
-            return None;
-        }
 
         Some(Self { min_key, len })
     }
