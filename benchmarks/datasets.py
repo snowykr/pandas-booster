@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
+from median_presets import MEDIAN_PRESETS
 
 if TYPE_CHECKING:
     from typing import Literal
@@ -133,126 +134,7 @@ PRESETS: dict[str, dict] = {
         "value_dtype": "float64",
         "seed": 42,
     },
-    # Median route diagnostics: keep dense, sparse, skewed, NaN-heavy, and
-    # adversarial shapes separate so sorted single-key median reports cannot
-    # collapse dense-coded wins into a generic median claim.
-    "median_dense_1key_5m_1k": {
-        "n_rows": 5_000_000,
-        "key_configs": [("key", 1000)],
-        "value_dtype": "float64",
-        "seed": 42,
-        "key_generation": "dense",
-    },
-    "median_sparse_gap_1key_5m_1k": {
-        "n_rows": 5_000_000,
-        "key_configs": [("key", 1000)],
-        "value_dtype": "float64",
-        "seed": 42,
-        "key_generation": "sparse_gap",
-        "key_gap": 1_000_000_000,
-    },
-    "median_sparse_gap_1key_5m_10k": {
-        "n_rows": 5_000_000,
-        "key_configs": [("key", 10_000)],
-        "value_dtype": "float64",
-        "seed": 42,
-        "key_generation": "sparse_gap",
-        "key_gap": 1_000_000_000,
-    },
-    "median_sparse_gap_1key_5m_50k": {
-        "n_rows": 5_000_000,
-        "key_configs": [("key", 50_000)],
-        "value_dtype": "float64",
-        "seed": 42,
-        "key_generation": "sparse_gap",
-        "key_gap": 1_000_000_000,
-    },
-    "median_near_unique_1key_5m": {
-        "n_rows": 5_000_000,
-        "key_configs": [("key", 5_000_000)],
-        "value_dtype": "float64",
-        "seed": 42,
-        "key_generation": "dense",
-    },
-    "median_skewed_zipf_1key_5m": {
-        "n_rows": 5_000_000,
-        "key_configs": [("key", 10_000)],
-        "value_dtype": "float64",
-        "seed": 42,
-        "key_generation": "zipf",
-    },
-    "median_skewed_dominant_1key_5m": {
-        "n_rows": 5_000_000,
-        "key_configs": [("key", 10_000)],
-        "value_dtype": "float64",
-        "seed": 42,
-        "key_generation": "dominant_tail",
-    },
-    "median_nan_dense_1key_5m_1k_p0": {
-        "n_rows": 5_000_000,
-        "key_configs": [("key", 1000)],
-        "value_dtype": "float64",
-        "seed": 42,
-        "nan_rate": 0.0,
-        "key_generation": "dense",
-    },
-    "median_nan_dense_1key_5m_1k_p50": {
-        "n_rows": 5_000_000,
-        "key_configs": [("key", 1000)],
-        "value_dtype": "float64",
-        "seed": 42,
-        "nan_rate": 0.50,
-        "key_generation": "dense",
-    },
-    "median_nan_dense_1key_5m_1k_p95": {
-        "n_rows": 5_000_000,
-        "key_configs": [("key", 1000)],
-        "value_dtype": "float64",
-        "seed": 42,
-        "nan_rate": 0.95,
-        "key_generation": "dense",
-    },
-    "median_nan_dense_1key_5m_1k_p100": {
-        "n_rows": 5_000_000,
-        "key_configs": [("key", 1000)],
-        "value_dtype": "float64",
-        "seed": 42,
-        "nan_rate": 1.0,
-        "key_generation": "dense",
-    },
-    "median_boundary_rows_100k_1k": {
-        "n_rows": 100_000,
-        "key_configs": [("key", 1000)],
-        "value_dtype": "float64",
-        "seed": 42,
-    },
-    "median_boundary_rows_300k_1k": {
-        "n_rows": 300_000,
-        "key_configs": [("key", 1000)],
-        "value_dtype": "float64",
-        "seed": 42,
-    },
-    "median_boundary_rows_1m_1k": {
-        "n_rows": 1_000_000,
-        "key_configs": [("key", 1000)],
-        "value_dtype": "float64",
-        "seed": 42,
-    },
-    "median_negative_huge_sparse_1key": {
-        "n_rows": 5_000_000,
-        "key_configs": [("key", 1000)],
-        "value_dtype": "float64",
-        "seed": 42,
-        "key_generation": "negative_huge_sparse",
-        "key_gap": 1_000_000_000,
-    },
-    "median_false_low_sample_tail_unique": {
-        "n_rows": 5_000_000,
-        "key_configs": [("key", 500_000)],
-        "value_dtype": "float64",
-        "seed": 42,
-        "key_generation": "false_low_sample_tail_unique",
-    },
+    **MEDIAN_PRESETS,
 }
 
 
