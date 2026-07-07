@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from bench_utils import run_cold_warm_benchmark
 from datasets import PRESETS, generate_multi_key_dataset, get_dataset_info
@@ -17,6 +17,7 @@ from reporting import (
 from runner_worker import benchmark_worker as benchmark_worker
 
 BENCHMARKS_DIR = Path(__file__).resolve().parent
+_SELECTABLE_STATS_EVIDENCE_AGGS: Final[tuple[str, ...]] = (*STATS_EVIDENCE_AGGS, "median")
 
 _BENCHMARK_WORKER_TYPE_SURFACE = (
     'agg: Literal["sum", "mean", "prod", "median", "std", "var", "min", "max", "count"]'
@@ -45,7 +46,7 @@ def resolve_stats_evidence_aggs(selected_aggs: list[str] | None) -> list[str]:
     aggs = resolve_selected_aggs(selected_aggs)
     if aggs is None:
         return list(STATS_EVIDENCE_AGGS)
-    return [agg for agg in STATS_EVIDENCE_AGGS if agg in aggs]
+    return [agg for agg in aggs if agg in _SELECTABLE_STATS_EVIDENCE_AGGS]
 
 
 def benchmark_single(

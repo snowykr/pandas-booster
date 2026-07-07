@@ -45,14 +45,14 @@ where
 
     Ok(ProfiledGroupByResult {
         result,
-        profile: SingleKeyPhaseProfile {
+        profile: SingleKeyPhaseProfile::legacy(
             local_build_s,
-            merge_s: 0.0,
+            0.0,
             reorder_s,
             materialize_s,
             partial_group_total,
             final_group_count,
-        },
+        ),
     })
 }
 
@@ -78,14 +78,14 @@ where
 
     Ok(ProfiledGroupByResult {
         result: materialized.result,
-        profile: SingleKeyPhaseProfile {
+        profile: SingleKeyPhaseProfile::legacy(
             local_build_s,
-            merge_s: 0.0,
-            reorder_s: 0.0,
+            0.0,
+            0.0,
             materialize_s,
             partial_group_total,
             final_group_count,
-        },
+        ),
     })
 }
 
@@ -122,14 +122,14 @@ where
 
     Ok(ProfiledGroupByResult {
         result,
-        profile: SingleKeyPhaseProfile {
+        profile: SingleKeyPhaseProfile::legacy(
             local_build_s,
             merge_s,
             reorder_s,
             materialize_s,
             partial_group_total,
             final_group_count,
-        },
+        ),
     })
 }
 
@@ -206,14 +206,14 @@ where
             keys: result_keys,
             values: result_values,
         },
-        profile: SingleKeyPhaseProfile {
+        profile: SingleKeyPhaseProfile::legacy(
             local_build_s,
             merge_s,
-            reorder_s: 0.0,
+            0.0,
             materialize_s,
             partial_group_total,
             final_group_count,
-        },
+        ),
     })
 }
 

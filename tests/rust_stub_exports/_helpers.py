@@ -195,11 +195,12 @@ def _expected_groupby_export_matrix(aggs: tuple[str, ...] = _ALL_GROUPBY_AGGS) -
 
 
 def _expected_profile_exports() -> set[str]:
-    return {
+    std_var_exports = {
         f"profile_groupby_{agg}_f64{suffix}"
         for agg in ("var", "std")
         for suffix in ("_sorted", "_firstseen_u32", "_firstseen_u64")
     }
+    return std_var_exports | {"profile_groupby_median_f64_sorted"}
 
 
 def _expected_support_exports() -> set[str]:

@@ -9,17 +9,58 @@ from typing import Any
 from bench_utils import BenchmarkStats
 from runner import resolve_stats_evidence_aggs
 
+PHASE_NAMES: tuple[str, ...] = (
+    "prepare_inputs_s",
+    "unique_build_s",
+    "key_sort_s",
+    "count_s",
+    "buffer_setup_s",
+    "scatter_s",
+    "median_select_s",
+    "local_build_s",
+    "merge_s",
+    "reorder_s",
+    "materialize_s",
+    "python_normalize_s",
+    "python_series_build_s",
+    "rust_total_s",
+    "python_total_s",
+    "total_pipeline_s",
+)
+
+
+def zero_phase_stats() -> BenchmarkStats:
+    return BenchmarkStats(0.0, 0.0, 0.0, 0.0, [])
+
+
+def normalize_phase_stats(phases: dict[str, BenchmarkStats]) -> dict[str, BenchmarkStats]:
+    zero = zero_phase_stats()
+    return {name: phases.get(name, zero) for name in PHASE_NAMES}
+
 
 def serialize_stats(stats: BenchmarkStats) -> dict[str, Any]:
     return stats.to_dict()
 
 
 def serialize_phase_stats(phases: dict[str, BenchmarkStats]) -> dict[str, dict[str, Any]]:
-    return {name: serialize_stats(stats) for name, stats in phases.items()}
+    return {name: serialize_stats(stats) for name, stats in normalize_phase_stats(phases).items()}
 
 
 def stats_mean_map(phases: dict[str, BenchmarkStats]) -> dict[str, float]:
-    return {name: stats.mean for name, stats in phases.items()}
+    return {name: stats.mean for name, stats in normalize_phase_stats(phases).items()}
+
+
+def _collapse_route_metadata(profiled_cases: list[dict[str, Any]], field: str) -> str:
+    values = {
+        str(case["breakdown"].get(field, ""))
+        for case in profiled_cases
+        if case["breakdown"].get(field, "")
+    }
+    if len(values) == 1:
+        return next(iter(values))
+    if values:
+        return "mixed"
+    return ""
 
 
 def summarize_profile_cases(cases: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -27,11 +68,13 @@ def summarize_profile_cases(cases: list[dict[str, Any]]) -> dict[str, Any] | Non
     if not profiled_cases:
         return None
 
-    phase_names = list(profiled_cases[0]["breakdown"]["phases"].keys())
+    normalized_phase_maps = [
+        normalize_phase_stats(case["breakdown"]["phases"]) for case in profiled_cases
+    ]
     phase_means = {
-        phase_name: sum(case["breakdown"]["phases"][phase_name].mean for case in profiled_cases)
-        / len(profiled_cases)
-        for phase_name in phase_names
+        phase_name: sum(phases[phase_name].mean for phases in normalized_phase_maps)
+        / len(normalized_phase_maps)
+        for phase_name in PHASE_NAMES
     }
     first_breakdown = profiled_cases[0]["breakdown"]
 
@@ -50,6 +93,8 @@ def summarize_profile_cases(cases: list[dict[str, Any]]) -> dict[str, Any] | Non
         "partial_group_total": first_breakdown["partial_group_total"],
         "final_group_count": first_breakdown["final_group_count"],
         "partial_to_final_ratio": first_breakdown["partial_to_final_ratio"],
+        "route_kind": _collapse_route_metadata(profiled_cases, "route_kind"),
+        "route_reason": _collapse_route_metadata(profiled_cases, "route_reason"),
         "per_agg": {
             case["agg"]: {
                 "execution": case["breakdown"]["execution"],
@@ -60,10 +105,32 @@ def summarize_profile_cases(cases: list[dict[str, Any]]) -> dict[str, Any] | Non
                 "partial_group_total": case["breakdown"]["partial_group_total"],
                 "final_group_count": case["breakdown"]["final_group_count"],
                 "partial_to_final_ratio": case["breakdown"]["partial_to_final_ratio"],
+                "route_kind": case["breakdown"].get("route_kind", ""),
+                "route_reason": case["breakdown"].get("route_reason", ""),
             }
             for case in profiled_cases
         },
     }
+
+
+def _requires_selected_median_sorted_breakdown(
+    item: dict[str, Any],
+    *,
+    selected_aggs: list[str] | None,
+) -> bool:
+    booster_execution = item["execution"]["booster"]
+    return (
+        selected_aggs is not None
+        and "median" in resolve_stats_evidence_aggs(selected_aggs)
+        and item["agg"] == "median"
+        and item["sort"] is True
+        and booster_execution == "booster->rust.groupby_median_f64_sorted"
+        and (
+            item["breakdown"] is None
+            or not item["breakdown"].get("route_kind")
+            or not item["breakdown"].get("route_reason")
+        )
+    )
 
 
 def build_profile_json_payload(
@@ -86,6 +153,12 @@ def build_profile_json_payload(
 
     grouped: dict[tuple[str, bool], list[dict[str, Any]]] = {}
     for item in evidence:
+        if _requires_selected_median_sorted_breakdown(item, selected_aggs=selected_aggs):
+            raise ValueError(
+                "selected median sorted profile breakdown is unavailable; "
+                "profile JSON would omit required median evidence"
+            )
+
         grouped.setdefault((item["workload"], item["sort"]), []).append(item)
         breakdown = item["breakdown"]
         payload["cases"].append(
@@ -118,6 +191,8 @@ def build_profile_json_payload(
                 if breakdown is None
                 else {
                     "execution": breakdown["execution"],
+                    "route_kind": breakdown.get("route_kind", ""),
+                    "route_reason": breakdown.get("route_reason", ""),
                     "phases": serialize_phase_stats(breakdown["phases"]),
                     "phase_means": stats_mean_map(breakdown["phases"]),
                     "rust_total_s": breakdown["rust_total_s"],
@@ -139,6 +214,14 @@ def build_profile_json_payload(
             summary = summarize_profile_cases(cases)
             if summary is not None:
                 payload[f"single_key_{suffix}_{workload}"] = summary
+
+    for (workload, sort), cases in grouped.items():
+        if workload in {"standard", "high"}:
+            continue
+        suffix = "unsorted" if not sort else "sorted"
+        summary = summarize_profile_cases(cases)
+        if summary is not None:
+            payload[f"single_key_{suffix}_{workload}"] = summary
 
     if "single_key_unsorted_high" in payload:
         payload["single_key_unsorted"] = payload["single_key_unsorted_high"]

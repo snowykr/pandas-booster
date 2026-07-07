@@ -45,6 +45,7 @@ class TestMedianSingleKeyAccessor:
         booster_result = cast(BoosterAccessor, df.booster).groupby("key", "val", "median")
         pandas_result = df.groupby("key")["val"].median()
 
+        assert booster_result.index.tolist() == pandas_result.index.tolist() == [1, 2, 3, 4, 5]
         booster_sorted = booster_result.sort_index()
         pandas_sorted = pandas_result.sort_index()
 
@@ -75,6 +76,38 @@ class TestMedianSingleKeyAccessor:
             rtol=1e-10,
         )
         assert booster_result.dtype == np.float64
+
+    def test_float_signed_zero_matches_pandas_bits(self):
+        df = pd.DataFrame(
+            {
+                "key": [1, 1, 2, 2, 2, 2, 3, 3, 3, 3],
+                "val": np.array(
+                    [-0.0, 0.0, -0.0, -0.0, 0.0, 0.0, -1.0, 0.0, -0.0, 1.0],
+                    dtype=np.float64,
+                ),
+            }
+        )
+
+        pandas_result = df.groupby("key", sort=True)["val"].median()
+        booster_sorted = cast(BoosterAccessor, df.booster).groupby(
+            "key", "val", "median", sort=True
+        )
+        booster_firstseen = cast(BoosterAccessor, df.booster).groupby(
+            "key", "val", "median", sort=False
+        )
+
+        expected_bits = pandas_result.to_numpy(dtype=np.float64).view(np.uint64)
+        assert np.signbit(pandas_result.loc[1])
+        assert np.signbit(pandas_result.loc[2])
+        assert not np.signbit(pandas_result.loc[3])
+        np.testing.assert_array_equal(
+            booster_sorted.to_numpy(dtype=np.float64).view(np.uint64),
+            expected_bits,
+        )
+        np.testing.assert_array_equal(
+            booster_firstseen.sort_index().to_numpy(dtype=np.float64).view(np.uint64),
+            expected_bits,
+        )
 
     def test_int_values_match_pandas_sort_true_with_float64_dtype(self):
         df = self._make_int_df()

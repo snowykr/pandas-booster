@@ -19,8 +19,16 @@ mod profile;
 mod reduce;
 mod result;
 mod routing;
+mod routing_median;
+mod routing_median_estimates;
 mod scalar_firstseen;
+mod sorted_median;
+mod sorted_median_dense;
+mod sorted_median_hooks;
+mod sorted_median_sparse;
 
+#[cfg(test)]
+mod api_f64_stats_tests;
 #[cfg(test)]
 mod api_float_tests;
 #[cfg(test)]
@@ -33,6 +41,8 @@ mod engine_tests;
 mod prod_ordered_tests;
 #[cfg(test)]
 mod routing_tests;
+#[cfg(test)]
+mod sorted_median_tests;
 #[cfg(test)]
 mod test_support;
 

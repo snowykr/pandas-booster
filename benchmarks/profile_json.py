@@ -15,6 +15,9 @@ from dispatch import (
     resolve_booster_benchmark_dispatch,
 )
 from profile_json_payload import (
+    PHASE_NAMES,
+)
+from profile_json_payload import (
     build_profile_json_payload as build_profile_json_payload,
 )
 from profile_json_payload import (
@@ -53,7 +56,6 @@ def measure_booster_single_key_breakdown(
     ignore_force_pandas_sort: bool = False,
 ) -> dict[str, Any] | None:
     import pandas_booster._abi_compat as abi_compat
-    import pandas_booster._rust as rust
     from pandas_booster import _groupby_accel as groupby_accel
 
     config = PRESETS[preset_name]
@@ -64,9 +66,6 @@ def measure_booster_single_key_breakdown(
 
     key_col = cast(pd.Series, df[key_cols[0]])
     val_col = cast(pd.Series, df["value"])
-    key_dtype = groupby_accel.capture_key_numpy_dtype(key_col)
-    value_dtype = groupby_accel.capture_value_numpy_dtype(val_col)
-    is_val_int = pd.api.types.is_integer_dtype(val_col)
     dispatch = resolve_booster_benchmark_dispatch(
         df,
         key_cols,
@@ -79,30 +78,26 @@ def measure_booster_single_key_breakdown(
     if rust_func is None:
         return None
 
+    key_dtype = groupby_accel.capture_key_numpy_dtype(key_col)
+    value_dtype = groupby_accel.capture_value_numpy_dtype(val_col)
+    is_val_int = pd.api.types.is_integer_dtype(val_col)
     needs_python_sort = bool(dispatch["needs_python_sort"])
     if needs_python_sort and sort:
         return None
+
+    import pandas_booster._rust as rust
 
     profile_func_name = f"profile_{rust_func.__name__}"
     profile_func = getattr(rust, profile_func_name, None)
     if profile_func is None:
         return None
 
-    phase_samples: dict[str, list[float]] = {
-        "prepare_inputs_s": [],
-        "local_build_s": [],
-        "merge_s": [],
-        "reorder_s": [],
-        "materialize_s": [],
-        "python_normalize_s": [],
-        "python_series_build_s": [],
-        "rust_total_s": [],
-        "python_total_s": [],
-        "total_pipeline_s": [],
-    }
+    phase_samples: dict[str, list[float]] = {name: [] for name in PHASE_NAMES}
     partial_group_total = 0
     final_group_count = 0
     partial_to_final_ratio = 0.0
+    route_kind = ""
+    route_reason = ""
 
     for _ in range(n_samples):
         total_start = time.perf_counter()
@@ -116,14 +111,25 @@ def measure_booster_single_key_breakdown(
         phase_samples["prepare_inputs_s"].append(time.perf_counter() - prepare_start)
 
         result_keys, result_values, profile = profile_func(keys, values)
-        phase_samples["local_build_s"].append(float(profile["local_build_s"]))
-        phase_samples["merge_s"].append(float(profile["merge_s"]))
-        phase_samples["reorder_s"].append(float(profile["reorder_s"]))
-        phase_samples["materialize_s"].append(float(profile["materialize_s"]))
-        phase_samples["rust_total_s"].append(float(profile["rust_total_s"]))
+        for phase_name in (
+            "unique_build_s",
+            "key_sort_s",
+            "count_s",
+            "buffer_setup_s",
+            "scatter_s",
+            "median_select_s",
+            "local_build_s",
+            "merge_s",
+            "reorder_s",
+            "materialize_s",
+            "rust_total_s",
+        ):
+            phase_samples[phase_name].append(float(profile.get(phase_name, 0.0)))
         partial_group_total = int(profile["partial_group_total"])
         final_group_count = int(profile["final_group_count"])
         partial_to_final_ratio = float(profile["partial_to_final_ratio"])
+        route_kind = str(profile.get("route_kind", ""))
+        route_reason = str(profile.get("route_reason", ""))
 
         normalize_start = time.perf_counter()
         result_values_arr = abi_compat.normalize_result_values(
@@ -163,7 +169,13 @@ def measure_booster_single_key_breakdown(
         "partial_group_total": partial_group_total,
         "final_group_count": final_group_count,
         "partial_to_final_ratio": partial_to_final_ratio,
+        "route_kind": route_kind,
+        "route_reason": route_reason,
     }
+
+
+def _profile_evidence_verifies_correctness(config: dict[str, Any]) -> bool:
+    return float(config.get("nan_rate", 0.0)) == 0.0
 
 
 def collect_stats_evidence(
@@ -172,6 +184,7 @@ def collect_stats_evidence(
     sort_mode: str,
     selected_aggs: list[str] | None = None,
     *,
+    include_median_diagnostics: bool = False,
     benchmark_single_func=benchmark_single,
     generate_multi_key_dataset_func=generate_multi_key_dataset,
     describe_booster_execution_func=describe_booster_execution,
@@ -182,26 +195,51 @@ def collect_stats_evidence(
     if not evidence_aggs:
         return evidence
 
-    preset_names: list[str] = []
+    base_preset_names: list[str] = []
     if cardinality in {"all", "standard"}:
-        preset_names.append(STATS_EVIDENCE_PRESETS["standard"])
+        base_preset_names.append(STATS_EVIDENCE_PRESETS["standard"])
     if cardinality in {"all", "high"}:
-        preset_names.append(STATS_EVIDENCE_PRESETS["high"])
+        base_preset_names.append(STATS_EVIDENCE_PRESETS["high"])
+    median_diagnostic_presets = [
+        "median_dense_1key_5m_1k",
+        "median_sparse_gap_1key_5m_1k",
+        "median_sparse_gap_1key_5m_10k",
+        "median_sparse_gap_1key_5m_50k",
+        "median_near_unique_1key_5m",
+        "median_skewed_zipf_1key_5m",
+        "median_skewed_dominant_1key_5m",
+        "median_nan_dense_1key_5m_1k_p0",
+        "median_nan_dense_1key_5m_1k_p50",
+        "median_nan_dense_1key_5m_1k_p95",
+        "median_nan_dense_1key_5m_1k_p100",
+        "median_boundary_rows_100k_1k",
+        "median_boundary_rows_300k_1k",
+        "median_boundary_rows_1m_1k",
+        "median_negative_huge_sparse_1key",
+        "median_false_low_sample_tail_unique",
+    ]
 
     sorts = resolve_sorts(sort_mode)
 
-    for preset_name in preset_names:
-        config = PRESETS[preset_name]
-        key_cols = [col for col, _ in config["key_configs"]]
-        workload = stats_evidence_workload_label(preset_name)
-        for agg in evidence_aggs:
+    for agg in evidence_aggs:
+        preset_names = list(base_preset_names)
+        if agg == "median" and include_median_diagnostics:
+            preset_names.extend(
+                preset_name
+                for preset_name in median_diagnostic_presets
+                if preset_name not in preset_names
+            )
+        for preset_name in preset_names:
+            config = PRESETS[preset_name]
+            key_cols = [col for col, _ in config["key_configs"]]
+            workload = stats_evidence_workload_label(preset_name)
             for sort in sorts:
                 result = benchmark_single_func(
                     preset_name,
                     agg=agg,
                     sort=sort,
                     n_samples=n_samples,
-                    verify_correctness=True,
+                    verify_correctness=_profile_evidence_verifies_correctness(config),
                 )
                 df = generate_multi_key_dataset_func(**config)
                 execution = {
