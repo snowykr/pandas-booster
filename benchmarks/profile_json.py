@@ -184,6 +184,7 @@ def collect_stats_evidence(
     sort_mode: str,
     selected_aggs: list[str] | None = None,
     *,
+    include_median_diagnostics: bool = False,
     benchmark_single_func=benchmark_single,
     generate_multi_key_dataset_func=generate_multi_key_dataset,
     describe_booster_execution_func=describe_booster_execution,
@@ -222,7 +223,7 @@ def collect_stats_evidence(
 
     for agg in evidence_aggs:
         preset_names = list(base_preset_names)
-        if agg == "median":
+        if agg == "median" and include_median_diagnostics:
             preset_names.extend(
                 preset_name
                 for preset_name in median_diagnostic_presets

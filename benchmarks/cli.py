@@ -209,6 +209,7 @@ Environment:
             args.cardinality,
             args.sort_mode,
             args.aggs,
+            include_median_diagnostics=True,
         )
 
     if args.output:
@@ -222,6 +223,7 @@ Environment:
                 args.cardinality,
                 args.sort_mode,
                 args.aggs,
+                include_median_diagnostics=False,
             )
 
         save_results_md_func(

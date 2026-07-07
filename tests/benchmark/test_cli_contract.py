@@ -149,6 +149,54 @@ def test_main_output_default_skips_unemitted_stats_evidence(
     assert captured_save_evidence == [[]]
 
 
+def test_main_output_selected_median_skips_profile_diagnostics(
+    benchmark_module, monkeypatch, tmp_path
+):
+    results = [_make_result(benchmark_module, preset="1key", agg="median", sort=True)]
+    captured_evidence_args: list[tuple[int, str, str, list[str] | None, bool]] = []
+
+    def fake_run_benchmarks(*, cardinality, diagnostic, sort_mode, n_samples, aggs):
+        _ = (cardinality, diagnostic, sort_mode, n_samples, aggs)
+        return results
+
+    def fake_collect_stats_evidence(
+        n_samples,
+        cardinality,
+        sort_mode,
+        selected_aggs=None,
+        *,
+        include_median_diagnostics=False,
+    ):
+        captured_evidence_args.append(
+            (n_samples, cardinality, sort_mode, selected_aggs, include_median_diagnostics)
+        )
+        return [{"agg": "median"}]
+
+    monkeypatch.setattr(benchmark_module, "run_benchmarks", fake_run_benchmarks)
+    monkeypatch.setattr(benchmark_module, "collect_stats_evidence", fake_collect_stats_evidence)
+    monkeypatch.setattr(benchmark_module, "save_results_md", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        benchmark_module.sys,
+        "argv",
+        [
+            "benchmark.py",
+            "--cardinality",
+            "standard",
+            "--sort-mode",
+            "sorted",
+            "--samples",
+            "3",
+            "--agg",
+            "median",
+            "--output",
+            str(tmp_path / "reports"),
+        ],
+    )
+
+    assert benchmark_module.main() == results
+    assert captured_evidence_args == [(3, "standard", "sorted", ["median"], False)]
+
+
 def test_prod_and_median_are_supported_benchmark_aggregations(benchmark_module):
     assert "prod" in benchmark_module.SUPPORTED_AGGS
     assert "median" in benchmark_module.SUPPORTED_AGGS
