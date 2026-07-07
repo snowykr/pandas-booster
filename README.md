@@ -271,7 +271,7 @@ python benchmarks/benchmark.py --agg median --samples 20 --output benchmarks/rep
 # Save default single-key std/var phase-profile evidence as JSON
 python benchmarks/benchmark.py --agg std --agg var --samples 20 --profile-json profile.json
 
-# Save selected median phase-profile evidence as JSON
+# Save the full selected median phase-profile evidence sweep as JSON
 python benchmarks/benchmark.py --agg median --samples 2 --profile-json profile-median.json
 
 # Include threshold diagnostics as well
@@ -429,7 +429,7 @@ python benchmarks/generate_docs.py
 # Save internal single-key std/var profile evidence to JSON
 python benchmarks/benchmark.py --agg std --agg var --profile-json profile.json
 
-# Save selected median profile evidence to JSON while iterating locally
+# Save the full selected median profile evidence sweep to JSON
 python benchmarks/benchmark.py --agg median --samples 2 --profile-json profile-median.json
 
 # Adjust sample count (applies to both cold and warm; default: 5)
@@ -449,7 +449,9 @@ single-key `std`/`var` evidence cases. Explicit `--agg median --profile-json` se
 the selected median evidence lane when a Rust-only Booster profile hook is available. Cases that
 fall back to pandas or require Python sorting remain in the JSON with `breakdown: null`. Phase
 maps use one stable schema across legacy mergeable `std`/`var` lanes and direct median lanes,
-including `buffer_setup_s` for median group-buffer setup.
+including `buffer_setup_s` for median group-buffer setup. With default `--cardinality all` and
+`--sort-mode all`, the median profile command is a broad diagnostic evidence sweep rather than a
+lightweight local-iteration smoke run.
 
 Note: `--cardinality` is for workload classes (`standard`, `high`, `all`), while
 `--diagnostic` is for internal boundary checks (`none`, `threshold`).
