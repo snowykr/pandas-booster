@@ -58,12 +58,23 @@ fn sorted_median_direct_f64_preserves_sorted_keys_and_pandas_edges() {
     // Then: keys are sorted and median semantics match the existing helper.
     assert_eq!(result.keys, vec![1, 2, 3, 4, 5, 6, 7]);
     assert_eq!(result.values[0], 2.0);
-    assert_f64_bits(result.values[1], 0.0);
+    assert_f64_bits(result.values[1], -0.0);
     assert!(result.values[2].is_nan());
     assert!(result.values[3].is_nan());
     assert_eq!(result.values[4], f64::INFINITY);
     assert_eq!(result.values[5], f64::NEG_INFINITY);
     assert_eq!(result.values[6], 8.0);
+}
+
+#[test]
+fn sorted_median_direct_f64_preserves_pandas_signed_zero_bits() {
+    let keys = vec![1, 1];
+    let values = vec![-0.0, 0.0];
+
+    let result = groupby_median_f64_sorted_direct(&keys, &values).unwrap();
+
+    assert_eq!(result.keys, vec![1]);
+    assert_f64_bits(result.values[0], -0.0);
 }
 
 #[test]

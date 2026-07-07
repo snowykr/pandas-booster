@@ -7,6 +7,12 @@ pub(crate) fn median_f64_from_mut_slice(values: &mut [f64]) -> f64 {
         return f64::NAN;
     }
 
+    if let [left, right] = values {
+        if *left == 0.0 && *right == 0.0 {
+            return *left;
+        }
+    }
+
     let mid = values.len() / 2;
     let is_odd = values.len() % 2 == 1;
     let (lower, median, _) = values.select_nth_unstable_by(mid, f64::total_cmp);
@@ -89,6 +95,18 @@ mod tests {
         assert!(all_nan_agg.finalize().is_nan());
         assert_eq!(
             average_f64_middle_values(-0.0, 0.0).to_bits(),
+            0.0_f64.to_bits()
+        );
+    }
+
+    #[test]
+    fn median_helper_f64_two_value_zero_tie_matches_pandas_bits() {
+        assert_eq!(
+            median_f64_from_values(vec![-0.0, 0.0]).to_bits(),
+            (-0.0_f64).to_bits()
+        );
+        assert_eq!(
+            median_f64_from_values(vec![0.0, -0.0]).to_bits(),
             0.0_f64.to_bits()
         );
     }

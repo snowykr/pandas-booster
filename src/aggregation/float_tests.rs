@@ -85,6 +85,26 @@ fn test_median_f64_even_count_averages_middle_values() {
 }
 
 #[test]
+fn test_median_f64_even_signed_zero_matches_pandas_bits() {
+    let mut negative_then_positive = MedianAggF64::init();
+    negative_then_positive.update(-0.0);
+    negative_then_positive.update(0.0);
+
+    let mut positive_then_negative = MedianAggF64::init();
+    positive_then_negative.update(0.0);
+    positive_then_negative.update(-0.0);
+
+    assert_eq!(
+        negative_then_positive.finalize().to_bits(),
+        (-0.0f64).to_bits()
+    );
+    assert_eq!(
+        positive_then_negative.finalize().to_bits(),
+        0.0f64.to_bits()
+    );
+}
+
+#[test]
 fn test_median_f64_even_count_uses_pandas_overflow_semantics() {
     let mut positive = MedianAggF64::init();
     positive.update(f64::MAX);
