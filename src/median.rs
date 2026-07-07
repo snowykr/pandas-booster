@@ -7,29 +7,15 @@ pub(crate) fn median_f64_from_mut_slice(values: &mut [f64]) -> f64 {
         return f64::NAN;
     }
 
-    if let [left, right] = values {
-        if *left == 0.0 && *right == 0.0 {
-            return *left;
-        }
-    }
-
     let mid = values.len() / 2;
     let is_odd = values.len() % 2 == 1;
-    let (lower, median, _) = values.select_nth_unstable_by(mid, f64::total_cmp);
 
     if is_odd {
-        *median
-    } else if let Some((&first, rest)) = lower.split_first() {
-        let lower_max = rest.iter().copied().fold(first, |current, value| {
-            if current.total_cmp(&value).is_lt() {
-                value
-            } else {
-                current
-            }
-        });
-        average_f64_middle_values(lower_max, *median)
+        kth_smallest_f64_pandas(values, mid)
     } else {
-        f64::NAN
+        let upper = kth_smallest_f64_pandas(values, mid);
+        let lower = kth_smallest_f64_pandas(values, mid - 1);
+        average_f64_middle_values(upper, lower)
     }
 }
 
@@ -38,6 +24,44 @@ pub(crate) fn average_f64_middle_values(lower: f64, upper: f64) -> f64 {
     // very large same-sign finite middle values intentionally overflow to
     // +/-inf instead of using a numerically stable midpoint formula.
     (lower + upper) / 2.0
+}
+
+fn kth_smallest_f64_pandas(values: &mut [f64], k: usize) -> f64 {
+    let target = k as isize;
+    let mut left = 0isize;
+    let mut right = values.len() as isize - 1;
+
+    while left < right {
+        let pivot = values[k];
+        let mut i = left;
+        let mut j = right;
+
+        loop {
+            while values[i as usize] < pivot {
+                i += 1;
+            }
+            while pivot < values[j as usize] {
+                j -= 1;
+            }
+            if i <= j {
+                values.swap(i as usize, j as usize);
+                i += 1;
+                j -= 1;
+            }
+            if i > j {
+                break;
+            }
+        }
+
+        if j < target {
+            left = i;
+        }
+        if target < i {
+            right = j;
+        }
+    }
+
+    values[k]
 }
 
 pub(crate) fn median_i64_from_values(mut values: Vec<i64>) -> f64 {
@@ -109,6 +133,23 @@ mod tests {
             median_f64_from_values(vec![0.0, -0.0]).to_bits(),
             0.0_f64.to_bits()
         );
+    }
+
+    #[test]
+    fn median_helper_f64_even_zero_middle_ties_match_pandas_bits() {
+        let cases = [
+            (vec![-0.0, -0.0, 0.0, 0.0], -0.0_f64),
+            (vec![0.0, 0.0, -0.0, -0.0], 0.0_f64),
+            (vec![-1.0, -0.0, 0.0, 1.0], -0.0_f64),
+            (vec![-1.0, 0.0, -0.0, 1.0], 0.0_f64),
+            (vec![0.0, -0.0, -0.0, 0.0], 0.0_f64),
+            (vec![-1.0, -0.0, -0.0, 0.0, 0.0, 1.0], -0.0_f64),
+            (vec![-1.0, 0.0, 0.0, -0.0, -0.0, 1.0], 0.0_f64),
+        ];
+
+        for (values, expected) in cases {
+            assert_eq!(median_f64_from_values(values).to_bits(), expected.to_bits());
+        }
     }
 
     #[test]

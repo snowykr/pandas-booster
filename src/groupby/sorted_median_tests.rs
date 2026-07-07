@@ -68,13 +68,15 @@ fn sorted_median_direct_f64_preserves_sorted_keys_and_pandas_edges() {
 
 #[test]
 fn sorted_median_direct_f64_preserves_pandas_signed_zero_bits() {
-    let keys = vec![1, 1];
-    let values = vec![-0.0, 0.0];
+    let keys = vec![1, 1, 2, 2, 2, 2, 3, 3, 3, 3];
+    let values = vec![-0.0, 0.0, -0.0, -0.0, 0.0, 0.0, -1.0, 0.0, -0.0, 1.0];
 
     let result = groupby_median_f64_sorted_direct(&keys, &values).unwrap();
 
-    assert_eq!(result.keys, vec![1]);
+    assert_eq!(result.keys, vec![1, 2, 3]);
     assert_f64_bits(result.values[0], -0.0);
+    assert_f64_bits(result.values[1], -0.0);
+    assert_f64_bits(result.values[2], 0.0);
 }
 
 #[test]
