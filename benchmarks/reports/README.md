@@ -18,6 +18,10 @@ Each report contains benchmark tables for one aggregation function.
 
 ## Environment & Configuration
 
+The [median report](median.md) contains historical pre-routing measurements, not
+current sorted single-key median routing performance. Its generation revision and
+route diagnostics were not recorded; see the report's provenance notice.
+
 The following environment was used to generate the checked-in benchmark reports.
 When refreshing these reports, replace these values with the environment used for that run.
 

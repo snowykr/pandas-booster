@@ -226,6 +226,10 @@ The library is designed for large datasets where multi-core parallelism can be f
 - **Optional Polars:** Polars is included in the benchmarks for comparison if installed. If not installed, the benchmark suite proceeds with Pandas vs Booster only.
 
 Benchmark tables are stored as per-aggregation reports under [`benchmarks/reports/`](benchmarks/reports/).
+The checked-in [median report](benchmarks/reports/median.md) is historical pre-routing
+data, not evidence of the current sorted single-key dense/sparse median routing
+performance or speedups. Its generation revision and route diagnostics were not
+recorded; the report retains its original timings and correctness results.
 Generated benchmark Markdown files carry a provenance marker, and reruns only overwrite or delete
 files with that marker so custom output directories cannot silently clobber unrelated `README.md`
 or `<agg>.md` files.
@@ -244,7 +248,8 @@ result = df.booster.groupby(by=["a", "b"], target="val", agg="sum", sort=False)
 
 ### Benchmark Reproduction
 
-To reproduce the checked-in benchmark reports:
+To run the benchmark workloads with the current code (this does not reproduce the
+historical median implementation):
 
 ```bash
 # Install benchmark dependencies and build in release mode
