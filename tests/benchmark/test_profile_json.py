@@ -16,6 +16,21 @@ def benchmark_module():
         yield module
 
 
+def test_false_low_sample_preset_hides_sparse_cardinality_from_router(benchmark_module):
+    from pandas_booster import _rust
+
+    config = benchmark_module.PRESETS["median_false_low_sample_tail_unique"]
+    df = benchmark_module.generate_multi_key_dataset(**config)
+    keys = df["key"].to_numpy()
+    stride = (len(keys) + 16_383) // 16_384
+    assert len(benchmark_module.np.unique(keys)) == 500_000
+    assert len(benchmark_module.np.unique(keys[::stride])) == 1
+    assert int(keys.max()) - int(keys.min()) > 1_000_000_000
+    _, _, profile = _rust.profile_groupby_median_f64_sorted(keys, df["value"].to_numpy())
+    assert profile["route_kind"] == "existing_sorted_fallback"
+    assert profile["route_reason"] == "sparse_exact_groups_exceed_cap"
+
+
 def test_collect_stats_evidence_uses_actual_force_pandas_sort_setting(
     benchmark_module,
     monkeypatch,
@@ -63,6 +78,7 @@ def test_collect_stats_evidence_uses_actual_force_pandas_sort_setting(
     assert len(evidence) == 1
     assert captured_execution_flags == [False]
     assert captured_breakdown_flags == [False]
+
 
 def test_measure_booster_single_key_breakdown_returns_none_when_float_rollback_forces_pandas(
     benchmark_module,

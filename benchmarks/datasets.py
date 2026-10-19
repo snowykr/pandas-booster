@@ -238,6 +238,12 @@ def _generate_key_column(
         tail_len = n_rows - tail_start
         if tail_len > 0:
             keys[tail_start:] = np.arange(tail_len, dtype=np.int64) % np.int64(n_unique)
+        keys *= np.int64(key_gap)
+        # Match the Rust router's 16,384-position strided sample: sampled
+        # rows hide the sparse, high-cardinality tail rather than revealing it.
+        if n_rows:
+            stride = (n_rows + min(n_rows, 16_384) - 1) // min(n_rows, 16_384)
+            keys[::stride] = 0
         return keys
 
     raise ValueError(f"Unsupported key_generation: {key_generation!r}")

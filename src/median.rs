@@ -10,6 +10,28 @@ pub(crate) fn median_f64_from_mut_slice(values: &mut [f64]) -> f64 {
     let mid = values.len() / 2;
     let is_odd = values.len() % 2 == 1;
 
+    // Only mixed signed zeros require pandas' order-sensitive tie handling.
+    // Its fixed-index pivot can take quadratic time on nearly sorted input;
+    // use Rust's robust selection for all other groups.
+    let mut positive_zero = false;
+    let mut negative_zero = false;
+    for &value in values.iter() {
+        if value == 0.0 {
+            positive_zero |= value.is_sign_positive();
+            negative_zero |= value.is_sign_negative();
+        }
+    }
+    if !(positive_zero && negative_zero) {
+        let (lower, upper, _) =
+            values.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).expect("NaNs are filtered"));
+        return if is_odd {
+            *upper
+        } else {
+            let lower_max = lower.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            average_f64_middle_values(lower_max, *upper)
+        };
+    }
+
     if is_odd {
         kth_smallest_f64_pandas(values, mid)
     } else {
@@ -92,6 +114,17 @@ mod tests {
     use crate::aggregation::{Aggregator, MedianAggF64, MedianAggI64};
 
     use super::{average_f64_middle_values, median_f64_from_values, median_i64_from_values};
+
+    #[test]
+    fn median_helper_nearly_sorted_pivot_adversary() {
+        let mid = 100_000;
+        let mut values: Vec<f64> = (1..=mid).map(f64::from).collect();
+        values.push(0.0);
+        values.extend((mid + 1..=2 * mid).map(f64::from));
+        assert_eq!(median_f64_from_values(values.clone()), f64::from(mid));
+        values.push(f64::from(2 * mid + 1));
+        assert_eq!(median_f64_from_values(values), f64::from(mid) + 0.5);
+    }
 
     #[test]
     fn median_helper_f64_skips_nan_and_overflows_like_existing_aggregator() {

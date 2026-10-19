@@ -124,7 +124,10 @@ pub fn profile_parallel_groupby_median_f64_sorted(
     keys: &[i64],
     values: &[f64],
 ) -> PyResult<ProfiledGroupByResult<f64>> {
+    let route_start = Instant::now();
     let decision = sorted_median_route_decision(keys, SortedMedianValueKind::F64);
+    // Route planning belongs to local_build on both direct and fallback paths.
+    let route_s = route_start.elapsed().as_secs_f64();
     if matches!(
         decision.kind,
         SortedMedianRouteKind::DirectDense | SortedMedianRouteKind::DirectSparse
@@ -134,7 +137,7 @@ pub fn profile_parallel_groupby_median_f64_sorted(
         return Ok(ProfiledGroupByResult {
             result: profiled.result,
             profile: SingleKeyPhaseProfile {
-                local_build_s: 0.0,
+                local_build_s: route_s,
                 merge_s: 0.0,
                 reorder_s: 0.0,
                 materialize_s: 0.0,
@@ -175,6 +178,7 @@ pub fn profile_parallel_groupby_median_f64_sorted(
             f64,
         >(keys, values)?)?
     };
+    profiled.profile.local_build_s += route_s;
     profiled.profile.route_kind = Some(decision.kind.as_str());
     profiled.profile.route_reason = Some(decision.reason.as_str());
     Ok(profiled)

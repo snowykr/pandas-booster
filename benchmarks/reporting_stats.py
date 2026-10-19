@@ -29,8 +29,9 @@ def render_stats_evidence_section(evidence: list[dict[str, Any]]) -> str:
         _stats_evidence_summary(evidence_aggs),
         _stats_overhead_summary(),
         "",
-        "| Workload | Agg | Sort | Backend | Execution | Cold | Warm |",
-        "|----------|-----|------|---------|-----------|------|------|",
+        "| Workload | Agg | Sort | Backend | Execution | Cold | Warm | "
+        "Cold correctness | Warm correctness |",
+        "|----------|-----|------|---------|-----------|------|------|------------------|------------------|",
     ]
 
     for item in evidence:
@@ -69,8 +70,10 @@ def _stats_evidence_summary(evidence_aggs: list[str]) -> str:
             "when accepted-value counting is fused into `unique_build_s`."
         )
 
-    agg_phrase = "`std` and `var`" if evidence_aggs == ["std", "var"] else ", ".join(
-        f"`{agg}`" for agg in evidence_aggs
+    agg_phrase = (
+        "`std` and `var`"
+        if evidence_aggs == ["std", "var"]
+        else ", ".join(f"`{agg}`" for agg in evidence_aggs)
     )
     return (
         f"{agg_phrase} scale on the Rust-first path because each worker accumulates "
@@ -106,6 +109,9 @@ def _append_backend_evidence_rows(lines: list[str], item: dict[str, Any]) -> Non
             cold_stats.format_ms(2),
             warm_stats.format_ms(2),
         ]
+        for phase in ("cold", "warm"):
+            status = str(backend_data.get(f"{phase}_correctness", "not_checked"))
+            row.append(status.replace("|", "\\|").replace("\n", " "))
         lines.append("| " + " | ".join(row) + " |")
 
 

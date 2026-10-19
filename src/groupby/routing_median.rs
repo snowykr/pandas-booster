@@ -94,8 +94,14 @@ fn decide_sparse_route(
     dense_span: DenseSpan,
 ) -> SortedMedianRouteDecision {
     let exact_stats = match exact_key_stats(keys) {
-        Some(stats) => stats,
-        None => return overflow_fallback(),
+        Ok(stats) => stats,
+        Err(reason) => {
+            return decision_with_span(
+                SortedMedianRouteKind::ExistingSortedFallback,
+                reason,
+                dense_span,
+            )
+        }
     };
     let sparse_bytes = estimate_sparse_direct_peak_bytes(
         keys.len(),
@@ -118,10 +124,7 @@ fn decide_sparse_route(
         SortedMedianRouteReason::SparseExactLowCardinalityMemorySafe,
         dense_span,
     );
-    if exact_stats.groups > SORTED_MEDIAN_SPARSE_MAX_EXACT_GROUPS {
-        decision.kind = SortedMedianRouteKind::ExistingSortedFallback;
-        decision.reason = SortedMedianRouteReason::SparseExactGroupsExceedCap;
-    } else if !memory_within_caps(sparse_bytes, input_bytes) {
+    if !memory_within_caps(sparse_bytes, input_bytes) {
         decision.kind = SortedMedianRouteKind::ExistingSortedFallback;
         decision.reason = SortedMedianRouteReason::SparseMemoryCapExceeded;
     } else if sparse_work.total_score * (1.0 + SORTED_MEDIAN_DIRECT_SAFETY_MARGIN)
@@ -182,16 +185,57 @@ pub(in crate::groupby) fn dense_sorted_median_key_range_len(keys: &[i64]) -> Opt
     }
 }
 
-fn exact_key_stats(keys: &[i64]) -> Option<ExactKeyStats> {
+fn exact_key_stats(keys: &[i64]) -> Result<ExactKeyStats, SortedMedianRouteReason> {
     let mut counts: AHashMap<i64, usize> = AHashMap::new();
     let mut max_group_rows = 0usize;
     for key in keys.iter().copied() {
+        if counts.len() == SORTED_MEDIAN_SPARSE_MAX_EXACT_GROUPS && !counts.contains_key(&key) {
+            return Err(SortedMedianRouteReason::SparseExactGroupsExceedCap);
+        }
         let count = counts.entry(key).or_insert(0);
-        *count = count.checked_add(1)?;
+        *count = count
+            .checked_add(1)
+            .ok_or(SortedMedianRouteReason::CheckedArithmeticOverflow)?;
         max_group_rows = max_group_rows.max(*count);
     }
-    Some(ExactKeyStats {
+    Ok(ExactKeyStats {
         groups: counts.len(),
         max_group_rows,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exact_stats_accepts_cap_and_rejects_next_distinct_key() {
+        let mut keys: Vec<i64> = (0..SORTED_MEDIAN_SPARSE_MAX_EXACT_GROUPS as i64).collect();
+        keys.extend([0, 0]);
+        let stats = exact_key_stats(&keys).unwrap();
+        assert_eq!(stats.groups, SORTED_MEDIAN_SPARSE_MAX_EXACT_GROUPS);
+        assert_eq!(stats.max_group_rows, 3);
+        keys.push(SORTED_MEDIAN_SPARSE_MAX_EXACT_GROUPS as i64);
+        assert!(matches!(
+            exact_key_stats(&keys),
+            Err(SortedMedianRouteReason::SparseExactGroupsExceedCap)
+        ));
+    }
+
+    #[test]
+    fn aliased_sample_still_rejects_excess_sparse_groups() {
+        let keys: Vec<i64> = (0..1_048_576)
+            .map(|row| i64::from(row % 65_536) * 1_000_000_000)
+            .collect();
+        assert!(!should_use_partitioned_median_engine(&keys));
+        let decision = sorted_median_route_decision(&keys, SortedMedianValueKind::F64);
+        assert!(matches!(
+            decision.kind,
+            SortedMedianRouteKind::ExistingSortedFallback
+        ));
+        assert!(matches!(
+            decision.reason,
+            SortedMedianRouteReason::SparseExactGroupsExceedCap
+        ));
+    }
 }

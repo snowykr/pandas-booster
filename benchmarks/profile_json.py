@@ -174,10 +174,6 @@ def measure_booster_single_key_breakdown(
     }
 
 
-def _profile_evidence_verifies_correctness(config: dict[str, Any]) -> bool:
-    return float(config.get("nan_rate", 0.0)) == 0.0
-
-
 def collect_stats_evidence(
     n_samples: int,
     cardinality: str,
@@ -239,7 +235,7 @@ def collect_stats_evidence(
                     agg=agg,
                     sort=sort,
                     n_samples=n_samples,
-                    verify_correctness=_profile_evidence_verifies_correctness(config),
+                    verify_correctness=True,
                 )
                 df = generate_multi_key_dataset_func(**config)
                 execution = {

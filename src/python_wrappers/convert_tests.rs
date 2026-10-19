@@ -3,12 +3,12 @@ use crate::groupby::SingleKeyPhaseProfile;
 use pyo3::prelude::*;
 
 #[test]
-fn single_profile_dict_counts_direct_phases_and_conversion_once() -> PyResult<()> {
+fn single_profile_dict_counts_routing_direct_phases_and_conversion_once() -> PyResult<()> {
     pyo3::Python::initialize();
 
     Python::attach(|py| {
         let profile = SingleKeyPhaseProfile {
-            local_build_s: 0.0,
+            local_build_s: 0.75,
             merge_s: 0.0,
             reorder_s: 0.0,
             materialize_s: 0.0,
@@ -33,6 +33,10 @@ fn single_profile_dict_counts_direct_phases_and_conversion_once() -> PyResult<()
             .get_item("materialize_s")?
             .expect("materialize_s exists")
             .extract::<f64>()?;
+        let local_build_s = dict
+            .get_item("local_build_s")?
+            .expect("local_build_s exists")
+            .extract::<f64>()?;
         let buffer_setup_s = dict
             .get_item("buffer_setup_s")?
             .expect("buffer_setup_s exists")
@@ -47,7 +51,8 @@ fn single_profile_dict_counts_direct_phases_and_conversion_once() -> PyResult<()
             .expect("route_reason exists")
             .extract::<String>()?;
 
-        assert_eq!(rust_total_s, 12.5);
+        assert_eq!(rust_total_s, 13.25);
+        assert_eq!(local_build_s, 0.75);
         assert_eq!(materialize_s, 0.5);
         assert_eq!(buffer_setup_s, 2.0);
         assert_eq!(route_kind, "direct_sparse");
@@ -57,11 +62,13 @@ fn single_profile_dict_counts_direct_phases_and_conversion_once() -> PyResult<()
 }
 
 #[test]
-fn single_profile_dict_preserves_legacy_total_with_zero_direct_fields() -> PyResult<()> {
+fn single_profile_dict_counts_fallback_routing_with_zero_direct_fields() -> PyResult<()> {
     pyo3::Python::initialize();
 
     Python::attach(|py| {
-        let profile = SingleKeyPhaseProfile::legacy(1.0, 2.0, 3.0, 4.0, 5, 5);
+        let mut profile = SingleKeyPhaseProfile::legacy(1.0, 2.0, 3.0, 4.0, 5, 5);
+        profile.local_build_s += 0.75;
+        profile.route_kind = Some("existing_sorted_fallback");
         let dict = build_single_profile_dict(py, &profile, 0.25)?;
         let rust_total_s = dict
             .get_item("rust_total_s")?
@@ -76,7 +83,7 @@ fn single_profile_dict_preserves_legacy_total_with_zero_direct_fields() -> PyRes
             .expect("buffer_setup_s exists")
             .extract::<f64>()?;
 
-        assert_eq!(rust_total_s, 10.25);
+        assert_eq!(rust_total_s, 11.0);
         assert_eq!(unique_build_s, 0.0);
         assert_eq!(buffer_setup_s, 0.0);
         Ok(())

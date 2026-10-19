@@ -38,10 +38,11 @@ def test_collect_stats_evidence_scopes_nan_median_diagnostics_to_median_agg(
     std_presets = {preset for agg, preset in captured_verify_by_pair if agg == "std"}
     assert std_presets == {"1key"}
     assert captured_verify_by_pair[("median", "median_nan_dense_1key_5m_1k_p0")] is True
-    assert captured_verify_by_pair[("median", "median_nan_dense_1key_5m_1k_p50")] is False
-    assert captured_verify_by_pair[("median", "median_nan_dense_1key_5m_1k_p95")] is False
-    assert captured_verify_by_pair[("median", "median_nan_dense_1key_5m_1k_p100")] is False
+    assert captured_verify_by_pair[("median", "median_nan_dense_1key_5m_1k_p50")] is True
+    assert captured_verify_by_pair[("median", "median_nan_dense_1key_5m_1k_p95")] is True
+    assert captured_verify_by_pair[("median", "median_nan_dense_1key_5m_1k_p100")] is True
     assert captured_verify_by_pair[("median", "median_sparse_gap_1key_5m_1k")] is True
+    assert all(captured_verify_by_pair.values())
 
 
 def test_collect_stats_evidence_skips_median_diagnostics_by_default(
@@ -76,3 +77,28 @@ def test_collect_stats_evidence_skips_median_diagnostics_by_default(
     )
 
     assert captured_pairs == [("median", "1key")]
+
+
+def test_stats_evidence_markdown_shows_actual_phase_correctness(benchmark_module):
+    result = _make_result(benchmark_module, preset="1key", agg="median", sort=True)
+    result["backends"]["booster"]["warm_correctness"] = "fail: missing all-NaN group"
+    evidence = [
+        {
+            "workload": "nan_median",
+            "agg": "median",
+            "sort": True,
+            "result": result,
+            "execution": {"pandas": "pandas.groupby.median", "booster": "median"},
+            "breakdown": None,
+        }
+    ]
+
+    markdown = benchmark_module.render_stats_evidence_section(evidence)
+
+    assert "| Cold correctness | Warm correctness |" in markdown
+    assert "| not_checked | not_checked |" in markdown
+    assert "| pass | fail: missing all-NaN group |" in markdown
+
+    del result["backends"]["booster"]["cold_correctness"]
+    markdown = benchmark_module.render_stats_evidence_section(evidence)
+    assert "| not_checked | fail: missing all-NaN group |" in markdown

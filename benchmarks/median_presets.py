@@ -117,5 +117,6 @@ MEDIAN_PRESETS: dict[str, dict] = {
         "value_dtype": "float64",
         "seed": 42,
         "key_generation": "false_low_sample_tail_unique",
+        "key_gap": 1_000_000_000,
     },
 }
