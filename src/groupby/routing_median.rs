@@ -43,10 +43,18 @@ pub(in crate::groupby) fn sorted_median_route_decision(
     let dense_span = match exact_dense_span(keys) {
         Ok(span) => span,
         Err(reason) => {
+            // An unrepresentable dense span rules out direct indexing, not
+            // partitioned aggregation, which does not depend on key offsets.
+            if should_use_partitioned_median_engine(keys) {
+                return SortedMedianRouteDecision::new(
+                    SortedMedianRouteKind::PartitionedFallback,
+                    SortedMedianRouteReason::HighCardinalityPartitionedSample,
+                );
+            }
             return SortedMedianRouteDecision::new(
                 SortedMedianRouteKind::ExistingSortedFallback,
                 reason,
-            )
+            );
         }
     };
 
@@ -207,6 +215,24 @@ fn exact_key_stats(keys: &[i64]) -> Result<ExactKeyStats, SortedMedianRouteReaso
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn dense_span_accepts_largest_representable_span_but_rejects_full_i64_span() {
+        for keys in [[i64::MIN, i64::MAX - 1], [i64::MIN + 1, i64::MAX]] {
+            let span = exact_dense_span(&keys).unwrap();
+            assert_eq!(span.len, usize::MAX);
+            assert_eq!(span.min_key, keys[0]);
+            let decision = sorted_median_route_decision(&keys, SortedMedianValueKind::F64);
+            assert!(!decision.is_direct());
+            assert_eq!(decision.dense_span, Some(usize::MAX));
+            assert_ne!(decision.reason, SortedMedianRouteReason::DenseSpanOverflow);
+        }
+        assert!(matches!(
+            exact_dense_span(&[i64::MIN, i64::MAX]),
+            Err(SortedMedianRouteReason::DenseSpanOverflow)
+        ));
+    }
 
     #[test]
     fn exact_stats_accepts_cap_and_rejects_next_distinct_key() {
