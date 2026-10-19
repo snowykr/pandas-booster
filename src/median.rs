@@ -1,3 +1,8 @@
+#[path = "median/pandas_select.rs"]
+mod pandas_select;
+
+pub(crate) use pandas_select::SCRATCH_BYTES_PER_VALUE as F64_SELECTION_SCRATCH_BYTES_PER_VALUE;
+
 pub(crate) fn median_f64_from_values(mut values: Vec<f64>) -> f64 {
     median_f64_from_mut_slice(&mut values)
 }
@@ -11,34 +16,30 @@ pub(crate) fn median_f64_from_mut_slice(values: &mut [f64]) -> f64 {
     let is_odd = values.len() % 2 == 1;
 
     // Only mixed signed zeros require pandas' order-sensitive tie handling.
-    // Its fixed-index pivot can take quadratic time on nearly sorted input;
-    // use Rust's robust selection for all other groups.
+    // Use indexed pandas selection for those groups and Rust's robust
+    // selection otherwise. Public accumulator storage can contain NaNs even
+    // though update() filters them; retain its original total-order semantics.
     let mut positive_zero = false;
     let mut negative_zero = false;
+    let mut has_nan = false;
     for &value in values.iter() {
+        has_nan |= value.is_nan();
         if value == 0.0 {
             positive_zero |= value.is_sign_positive();
             negative_zero |= value.is_sign_negative();
         }
     }
-    if !(positive_zero && negative_zero) {
-        let (lower, upper, _) =
-            values.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).expect("NaNs are filtered"));
+    if has_nan || !(positive_zero && negative_zero) {
+        let (lower, upper, _) = values.select_nth_unstable_by(mid, f64::total_cmp);
         return if is_odd {
             *upper
         } else {
-            let lower_max = lower.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            let lower_max = lower.iter().copied().max_by(f64::total_cmp).unwrap();
             average_f64_middle_values(lower_max, *upper)
         };
     }
 
-    if is_odd {
-        kth_smallest_f64_pandas(values, mid)
-    } else {
-        let upper = kth_smallest_f64_pandas(values, mid);
-        let lower = kth_smallest_f64_pandas(values, mid - 1);
-        average_f64_middle_values(upper, lower)
-    }
+    pandas_select::median(values)
 }
 
 pub(crate) fn average_f64_middle_values(lower: f64, upper: f64) -> f64 {
@@ -46,44 +47,6 @@ pub(crate) fn average_f64_middle_values(lower: f64, upper: f64) -> f64 {
     // very large same-sign finite middle values intentionally overflow to
     // +/-inf instead of using a numerically stable midpoint formula.
     (lower + upper) / 2.0
-}
-
-fn kth_smallest_f64_pandas(values: &mut [f64], k: usize) -> f64 {
-    let target = k as isize;
-    let mut left = 0isize;
-    let mut right = values.len() as isize - 1;
-
-    while left < right {
-        let pivot = values[k];
-        let mut i = left;
-        let mut j = right;
-
-        loop {
-            while values[i as usize] < pivot {
-                i += 1;
-            }
-            while pivot < values[j as usize] {
-                j -= 1;
-            }
-            if i <= j {
-                values.swap(i as usize, j as usize);
-                i += 1;
-                j -= 1;
-            }
-            if i > j {
-                break;
-            }
-        }
-
-        if j < target {
-            left = i;
-        }
-        if target < i {
-            right = j;
-        }
-    }
-
-    values[k]
 }
 
 pub(crate) fn median_i64_from_values(mut values: Vec<i64>) -> f64 {
@@ -114,6 +77,41 @@ mod tests {
     use crate::aggregation::{Aggregator, MedianAggF64, MedianAggI64};
 
     use super::{average_f64_middle_values, median_f64_from_values, median_i64_from_values};
+
+    #[test]
+    fn public_nan_storage_preserves_total_order_finalization() {
+        let negative_nan = -f64::NAN;
+        for values in [
+            vec![1.0, f64::NAN, 3.0],
+            vec![1.0, f64::NAN],
+            vec![negative_nan, 1.0, 3.0, f64::NAN],
+            vec![f64::NAN, negative_nan],
+            vec![-0.0, 0.0, f64::NAN],
+            vec![-0.0, 0.0, negative_nan, f64::NAN],
+            vec![f64::NAN],
+        ] {
+            let mut sorted = values.clone();
+            sorted.sort_by(f64::total_cmp);
+            let mid = sorted.len() / 2;
+            let expected = if sorted.len() % 2 == 1 {
+                sorted[mid]
+            } else {
+                average_f64_middle_values(sorted[mid - 1], sorted[mid])
+            };
+            let mut agg = MedianAggF64::init();
+            // Exercise direct mutation and merge, bypassing update's filter.
+            agg.values.extend(values);
+            let mut merged = MedianAggF64::init();
+            merged.merge(agg);
+            for actual in [merged.finalize(), merged.finalize_owned()] {
+                if expected.is_nan() {
+                    assert!(actual.is_nan());
+                } else {
+                    assert_eq!(actual.to_bits(), expected.to_bits());
+                }
+            }
+        }
+    }
 
     #[test]
     fn median_helper_nearly_sorted_pivot_adversary() {

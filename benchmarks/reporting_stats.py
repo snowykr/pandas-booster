@@ -55,8 +55,11 @@ def render_stats_evidence_section(evidence: list[dict[str, Any]]) -> str:
 def _stats_evidence_summary(evidence_aggs: list[str]) -> str:
     if evidence_aggs == ["median"]:
         return (
-            "`median` profile evidence is emitted only when selected with "
-            "`--agg median --profile-json`. It reports the sorted single-key Rust path so "
+            "`median` profile evidence is emitted only when explicitly selected. "
+            "Markdown reports collect it with `--agg median --sort-mode sorted --output <dir>` "
+            "without requiring `--profile-json`. JSON output uses "
+            "`--agg median --sort-mode sorted --profile-json <path>` and adds median diagnostic "
+            "workloads. It reports the sorted single-key Rust path so "
             "benchmark reports can show whether median work is dominated by direct kernel phases, "
             "conversion, or Series assembly; `count_s` is zero when accepted-value counting is "
             "fused into `unique_build_s`."

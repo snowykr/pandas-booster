@@ -1,5 +1,7 @@
 use std::mem::size_of;
 
+use crate::aggregation::median::F64_SELECTION_SCRATCH_BYTES_PER_VALUE;
+
 use super::routing::SortedMedianValueKind;
 
 pub(in crate::groupby) const SORTED_MEDIAN_SPARSE_MAX_EXACT_GROUPS: usize = 4_096;
@@ -49,6 +51,13 @@ pub(in crate::groupby) fn estimate_dense_direct_peak_bytes(
     add_term(&mut total, groups_upper_bound, size_of::<usize>());
     add_term(&mut total, groups_upper_bound, size_of::<(i64, Vec<i64>)>());
     add_term(&mut total, groups_upper_bound, size_of::<f64>());
+    if matches!(value_kind, SortedMedianValueKind::F64) {
+        add_term(
+            &mut total,
+            accepted_values,
+            F64_SELECTION_SCRATCH_BYTES_PER_VALUE,
+        );
+    }
     total.and_then(|bytes| checked_mul(bytes, 2))
 }
 
@@ -73,6 +82,13 @@ pub(in crate::groupby) fn estimate_sparse_direct_peak_bytes(
     add_term(&mut total, groups, size_of::<Vec<i64>>());
     add_term(&mut total, accepted_values, value_kind.element_size());
     add_term(&mut total, groups, size_of::<i64>() + size_of::<f64>());
+    if matches!(value_kind, SortedMedianValueKind::F64) {
+        add_term(
+            &mut total,
+            accepted_values,
+            F64_SELECTION_SCRATCH_BYTES_PER_VALUE,
+        );
+    }
     total.and_then(|bytes| checked_mul(bytes, 2))
 }
 
@@ -98,6 +114,8 @@ pub(in crate::groupby) fn estimate_dense_work(
     span: usize,
     max_group_rows: usize,
 ) -> RouteWorkEstimate {
+    // Relative routing scores, not worst-case bounds: NaN-free mixed-zero
+    // selection is O(n log n) on every route; other selection remains O(n).
     let total_score = 1.25 * n_rows as f64
         + span as f64
         + accepted_values as f64
@@ -141,4 +159,47 @@ pub(in crate::groupby) fn estimate_partitioned_work(
         + groups as f64 * (groups.max(2) as f64).log2()
         + accepted_values as f64;
     RouteWorkEstimate { total_score }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn direct_memory_accounts_for_concurrent_float_selector_scratch() {
+        for accepted in [0, 64, 65, 1_000_000] {
+            let dense_float =
+                estimate_dense_direct_peak_bytes(100, 100, accepted, SortedMedianValueKind::F64)
+                    .unwrap();
+            let dense_int =
+                estimate_dense_direct_peak_bytes(100, 100, accepted, SortedMedianValueKind::I64)
+                    .unwrap();
+            let sparse_float = estimate_sparse_direct_peak_bytes(
+                accepted,
+                100,
+                accepted,
+                SortedMedianValueKind::F64,
+            )
+            .unwrap();
+            let sparse_int = estimate_sparse_direct_peak_bytes(
+                accepted,
+                100,
+                accepted,
+                SortedMedianValueKind::I64,
+            )
+            .unwrap();
+            // f64/i64 payloads have identical sizes; only the f64 selector
+            // needs scratch, included before the factor-of-two memory slack.
+            assert_eq!(dense_float - dense_int, 4 * accepted);
+            assert_eq!(sparse_float - sparse_int, 4 * accepted);
+        }
+        assert!(
+            estimate_dense_direct_peak_bytes(1, 1, usize::MAX, SortedMedianValueKind::F64)
+                .is_none()
+        );
+        assert!(
+            estimate_sparse_direct_peak_bytes(1, 1, usize::MAX, SortedMedianValueKind::F64)
+                .is_none()
+        );
+    }
 }
