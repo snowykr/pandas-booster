@@ -35,6 +35,42 @@ impl<T> WritePtr<T> {
     }
 }
 
+fn scatter_multi_result<T: Copy + Send + Sync>(
+    py: Python<'_>,
+    key_ptrs: &[WritePtr<i64>],
+    keys_flat: &[i64],
+    perm: Option<&[usize]>,
+    values: &[T],
+    values_ptr: Option<WritePtr<T>>,
+) {
+    let n_groups = values.len();
+    let n_keys = key_ptrs.len();
+    py.detach(|| {
+        let scatter_group = |out_g| {
+            let src_g = perm.map_or(out_g, |p| p[out_g]);
+            let base = src_g * n_keys;
+            if let Some(ptr) = values_ptr {
+                unsafe { ptr.write(out_g, values[src_g]) };
+            }
+            for col in 0..n_keys {
+                unsafe { key_ptrs[col].write(out_g, keys_flat[base + col]) };
+            }
+        };
+
+        // Rayon overhead can dominate for small outputs.
+        if n_groups < 50_000 {
+            (0..n_groups).for_each(scatter_group);
+            return;
+        }
+
+        let chunk = 1usize.max(n_groups / (rayon::current_num_threads() * 8));
+        (0..n_groups)
+            .into_par_iter()
+            .with_min_len(chunk)
+            .for_each(scatter_group);
+    });
+}
+
 pub(crate) fn convert_single_result_f64<'py>(
     py: Python<'py>,
     result: GroupByResultF64,
@@ -143,47 +179,24 @@ pub(crate) fn convert_multi_result_f64<'py>(
     let key_arrays: Vec<Bound<'py, PyArray1<i64>>> = (0..n_keys)
         .map(|_| unsafe { PyArray1::<i64>::new(py, n_groups, false) })
         .collect();
-    let values_out = unsafe { PyArray1::<f64>::new(py, n_groups, false) };
+    let values_out = perm.map(|_| unsafe { PyArray1::<f64>::new(py, n_groups, false) });
 
     // Extract typed writable pointers under GIL; fill outside GIL.
     let key_ptrs: Vec<WritePtr<i64>> = key_arrays
         .iter()
         .map(|a| WritePtr(NonNull::new(a.data()).expect("numpy array data pointer is non-null")))
         .collect();
-    let values_ptr =
-        WritePtr(NonNull::new(values_out.data()).expect("numpy array data pointer is non-null"));
+    let values_ptr = values_out
+        .as_ref()
+        .map(|a| WritePtr(NonNull::new(a.data()).expect("numpy array data pointer is non-null")));
 
     let keys_flat = result.keys_flat;
     let values = result.values;
 
-    py.detach(|| {
-        // Rayon overhead can dominate for small outputs.
-        if n_groups < 50_000 {
-            for out_g in 0..n_groups {
-                let src_g = perm.map_or(out_g, |p| p[out_g]);
-                let base = src_g * n_keys;
-                unsafe { values_ptr.write(out_g, values[src_g]) };
-                for col in 0..n_keys {
-                    unsafe { key_ptrs[col].write(out_g, keys_flat[base + col]) };
-                }
-            }
-            return;
-        }
+    scatter_multi_result(py, &key_ptrs, &keys_flat, perm, &values, values_ptr);
 
-        let chunk = 1usize.max(n_groups / (rayon::current_num_threads() * 8));
-        (0..n_groups)
-            .into_par_iter()
-            .with_min_len(chunk)
-            .for_each(|out_g| {
-                let src_g = perm.map_or(out_g, |p| p[out_g]);
-                let base = src_g * n_keys;
-                unsafe { values_ptr.write(out_g, values[src_g]) };
-                for col in 0..n_keys {
-                    unsafe { key_ptrs[col].write(out_g, keys_flat[base + col]) };
-                }
-            });
-    });
-
+    // Without a permutation, values are already ordered: transfer their allocation.
+    let values_out = values_out.unwrap_or_else(|| values.into_pyarray(py));
     Ok((key_arrays, values_out))
 }
 
@@ -221,45 +234,22 @@ pub(crate) fn convert_multi_result_i64<'py>(
     let key_arrays: Vec<Bound<'py, PyArray1<i64>>> = (0..n_keys)
         .map(|_| unsafe { PyArray1::<i64>::new(py, n_groups, false) })
         .collect();
-    let values_out = unsafe { PyArray1::<i64>::new(py, n_groups, false) };
+    let values_out = perm.map(|_| unsafe { PyArray1::<i64>::new(py, n_groups, false) });
 
     let key_ptrs: Vec<WritePtr<i64>> = key_arrays
         .iter()
         .map(|a| WritePtr(NonNull::new(a.data()).expect("numpy array data pointer is non-null")))
         .collect();
-    let values_ptr =
-        WritePtr(NonNull::new(values_out.data()).expect("numpy array data pointer is non-null"));
+    let values_ptr = values_out
+        .as_ref()
+        .map(|a| WritePtr(NonNull::new(a.data()).expect("numpy array data pointer is non-null")));
 
     let keys_flat = result.keys_flat;
     let values = result.values;
 
-    py.detach(|| {
-        if n_groups < 50_000 {
-            for out_g in 0..n_groups {
-                let src_g = perm.map_or(out_g, |p| p[out_g]);
-                let base = src_g * n_keys;
-                unsafe { values_ptr.write(out_g, values[src_g]) };
-                for col in 0..n_keys {
-                    unsafe { key_ptrs[col].write(out_g, keys_flat[base + col]) };
-                }
-            }
-            return;
-        }
+    scatter_multi_result(py, &key_ptrs, &keys_flat, perm, &values, values_ptr);
 
-        let chunk = 1usize.max(n_groups / (rayon::current_num_threads() * 8));
-        (0..n_groups)
-            .into_par_iter()
-            .with_min_len(chunk)
-            .for_each(|out_g| {
-                let src_g = perm.map_or(out_g, |p| p[out_g]);
-                let base = src_g * n_keys;
-                unsafe { values_ptr.write(out_g, values[src_g]) };
-                for col in 0..n_keys {
-                    unsafe { key_ptrs[col].write(out_g, keys_flat[base + col]) };
-                }
-            });
-    });
-
+    let values_out = values_out.unwrap_or_else(|| values.into_pyarray(py));
     Ok((key_arrays, values_out))
 }
 
