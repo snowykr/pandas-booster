@@ -37,6 +37,7 @@ def worker_case(driver, tmp_path, monkeypatch):
     package._rust = rust
     monkeypatch.setitem(sys.modules, "pandas_booster", package)
     monkeypatch.setitem(sys.modules, "pandas_booster._rust", rust)
+    monkeypatch.setattr(driver, "validate_acceptance", lambda *args: None)
     monkeypatch.setattr(driver, "validate_runtime", lambda *args: {"validated": True})
     monkeypatch.setattr(
         pd.DataFrame,
@@ -45,6 +46,7 @@ def worker_case(driver, tmp_path, monkeypatch):
         raising=False,
     )
     request = {
+        "purpose": "acceptance",
         "runtime": {},
         "threads": 1,
         "dataset": str(directory),
@@ -126,10 +128,13 @@ def test_failed_partial_responses_never_enter_accepted_pairs(
         driver.save(
             tmp_path / (role + ".json"),
             {
+                "purpose": "acceptance",
                 "python": str(tmp_path / role / "python"),
                 "dependencies": [],
                 "wheel": role + ".whl",
                 "manifest": {
+                    "purpose": "acceptance",
+                    "snapshot_overlays": {"Cargo.lock": {}},
                     "sha": driver.BASELINE,
                     "source_root": str(tmp_path / role),
                     "lock_sha256": "lock",
@@ -137,6 +142,7 @@ def test_failed_partial_responses_never_enter_accepted_pairs(
                 },
             },
         )
+    monkeypatch.setattr(driver, "validate_acceptance", lambda *a: None)
     monkeypatch.setattr(driver, "validate_comparison", lambda *a: None)
     other_case = dict(case, name="low")
     monkeypatch.setattr(driver, "case_specs", lambda *a: [case, other_case])

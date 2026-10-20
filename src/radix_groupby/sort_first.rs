@@ -5,7 +5,9 @@ use std::time::Instant;
 use super::result::GroupByMultiResult;
 use super::sort_first_routing::{checked_route_vec, memory_budget};
 use crate::aggregation::Aggregator;
-use crate::radix_sort_multi_key::{sort_first_columnar_permutation, MultiKeySortProof};
+use crate::radix_sort_multi_key::{
+    sort_first_columnar_permutation, ColumnarPermutation, MultiKeySortProof, MultiKeySortStrategy,
+};
 use rayon::prelude::*;
 
 #[cfg(test)]
@@ -45,12 +47,19 @@ where
 {
     let budget = memory_budget(values.len(), key_slices.len())
         .map_err(|reason| format!("sort-first resource refusal: {reason:?}"))?;
-    let (permutation, proof, layout_s, radix_s) = sort_first_columnar_permutation(key_slices)?;
+    let ColumnarPermutation {
+        permutation,
+        packed,
+        proof,
+        layout_s,
+        radix_s,
+    } = sort_first_columnar_permutation(key_slices)?;
     let n = permutation.len();
     #[cfg(test)]
     super::sort_first_routing::observe_scratch(
         "radix_returned",
-        permutation.capacity() * std::mem::size_of::<usize>(),
+        permutation.capacity() * std::mem::size_of::<usize>()
+            + packed.capacity() * std::mem::size_of::<u64>(),
     );
     let mut timings = ProductionSortFirstTimings {
         layout_s,
@@ -63,16 +72,41 @@ where
     #[cfg(test)]
     super::sort_first_routing::observe_scratch(
         "boundary_live",
+        permutation.capacity() * std::mem::size_of::<usize>()
+            + packed.capacity() * std::mem::size_of::<u64>()
+            + flags.capacity(),
+    );
+    match proof.strategy {
+        MultiKeySortStrategy::PackedU64 if proof.total_bit_width == 0 => {
+            // No packed allocation exists for constant tuples.
+            if let Some(first) = flags.first_mut() {
+                *first = 1;
+            }
+        }
+        MultiKeySortStrategy::PackedU64 => {
+            flags.par_iter_mut().enumerate().for_each(|(idx, flag)| {
+                *flag =
+                    u8::from(idx == 0 || packed[permutation[idx - 1]] != packed[permutation[idx]]);
+            });
+        }
+        MultiKeySortStrategy::FusedMultiKeyRadix => {
+            flags.par_iter_mut().enumerate().for_each(|(idx, flag)| {
+                *flag = u8::from(
+                    idx == 0
+                        || !key_slices
+                            .iter()
+                            .all(|col| col[permutation[idx - 1]] == col[permutation[idx]]),
+                );
+            });
+        }
+    }
+    // Packed keys never overlap counts, starts, or reduction/output storage.
+    drop(packed);
+    #[cfg(test)]
+    super::sort_first_routing::observe_scratch(
+        "packed_released",
         permutation.capacity() * std::mem::size_of::<usize>() + flags.capacity(),
     );
-    flags.par_iter_mut().enumerate().for_each(|(idx, flag)| {
-        *flag = u8::from(
-            idx == 0
-                || !key_slices
-                    .iter()
-                    .all(|col| col[permutation[idx - 1]] == col[permutation[idx]]),
-        );
-    });
     timings.boundary_discovery_s = clock.elapsed().as_secs_f64();
     let clock = Instant::now();
     let mut counts = checked_route_vec::<usize>(budget.chunks)?;

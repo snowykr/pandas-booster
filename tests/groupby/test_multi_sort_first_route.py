@@ -62,6 +62,11 @@ def _assert_exact(actual, expected):
     assert [level.dtype for level in actual.index.levels] == [
         level.dtype for level in expected.index.levels
     ]
+    for level, reference in zip(actual.index.levels, expected.index.levels):
+        pd.testing.assert_index_equal(level, reference, exact=True)
+    for codes, reference in zip(actual.index.codes, expected.index.codes):
+        np.testing.assert_array_equal(codes, reference)
+        assert codes.dtype == reference.dtype
     if actual.dtype.kind == "f":
         zeros = expected.to_numpy() == 0
         np.testing.assert_array_equal(
@@ -105,6 +110,8 @@ def _exercise_actual_extension(threads):
                     expected = getattr(df.groupby(KEY_NAMES, sort=True)["measurement"], agg)()
                     # Seven duplicate rows, not a tiny tiled seed pretending to be high-ratio.
                     assert len(expected) == n - 7
+                    # Duplicate tuples collapse to a unique first key in the sorted output.
+                    assert expected.index.get_level_values(0).is_unique
                     keys = [np.ascontiguousarray(df[name], dtype=np.int64) for name in KEY_NAMES]
                     values = np.ascontiguousarray(df["measurement"])
                     symbol = f"groupby_multi_{agg}_{kernel}_sorted"
@@ -118,6 +125,7 @@ def _exercise_actual_extension(threads):
                     )
                     _assert_exact(_from_raw(normal_keys, normal_values, df), expected)
                     _assert_exact(_from_raw(profile_keys, profile_values, df), expected)
+                    assert np.all(normal_keys[0][1:] > normal_keys[0][:-1])
                     assert normal_values.dtype == profile_values.dtype == expected.dtype
                     for normal_column, profile_column in zip(normal_keys, profile_keys):
                         np.testing.assert_array_equal(normal_column, profile_column)
@@ -140,6 +148,13 @@ def _exercise_actual_extension(threads):
                                     pd.Series,
                                     "sort_index",
                                     side_effect=AssertionError("unexpected Python output sort"),
+                                ),
+                                patch.object(
+                                    pd.MultiIndex,
+                                    "from_arrays",
+                                    side_effect=AssertionError(
+                                        "unique-first integer output must bypass from_arrays"
+                                    ),
                                 ),
                             ):
                                 if surface == "accessor":

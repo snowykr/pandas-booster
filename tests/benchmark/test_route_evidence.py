@@ -95,6 +95,7 @@ def runtime(driver, tmp_path, monkeypatch):
         str(Path.home() / ".cargo/bin") + driver.os.pathsep + driver.os.defpath
     )
     manifest = {
+        "purpose": "acceptance",
         "sha": driver.BASELINE,
         "sources": driver.files_manifest(source),
         "source_root": str(source),
@@ -118,6 +119,7 @@ def runtime(driver, tmp_path, monkeypatch):
     }
     driver.save(package / "_route_evidence_manifest.json", manifest)
     descriptor = {
+        "purpose": "acceptance",
         "python": str(python),
         "package": str(package),
         "extension": str(extension),

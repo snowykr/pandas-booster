@@ -11,8 +11,11 @@ Prepare each immutable revision, then run from any directory::
 The dependency lock must include maturin and identical runtime dependencies, with
 hashes. Supply the same explicit Cargo.lock to both revisions; it is recorded as
 an external snapshot input, not attributed to the git commit. Preparation never
-uses editable installs. Existing runtime.json files can
-be consumed instead; every installed artifact is revalidated in every worker.
+uses editable installs. New descriptors and embedded manifests declare
+purpose=acceptance. Existing runtimes without that declaration must be rebuilt,
+not relabeled. Audit-only builds are never accepted in either comparison role;
+use operation_audit.py separately. Every installed artifact is revalidated in
+every worker.
 A successful command is not certification: inspect status and unmet_gates. OCI
 and baseline count audit evidence cannot be replaced by local timings.
 """
@@ -194,6 +197,7 @@ def prepare(args: argparse.Namespace) -> None:
     if len(wheels) != 1:
         raise ValueError("Expected exactly one release wheel")
     manifest = {
+        "purpose": "acceptance",
         "sha": sha,
         "sources": sources,
         "source_root": str(source),
@@ -221,6 +225,7 @@ def prepare(args: argparse.Namespace) -> None:
     inventory = command([python, "-I", "-c", INVENTORY], root, env)
     descriptor = dict(
         json.loads(inventory),
+        purpose="acceptance",
         manifest=manifest,
         wheel=str(wheels[0]),
         wheel_sha256=digest(wheels[0]),
@@ -269,8 +274,24 @@ print(json.dumps({
 )
 
 
+def validate_acceptance(descriptor: dict[str, Any]) -> None:
+    """Reject diagnostic artifacts before dispatch, including direct workers."""
+    manifest = descriptor["manifest"]
+    if descriptor.get("purpose") != "acceptance" or manifest.get("purpose") != "acceptance":
+        raise ValueError("Runtime purpose must be acceptance; rebuild legacy runtimes")
+    embedded_path = Path(descriptor["package"]) / "_route_evidence_manifest.json"
+    if not embedded_path.is_file():
+        raise ValueError("Embedded provenance missing at package import path")
+    embedded = json.loads(embedded_path.read_text())
+    if embedded.get("purpose") != "acceptance" or embedded != manifest:
+        raise ValueError("Embedded provenance purpose or manifest mismatch")
+    if set(manifest["snapshot_overlays"]) != {"Cargo.lock"}:
+        raise ValueError("Acceptance forbids non-Cargo snapshot overlays")
+
+
 def validate_runtime(descriptor: dict[str, Any], threads: int) -> dict[str, Any]:
     """Fail closed on interpreter, wheel, source, installed files, or env skew."""
+    validate_acceptance(descriptor)
     import pandas_booster
     import pandas_booster._rust as rust
 
@@ -587,12 +608,15 @@ def worker(request_path: Path, response_path: Path) -> None:
 
 
 def _worker(request_path: Path, result: dict[str, Any]) -> None:
+    request = json.loads(request_path.read_text())
+    if request.get("purpose") != "acceptance":
+        raise ValueError("Worker request purpose must be acceptance")
+    validate_acceptance(request["runtime"])
     import numpy as np
     import pandas as pd
     import pandas_booster  # noqa: F401 -- registers public accessor
     import pandas_booster._rust as rust
 
-    request = json.loads(request_path.read_text())
     result["stage"] = "runtime_validation"
     identity = validate_runtime(request["runtime"], request["threads"])
     pre_input = rss()
@@ -758,6 +782,9 @@ def run(args: argparse.Namespace) -> None:
         role: json.loads(Path(getattr(args, role)).read_text())
         for role in ("baseline", "candidate")
     }
+    # Check BOTH roles before any evidence, timing, RSS or scaling worker starts.
+    for runtime in runtimes.values():
+        validate_acceptance(runtime)
     validate_comparison(runtimes)
     for runtime in runtimes.values():
         if not Path(runtime["python"]).is_absolute():
@@ -835,6 +862,7 @@ def run(args: argparse.Namespace) -> None:
         request_path = artifact / f"{serial:06d}-request.json"
         response_path = artifact / f"{serial:06d}-response.json"
         request = {
+            "purpose": "acceptance",
             "runtime": runtimes[role],
             "case": case,
             "dataset": str(directory),

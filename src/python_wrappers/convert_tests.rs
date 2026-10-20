@@ -35,7 +35,11 @@ fn assert_conversion_keys(
         let keys = readonly.as_slice().expect("contiguous key column");
         assert_eq!(keys.len(), n_groups);
         for (out_g, &key) in keys.iter().enumerate() {
-            let src_g = if permuted { n_groups - 1 - out_g } else { out_g };
+            let src_g = if permuted {
+                n_groups - 1 - out_g
+            } else {
+                out_g
+            };
             assert_eq!(key, (src_g * n_keys + col) as i64 - 17);
         }
     }
@@ -74,7 +78,10 @@ fn multi_f64_conversion_preserves_ownership_bits_and_lifetime() -> PyResult<()> 
                     assert_ne!(output.data() as usize, original_ptr);
                 }
                 Ok::<_, PyErr>((
-                    columns.into_iter().map(|col| col.unbind()).collect::<Vec<_>>(),
+                    columns
+                        .into_iter()
+                        .map(|col| col.unbind())
+                        .collect::<Vec<_>>(),
                     output.unbind(),
                 ))
             })?;
@@ -86,7 +93,11 @@ fn multi_f64_conversion_preserves_ownership_bits_and_lifetime() -> PyResult<()> 
                 let values = readonly.as_slice().expect("contiguous values");
                 assert_eq!(values.len(), n_groups);
                 for (out_g, &value) in values.iter().enumerate() {
-                    let src_g = if permuted { n_groups - 1 - out_g } else { out_g };
+                    let src_g = if permuted {
+                        n_groups - 1 - out_g
+                    } else {
+                        out_g
+                    };
                     assert_eq!(value.to_bits(), bits[src_g % bits.len()]);
                 }
             });
@@ -98,7 +109,16 @@ fn multi_f64_conversion_preserves_ownership_bits_and_lifetime() -> PyResult<()> 
 #[test]
 fn multi_i64_conversion_preserves_ownership_values_and_lifetime() -> PyResult<()> {
     Python::initialize();
-    let integers = [i64::MIN, i64::MAX, -1, 0, 1, -(1_i64 << 54), 1_i64 << 54, 37];
+    let integers = [
+        i64::MIN,
+        i64::MAX,
+        -1,
+        0,
+        1,
+        -(1_i64 << 54),
+        1_i64 << 54,
+        37,
+    ];
 
     for (n_groups, n_keys) in multi_conversion_shapes() {
         for permuted in [false, true] {
@@ -119,7 +139,10 @@ fn multi_i64_conversion_preserves_ownership_values_and_lifetime() -> PyResult<()
                     assert_ne!(output.data() as usize, original_ptr);
                 }
                 Ok::<_, PyErr>((
-                    columns.into_iter().map(|col| col.unbind()).collect::<Vec<_>>(),
+                    columns
+                        .into_iter()
+                        .map(|col| col.unbind())
+                        .collect::<Vec<_>>(),
                     output.unbind(),
                 ))
             })?;
@@ -130,7 +153,11 @@ fn multi_i64_conversion_preserves_ownership_values_and_lifetime() -> PyResult<()
                 let values = readonly.as_slice().expect("contiguous values");
                 assert_eq!(values.len(), n_groups);
                 for (out_g, &value) in values.iter().enumerate() {
-                    let src_g = if permuted { n_groups - 1 - out_g } else { out_g };
+                    let src_g = if permuted {
+                        n_groups - 1 - out_g
+                    } else {
+                        out_g
+                    };
                     assert_eq!(value, integers[src_g % integers.len()]);
                 }
             });

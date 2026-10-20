@@ -311,8 +311,12 @@ fn admitted_engine_releases_boundary_and_permutation_scratch_before_conversion()
             let events = take_scratch_events();
             let bytes = |phase| events.iter().find(|(name, _)| *name == phase).unwrap().1;
             let p = std::mem::size_of::<usize>();
-            assert_eq!(bytes("radix_returned"), values.len() * p);
-            assert_eq!(bytes("boundary_live"), values.len() * (p + 1));
+            assert_eq!(bytes("radix_returned"), values.len() * (p + 8));
+            assert_eq!(bytes("boundary_live"), values.len() * (p + 8 + 1));
+            assert_eq!(bytes("packed_released"), values.len() * (p + 1));
+            let position = |phase| events.iter().position(|(name, _)| *name == phase).unwrap();
+            assert!(position("boundary_live") < position("packed_released"));
+            assert!(position("packed_released") < position("starts_live"));
             assert!(bytes("starts_live") > bytes("boundary_released"));
             assert_eq!(
                 bytes("boundary_released"),
@@ -321,6 +325,125 @@ fn admitted_engine_releases_boundary_and_permutation_scratch_before_conversion()
             assert_eq!(events.last(), Some(&("conversion_ready", 0)));
             assert!(!events.iter().any(|(phase, _)| *phase == "hash_fallback"));
         });
+}
+
+#[test]
+fn production_packed_boundaries_cover_duplicates_extrema_exact_width_and_constants() {
+    use super::sort_first::production_sort_first_groupby;
+    use super::sort_first_routing::take_scratch_events;
+    use crate::aggregation::{CountAggI64, MaxAggF64};
+    use crate::radix_sort_multi_key::MultiKeySortStrategy;
+
+    let n = 5_003;
+    let extrema = [i64::MIN, i64::MAX, 0, i64::MIN, -1];
+    let narrow = [i64::MIN, i64::MIN + u32::MAX as i64, i64::MIN + 1];
+    let fixtures = [
+        (
+            vec![
+                (0..n).map(|row| (row * 37 % 127) as i64 - 63).collect(),
+                (0..n).map(|row| (row * 11 % 31) as i64 - 15).collect(),
+            ],
+            MultiKeySortStrategy::PackedU64,
+            None,
+        ),
+        (
+            vec![(0..n).map(|row| extrema[row % 5]).collect(), vec![7; n]],
+            MultiKeySortStrategy::PackedU64,
+            Some(64),
+        ),
+        (
+            vec![
+                (0..n).map(|row| narrow[row % 3]).collect(),
+                (0..n).map(|row| narrow[(row / 3) % 3]).collect(),
+            ],
+            MultiKeySortStrategy::PackedU64,
+            Some(64),
+        ),
+        (
+            vec![vec![i64::MIN; n], vec![i64::MAX; n]],
+            MultiKeySortStrategy::PackedU64,
+            Some(0),
+        ),
+        (
+            vec![
+                (0..n).map(|row| extrema[row % 5]).collect(),
+                (0..n).map(|row| extrema[(row / 3) % 5]).collect(),
+            ],
+            MultiKeySortStrategy::FusedMultiKeyRadix,
+            Some(128),
+        ),
+    ];
+    let floats: Vec<f64> = (0..n).map(|row| [-0.0, 0.0, f64::NAN][row % 3]).collect();
+    let integers = vec![1i64; n];
+    for threads in [1, 2, 4] {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| {
+                for (storage, strategy, width) in &fixtures {
+                    let keys: Vec<&[i64]> = storage.iter().map(Vec::as_slice).collect();
+                    let groups = reference_groups(storage);
+                    take_scratch_events();
+                    let (result, _, _, proof) =
+                        production_sort_first_groupby::<f64, MaxAggF64, f64>(&keys, &floats)
+                            .unwrap();
+                    assert_float_result(&result, &groups, &floats);
+                    assert_eq!(proof.strategy, *strategy);
+                    if let Some(width) = width {
+                        assert_eq!(proof.total_bit_width, *width);
+                    }
+                    let events = take_scratch_events();
+                    let bytes = |phase| events.iter().find(|(name, _)| *name == phase).unwrap().1;
+                    let packed_bytes = if *strategy == MultiKeySortStrategy::PackedU64
+                        && proof.total_bit_width != 0
+                    {
+                        8 * n
+                    } else {
+                        0
+                    };
+                    assert_eq!(
+                        bytes("boundary_live") - bytes("packed_released"),
+                        packed_bytes
+                    );
+                    let (count, _, _, _) =
+                        production_sort_first_groupby::<i64, CountAggI64, i64>(&keys, &integers)
+                            .unwrap();
+                    assert_integer_result(&count, &groups, &integers, None, false);
+                }
+            });
+    }
+}
+
+#[test]
+fn packed_discovery_fits_existing_boundary_envelope_with_checked_limits() {
+    use super::sort_first_routing::{calculate_memory_budget, phases_fit};
+    for threads in [1, 2, 4] {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| {
+                for n in [0usize, 1, 5_003, 5_000_000] {
+                    let budget = calculate_memory_budget(n, 2).unwrap();
+                    let p = std::mem::size_of::<usize>();
+                    let overhead = (threads + budget.chunks + 2) * 4096 + 65536;
+                    let discovery = n * (p + 1 + 8) + overhead;
+                    let setup = n * (p + 1) + (n + 1) * p + budget.chunks * 2 * p + overhead;
+                    assert_eq!(budget.phase_bytes[2], discovery.max(setup));
+                    if p == 8 {
+                        assert_eq!(budget.phase_bytes[2], setup);
+                    }
+                }
+                assert!(calculate_memory_budget(usize::MAX, 2).is_err());
+            });
+    }
+    for bytes in [ROUTE_MEMORY_CAP - 1, ROUTE_MEMORY_CAP, ROUTE_MEMORY_CAP + 1] {
+        assert_eq!(
+            phases_fit(&[bytes; 5], ROUTE_MEMORY_CAP),
+            bytes <= ROUTE_MEMORY_CAP
+        );
+    }
 }
 
 #[test]
@@ -340,6 +463,10 @@ fn every_route_allocation_error_propagates_without_hash_retry() {
             });
             result.unwrap();
             assert!(discovery.attempts > 0);
+            assert_eq!(
+                discovery.live, 0,
+                "packed scratch survived production return"
+            );
             for failure in [Failure::Reserve, Failure::Capacity] {
                 for fail_at in 1..=discovery.attempts {
                     take_physical_operations();

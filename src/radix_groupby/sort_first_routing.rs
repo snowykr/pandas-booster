@@ -162,11 +162,17 @@ pub(super) fn calculate_memory_budget(
             .checked_add(packed)?
             .checked_add(digit)?
             .checked_add(e)?;
-        let boundaries = u
+        // Discovery retains packed keys but no counts/starts. Setup drops
+        // packing before allocating either. On 64-bit hosts packed=8n <=
+        // s=8(n+1), so discovery fits the existing setup envelope: no cap or
+        // model inflation. Keep the max explicit for checked, portable sizing.
+        let discovery = u.checked_add(n)?.checked_add(packed)?.checked_add(e)?;
+        let setup = u
             .checked_add(n)?
             .checked_add(s)?
             .checked_add(c.checked_mul(2)?.checked_mul(p)?)?
             .checked_add(e)?;
+        let boundaries = discovery.max(setup);
         let reduction = u.checked_add(s)?.checked_add(r)?.checked_add(e)?;
         let conversion = r.checked_mul(2)?.checked_add(e)?;
         let normalized = n.checked_mul(k.checked_add(1)?)?.checked_mul(8)?;

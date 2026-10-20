@@ -27,11 +27,37 @@ fn check_columnar_packed(base: usize, packed: usize) -> Result<usize, String> {
     crate::radix_sort_digit::check_route_workspace(&[base, packed])
 }
 
+pub(crate) struct ColumnarPermutation {
+    pub(crate) permutation: Vec<usize>,
+    // Injective packed tuple encoding in original row order. Empty for fused
+    // layouts and zero-width (all-constant) tuples; consult the proof first.
+    #[cfg(not(test))]
+    pub(crate) packed: Vec<u64>,
+    #[cfg(test)]
+    pub(crate) packed: crate::radix_sort_digit::route_allocation_test::Scratch<u64>,
+    pub(crate) proof: MultiKeySortProof,
+    pub(crate) layout_s: f64,
+    pub(crate) radix_s: f64,
+}
+
+impl std::fmt::Debug for ColumnarPermutation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ColumnarPermutation")
+            .field("permutation", &self.permutation)
+            .field("packed", &self.packed.as_slice())
+            .field("proof", &self.proof)
+            .field("layout_s", &self.layout_s)
+            .field("radix_s", &self.radix_s)
+            .finish()
+    }
+}
+
 /// Sort input rows directly from columns, without an n-by-k key copy.
 /// Layout/packing and radix timings are disjoint; ties retain input row order.
 pub(crate) fn sort_first_columnar_permutation(
     key_slices: &[&[i64]],
-) -> Result<(Vec<usize>, MultiKeySortProof, f64, f64), String> {
+) -> Result<ColumnarPermutation, String> {
     use crate::radix_sort_digit::{radix_sort_perm_by_digit_checked, scratch_vec as route_vec};
     use rayon::prelude::*;
     use std::time::Instant;
@@ -117,16 +143,17 @@ pub(crate) fn sort_first_columnar_permutation(
     let radix_s = radix_start.elapsed().as_secs_f64();
     #[cfg(test)]
     let bit_widths = bit_widths.into_vec();
-    Ok((
+    Ok(ColumnarPermutation {
         permutation,
-        MultiKeySortProof {
+        packed,
+        proof: MultiKeySortProof {
             strategy,
             bit_widths,
             total_bit_width,
         },
         layout_s,
         radix_s,
-    ))
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -426,7 +453,7 @@ mod columnar_tests {
             .unwrap();
         pool.install(|| {
             let (success, snapshot) = with_failure(usize::MAX, Failure::Reserve, || {
-                sort_first_columnar_permutation(&[&first, &second])
+                sort_first_columnar_permutation(&[&first, &second]).map(drop)
             });
             assert!(success.is_ok());
             assert_eq!(snapshot.live, 0);
@@ -465,11 +492,21 @@ mod columnar_tests {
                 .num_threads(threads)
                 .build()
                 .unwrap();
-            let (actual, proof, layout, radix) =
-                pool.install(|| sort_first_columnar_permutation(&slices).unwrap());
-            assert_eq!(actual, expected);
-            assert_eq!(proof.strategy, strategy);
-            assert!(layout >= 0.0 && radix >= 0.0);
+            let actual = pool.install(|| sort_first_columnar_permutation(&slices).unwrap());
+            assert_eq!(actual.permutation, expected);
+            assert_eq!(actual.proof.strategy, strategy);
+            assert!(actual.layout_s >= 0.0 && actual.radix_s >= 0.0);
+            if strategy == MultiKeySortStrategy::PackedU64 && actual.proof.total_bit_width != 0 {
+                assert_eq!(actual.packed.len(), columns[0].len());
+                for pair in actual.permutation.windows(2) {
+                    assert_eq!(
+                        actual.packed[pair[0]] == actual.packed[pair[1]],
+                        columns.iter().all(|col| col[pair[0]] == col[pair[1]])
+                    );
+                }
+            } else {
+                assert!(actual.packed.is_empty());
+            }
         }
     }
 
@@ -510,9 +547,10 @@ mod columnar_tests {
     fn empty_singleton_and_constant_columns_are_identity() {
         for n in [0, 1, 10_003] {
             let column = vec![i64::MIN; n];
-            let (perm, proof, _, _) = sort_first_columnar_permutation(&[&column, &column]).unwrap();
-            assert_eq!(perm, (0..n).collect::<Vec<_>>());
-            assert_eq!(proof.total_bit_width, 0);
+            let result = sort_first_columnar_permutation(&[&column, &column]).unwrap();
+            assert_eq!(result.permutation, (0..n).collect::<Vec<_>>());
+            assert_eq!(result.proof.total_bit_width, 0);
+            assert!(result.packed.is_empty());
         }
     }
 
