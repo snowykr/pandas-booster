@@ -40,8 +40,7 @@ _CI_WHEEL_TEST_JOBS: Final = (
     ),
 )
 _PUBLISH_RELEASE_ARGS: Final = (
-    "args: --release --out dist --compatibility pypi "
-    "--interpreter ${{ matrix.python-version }}"
+    "args: --release --out dist --compatibility pypi --interpreter ${{ matrix.python-version }}"
 )
 
 
@@ -107,10 +106,35 @@ def _assert_maturin_contract(contract: MaturinContract) -> None:
 def _assert_ci_wheel_job_uses_release_build(workflow_text: str, job_name: str) -> None:
     job_block = _job_block(workflow_text, job_name)
 
-    assert (
-        "maturin build --release --out dist" in job_block
-    ), f"{job_name} must build wheels with --release"
+    assert "maturin build --release --out dist" in job_block, (
+        f"{job_name} must build wheels with --release"
+    )
     assert "--profile dev-fast" not in job_block, f"{job_name} must not use --profile dev-fast"
+
+
+def _assert_rust_ci_installs_numpy(workflow_text: str) -> None:
+    job_block = _job_block(workflow_text, "rust-checks")
+    dependencies = tomllib.loads(_PYPROJECT_PATH.read_text(encoding="utf-8"))["project"][
+        "dependencies"
+    ]
+    numpy_requirement = next(
+        dependency for dependency in dependencies if dependency.startswith("numpy")
+    )
+    install = f'run: python -m pip install "{numpy_requirement}"'
+    assert install in job_block, "rust-checks must install NumPy into the selected Python"
+    assert "PYO3_PYTHON={sys.executable}" in job_block
+    setup_position = job_block.index("uses: actions/setup-python@v5")
+    install_position = job_block.index(install)
+    for command in (
+        "cargo fmt --all -- --check",
+        "cargo clippy --all-targets -- -D warnings",
+        "cargo test",
+    ):
+        gate = f"run: {command}"
+        assert gate in job_block, f"rust-checks must retain {command}"
+        assert setup_position < install_position < job_block.index(gate), (
+            "NumPy installation must follow Python setup and precede every Rust gate"
+        )
 
 
 def _assert_publish_wheel_job_uses_release_build(workflow_text: str) -> None:
@@ -128,16 +152,16 @@ def _assert_publish_wheel_job_uses_release_build(workflow_text: str) -> None:
 def _assert_wheel_smoke_install_contract(workflow_text: str) -> None:
     smoke_job = _job_block(workflow_text, "test-wheel-smoke")
 
-    assert (
-        "uv sync --locked --extra dev --no-install-project" in smoke_job
-    ), "wheel smoke must keep --no-install-project"
-    assert (
-        'if [ "${#wheels[@]}" -ne 1 ]; then' in smoke_job
-    ), "wheel smoke must require exactly 1 wheel"
+    assert "uv sync --locked --extra dev --no-install-project" in smoke_job, (
+        "wheel smoke must keep --no-install-project"
+    )
+    assert 'if [ "${#wheels[@]}" -ne 1 ]; then' in smoke_job, (
+        "wheel smoke must require exactly 1 wheel"
+    )
     assert "uv pip install -e ." not in smoke_job, "wheel smoke must not use editable install"
-    assert (
-        'uv pip install "${wheels[0]}"' in smoke_job
-    ), "wheel smoke must install the built wheel artifact"
+    assert 'uv pip install "${wheels[0]}"' in smoke_job, (
+        "wheel smoke must install the built wheel artifact"
+    )
     assert "site-packages" in smoke_job
     assert "uv run --no-sync pytest" in smoke_job
     assert "-o pythonpath=" in smoke_job
@@ -197,6 +221,50 @@ def test_pyproject_guardrails_reject_removed_extension_module_feature() -> None:
         _assert_maturin_contract(_maturin_contract_from_text(mutated_text))
 
 
+def test_rust_ci_installs_numpy_before_all_gates() -> None:
+    _assert_rust_ci_installs_numpy(_CI_WORKFLOW_PATH.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("placement", ("missing", "before-setup", "after-gate", "wrong-job"))
+def test_rust_ci_numpy_guard_rejects_missing_or_misordered_runtime(placement: str) -> None:
+    workflow = _CI_WORKFLOW_PATH.read_text(encoding="utf-8")
+    job_block = _job_block(workflow, "rust-checks")
+    install_step = (
+        "      - name: Install NumPy for embedded converter tests\n"
+        '        run: python -m pip install "numpy>=1.21.0,<3.0.0"\n\n'
+    )
+    assert install_step in job_block
+    mutated_job = job_block.replace(install_step, "", 1)
+    if placement == "before-setup":
+        mutated_job = mutated_job.replace(
+            "      - name: Setup Python", install_step + "      - name: Setup Python", 1
+        )
+    elif placement == "after-gate":
+        mutated_job = mutated_job.replace(
+            "        run: cargo fmt --all -- --check\n",
+            "        run: cargo fmt --all -- --check\n\n" + install_step,
+            1,
+        )
+    mutated = workflow.replace(job_block, mutated_job, 1)
+    if placement == "wrong-job":
+        other_job = _job_block(mutated, "python-quality")
+        mutated = mutated.replace(
+            other_job, other_job.replace("    steps:\n", "    steps:\n" + install_step, 1), 1
+        )
+    with pytest.raises(AssertionError, match="install NumPy|installation must follow"):
+        _assert_rust_ci_installs_numpy(mutated)
+
+
+def test_rust_ci_numpy_guard_rejects_a_different_installer_interpreter() -> None:
+    mutated = _mutated_file_text(
+        _CI_WORKFLOW_PATH,
+        'python -m pip install "numpy>=1.21.0,<3.0.0"',
+        'pip install "numpy>=1.21.0,<3.0.0"',
+    )
+    with pytest.raises(AssertionError, match="selected Python"):
+        _assert_rust_ci_installs_numpy(mutated)
+
+
 def test_ci_wheel_build_jobs_keep_release_wheel_commands() -> None:
     workflow_text = _CI_WORKFLOW_PATH.read_text(encoding="utf-8")
 
@@ -207,7 +275,7 @@ def test_ci_wheel_build_jobs_keep_release_wheel_commands() -> None:
 def test_ci_wheel_build_guardrail_rejects_dev_fast_wheel_job() -> None:
     mutated_text = _mutated_file_text(
         _CI_WORKFLOW_PATH,
-        'maturin build --release --out dist',
+        "maturin build --release --out dist",
         "maturin build --profile dev-fast --out dist",
     )
 

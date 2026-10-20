@@ -21,6 +21,9 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install NumPy for embedded converter tests
+        run: python -m pip install "numpy>=1.21.0,<3.0.0"
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

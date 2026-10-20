@@ -7155,6 +7155,18 @@
     "handoff_critic": "critic15 traced commands/thresholds to both drivers and checked OCI/remote-authorization boundaries; archive bytes and lane remote non-use were supplied context, not independently revalidated",
     "limits": "Neither critic reran all bootstrap/RSS/hash checks or project gates; exhaustive archive/data checks are the caller's recorded verification. No certification, merge, issue closure, remote execution or recurring-job approval."
   },
+  "post_measurement_ci_runtime": {
+    "scope": "CI provisioning only: install project-range NumPy in actions/setup-python's selected interpreter before every unchanged Rust gate. No src/python changes from measured 3828bb1; no benchmark reclassification or new benchmark run.",
+    "prior_remote_head": "7e2da51768924fa1ba895475f2305b432f3ed546",
+    "observed_prior_ci": "Rust CI actually failed: 234 passed, 2 converters failed with missing NumPy, 1 ignored; Python quality and Quick passed. Failure retained, not relabeled.",
+    "proof": "benchmarks/evidence/issue17-ci-runtime-proof.json",
+    "proof_sha256": "0ac587185295bd4638478f06afe314e82adf639422656d70753da31e600914fc",
+    "negative_positive": "Owned regular CPython prefix, same final interpreter/PYTHONHOME/loader environment: without NumPy 2 passed/2 expected converter failures; after NumPy, 4 converters and full 236 Rust tests pass, 1 existing ignored diagnostic.",
+    "sandbox_caveat": "Initial ensurepip bootstrap was rejected by uv's externally-managed marker and retained. Local provisioning used uv with --break-system-packages confined to the owned /tmp prefix; the marker, host/base Python and user site were unchanged. CI uses python -m pip, not the local sandbox installer.",
+    "additional_checks": "29 focused release contracts pass, including removal, before-setup, after-gate, wrong-job and wrong-interpreter negative guards. Ruff, basedpyright, fmt/clippy, all three release contracts and native-source equivalence pass.",
+    "sequencing": "Same-plan planner16 and critic17 approved before CI edits. Critic17 subsequently APPROVED the source/proof and new PR-body section for DRAFT PUBLICATION ONLY, with no required corrections; no readiness certification. Reviewer read representative proof/source, while caller ran gates and recomputed hashes. No competing plan.",
+    "archive_boundary": "This post-publication CI proof is a separate appendix, not inside the unchanged measured-recovery archive. Earlier benchmark failures, hashes, source pins and OCI/allocator limitations remain unchanged."
+  },
   "outstanding": [
     "OCI1/2/4/8/16/32/64 scaling, T32/T64 performance/control/domain/memory are still UNMEASURED. N100 is not OCI certification.",
     "Unsorted allocator/live-payload model remains UNKNOWN. All measured unsorted RSS workers pass the unchanged measured-regression branch, but the full min(analytical,measured) envelope cannot be certified without a valid model. No sorted model substituted.",

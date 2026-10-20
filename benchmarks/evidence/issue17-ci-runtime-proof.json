@@ -1,0 +1,243 @@
+{
+  "scope": "CI test-runtime provisioning only; no product source/benchmark change; owned regular CPython prefix, not host Python/user site",
+  "prefix": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu",
+  "selected_environment": {
+    "HOME": "/home/snowy",
+    "PATH": "/home/snowy/.cargo/bin:/usr/local/bin:/usr/bin:/bin",
+    "LANG": "C.UTF-8",
+    "PYO3_PYTHON": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11",
+    "PYTHONPATH": "",
+    "PYTHONNOUSERSITE": "1",
+    "LD_LIBRARY_PATH": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/lib",
+    "PYTHONHOME": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu"
+  },
+  "stages": [
+    {
+      "stage": "numpy_absent",
+      "command": [
+        "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11",
+        "-I",
+        "-c",
+        "import importlib.util,json,sys; print(json.dumps({\"executable\":sys.executable,\"prefix\":sys.prefix,\"numpy_spec\":str(importlib.util.find_spec(\"numpy\"))})); assert importlib.util.find_spec(\"numpy\") is None"
+      ],
+      "returncode": 0,
+      "stdout": "{\"executable\": \"/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11\", \"prefix\": \"/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu\", \"numpy_spec\": \"None\"}\n",
+      "stderr": "",
+      "selected_environment": {
+        "HOME": "/home/snowy",
+        "PATH": "/home/snowy/.cargo/bin:/usr/local/bin:/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "PYO3_PYTHON": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11",
+        "PYTHONPATH": "",
+        "PYTHONNOUSERSITE": "1",
+        "LD_LIBRARY_PATH": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/lib"
+      }
+    },
+    {
+      "stage": "expected_negative_converter_tests",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "python_wrappers::convert_tests",
+        "--",
+        "--nocapture"
+      ],
+      "returncode": 101,
+      "stdout": "\nrunning 4 tests\ntest python_wrappers::convert_tests::multi_f64_conversion_preserves_ownership_bits_and_lifetime ... FAILED\ntest python_wrappers::convert_tests::multi_i64_conversion_preserves_ownership_values_and_lifetime ... FAILED\ntest python_wrappers::convert_tests::single_profile_dict_counts_routing_direct_phases_and_conversion_once ... ok\ntest python_wrappers::convert_tests::single_profile_dict_counts_fallback_routing_with_zero_direct_fields ... ok\n\nfailures:\n\nfailures:\n    python_wrappers::convert_tests::multi_f64_conversion_preserves_ownership_bits_and_lifetime\n    python_wrappers::convert_tests::multi_i64_conversion_preserves_ownership_values_and_lifetime\n\ntest result: FAILED. 2 passed; 2 failed; 0 ignored; 0 measured; 233 filtered out; finished in 0.01s\n\n",
+      "stderr": "   Compiling pyo3-build-config v0.28.3\n   Compiling pyo3-ffi v0.28.3\n   Compiling pyo3-macros-backend v0.28.3\n   Compiling pyo3 v0.28.3\n   Compiling numpy v0.28.0\n   Compiling pandas_booster v0.2.0 (/home/snowy/.gajaeway/lanes/70616e6461732d626f6f737465722d707232302d6761746573)\n   Compiling pyo3-macros v0.28.3\n    Finished `test` profile [optimized + debuginfo] target(s) in 16.71s\n     Running unittests src/lib.rs (target/debug/deps/pandas_booster-e8e9124cecc4fcd0)\nCould not find platform dependent libraries <exec_prefix>\n\nthread 'python_wrappers::convert_tests::multi_f64_conversion_preserves_ownership_bits_and_lifetime' (251359) panicked at /home/snowy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/numpy-0.28.0/src/npyffi/array.rs:89:14:\nFailed to access NumPy array API capsule: PyErr { type: <class 'ModuleNotFoundError'>, value: ModuleNotFoundError(\"No module named 'numpy'\"), traceback: None }\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\nthread 'python_wrappers::convert_tests::multi_i64_conversion_preserves_ownership_values_and_lifetime' (251360) panicked at /home/snowy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/numpy-0.28.0/src/npyffi/array.rs:89:14:\nFailed to access NumPy array API capsule: PyErr { type: <class 'ModuleNotFoundError'>, value: ModuleNotFoundError(\"No module named 'numpy'\"), traceback: None }\nerror: test failed, to rerun pass `--lib`\n",
+      "selected_environment": {
+        "HOME": "/home/snowy",
+        "PATH": "/home/snowy/.cargo/bin:/usr/local/bin:/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "PYO3_PYTHON": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11",
+        "PYTHONPATH": "",
+        "PYTHONNOUSERSITE": "1",
+        "LD_LIBRARY_PATH": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/lib"
+      }
+    },
+    {
+      "stage": "owned_prefix_ensurepip",
+      "command": [
+        "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11",
+        "-I",
+        "-m",
+        "ensurepip"
+      ],
+      "returncode": 1,
+      "stdout": "",
+      "stderr": "error: externally-managed-environment\n\n× This environment is externally managed\n╰─> This Python installation is managed by uv and should not be modified.\n\nnote: If you believe this is a mistake, please contact your Python installation or OS distribution provider. You can override this, at the risk of breaking your Python installation or OS, by passing --break-system-packages.\nhint: See PEP 668 for the detailed specification.\nTraceback (most recent call last):\n  File \"<frozen runpy>\", line 198, in _run_module_as_main\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/ensurepip/__main__.py\", line 5, in <module>\n    sys.exit(ensurepip._main())\n             ^^^^^^^^^^^^^^^^^\n  File \"/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/ensurepip/__init__.py\", line 286, in _main\n    return _bootstrap(\n           ^^^^^^^^^^^\n  File \"/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/ensurepip/__init__.py\", line 202, in _bootstrap\n    return _run_pip([*args, *_PACKAGE_NAMES], additional_paths)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/ensurepip/__init__.py\", line 103, in _run_pip\n    return subprocess.run(cmd, check=True).returncode\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/subprocess.py\", line 571, in run\n    raise CalledProcessError(retcode, process.args,\nsubprocess.CalledProcessError: Command '['/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11', '-I', '-W', 'ignore::DeprecationWarning', '-c', '\\nimport runpy\\nimport sys\\nsys.path = [\\'/tmp/tmpnpqo1mgv/setuptools-79.0.1-py3-none-any.whl\\', \\'/tmp/tmpnpqo1mgv/pip-24.0-py3-none-any.whl\\'] + sys.path\\nsys.argv[1:] = [\\'install\\', \\'--no-cache-dir\\', \\'--no-index\\', \\'--find-links\\', \\'/tmp/tmpnpqo1mgv\\', \\'setuptools\\', \\'pip\\']\\nrunpy.run_module(\"pip\", run_name=\"__main__\", alter_sys=True)\\n']' returned non-zero exit status 1.\n",
+      "selected_environment": {
+        "HOME": "/home/snowy",
+        "PATH": "/home/snowy/.cargo/bin:/usr/local/bin:/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "PYO3_PYTHON": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11",
+        "PYTHONPATH": "",
+        "PYTHONNOUSERSITE": "1",
+        "LD_LIBRARY_PATH": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/lib"
+      }
+    },
+    {
+      "stage": "controlled_numpy_absent_explicit_home",
+      "command": [
+        "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11",
+        "-I",
+        "-c",
+        "import importlib.util,json,sys; print(json.dumps({\"prefix\":sys.prefix,\"numpy_spec\":str(importlib.util.find_spec(\"numpy\"))})); assert importlib.util.find_spec(\"numpy\") is None"
+      ],
+      "selected_environment": {
+        "HOME": "/home/snowy",
+        "PATH": "/home/snowy/.cargo/bin:/usr/local/bin:/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "PYO3_PYTHON": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11",
+        "PYTHONPATH": "",
+        "PYTHONNOUSERSITE": "1",
+        "LD_LIBRARY_PATH": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/lib",
+        "PYTHONHOME": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu"
+      },
+      "returncode": 0,
+      "stdout": "{\"prefix\": \"/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu\", \"numpy_spec\": \"None\"}\n",
+      "stderr": ""
+    },
+    {
+      "stage": "controlled_negative_same_home",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "python_wrappers::convert_tests",
+        "--",
+        "--nocapture"
+      ],
+      "selected_environment": {
+        "HOME": "/home/snowy",
+        "PATH": "/home/snowy/.cargo/bin:/usr/local/bin:/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "PYO3_PYTHON": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11",
+        "PYTHONPATH": "",
+        "PYTHONNOUSERSITE": "1",
+        "LD_LIBRARY_PATH": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/lib",
+        "PYTHONHOME": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu"
+      },
+      "returncode": 101,
+      "stdout": "\nrunning 4 tests\ntest python_wrappers::convert_tests::single_profile_dict_counts_fallback_routing_with_zero_direct_fields ... ok\ntest python_wrappers::convert_tests::single_profile_dict_counts_routing_direct_phases_and_conversion_once ... ok\ntest python_wrappers::convert_tests::multi_f64_conversion_preserves_ownership_bits_and_lifetime ... FAILED\ntest python_wrappers::convert_tests::multi_i64_conversion_preserves_ownership_values_and_lifetime ... FAILED\n\nfailures:\n\nfailures:\n    python_wrappers::convert_tests::multi_f64_conversion_preserves_ownership_bits_and_lifetime\n    python_wrappers::convert_tests::multi_i64_conversion_preserves_ownership_values_and_lifetime\n\ntest result: FAILED. 2 passed; 2 failed; 0 ignored; 0 measured; 233 filtered out; finished in 0.01s\n\n",
+      "stderr": "    Finished `test` profile [optimized + debuginfo] target(s) in 0.03s\n     Running unittests src/lib.rs (target/debug/deps/pandas_booster-e8e9124cecc4fcd0)\n\nthread 'python_wrappers::convert_tests::multi_f64_conversion_preserves_ownership_bits_and_lifetime' (252451) panicked at /home/snowy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/numpy-0.28.0/src/npyffi/array.rs:89:14:\nFailed to access NumPy array API capsule: PyErr { type: <class 'ModuleNotFoundError'>, value: ModuleNotFoundError(\"No module named 'numpy'\"), traceback: None }\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\nthread 'python_wrappers::convert_tests::multi_i64_conversion_preserves_ownership_values_and_lifetime' (252452) panicked at /home/snowy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/numpy-0.28.0/src/npyffi/array.rs:89:14:\nFailed to access NumPy array API capsule: PyErr { type: <class 'ModuleNotFoundError'>, value: ModuleNotFoundError(\"No module named 'numpy'\"), traceback: None }\nerror: test failed, to rerun pass `--lib`\n"
+    },
+    {
+      "stage": "owned_prefix_numpy_via_uv",
+      "command": [
+        "/home/snowy/.local/bin/uv",
+        "pip",
+        "install",
+        "--no-config",
+        "--cache-dir",
+        "/tmp/pr20-ci-cache",
+        "--python",
+        "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11",
+        "--break-system-packages",
+        "--index-url",
+        "https://pypi.org/simple",
+        "numpy>=1.21.0,<3.0.0"
+      ],
+      "selected_environment": {
+        "HOME": "/home/snowy",
+        "PATH": "/home/snowy/.cargo/bin:/usr/local/bin:/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "PYO3_PYTHON": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11",
+        "PYTHONPATH": "",
+        "PYTHONNOUSERSITE": "1",
+        "LD_LIBRARY_PATH": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/lib",
+        "PYTHONHOME": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu"
+      },
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "Using Python 3.11.15 environment at: /tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu\nResolved 1 package in 192ms\nDownloading numpy (16.1MiB)\n Downloaded numpy\nPrepared 1 package in 1.57s\nInstalled 1 package in 20ms\n + numpy==2.4.6\n"
+    },
+    {
+      "stage": "controlled_numpy_present_same_home",
+      "command": [
+        "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11",
+        "-I",
+        "-c",
+        "import json,numpy,sys; print(json.dumps({\"prefix\":sys.prefix,\"numpy_version\":numpy.__version__,\"numpy_file\":numpy.__file__})); assert numpy.__file__.startswith(sys.prefix+\"/\")"
+      ],
+      "selected_environment": {
+        "HOME": "/home/snowy",
+        "PATH": "/home/snowy/.cargo/bin:/usr/local/bin:/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "PYO3_PYTHON": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11",
+        "PYTHONPATH": "",
+        "PYTHONNOUSERSITE": "1",
+        "LD_LIBRARY_PATH": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/lib",
+        "PYTHONHOME": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu"
+      },
+      "returncode": 0,
+      "stdout": "{\"prefix\": \"/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu\", \"numpy_version\": \"2.4.6\", \"numpy_file\": \"/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/site-packages/numpy/__init__.py\"}\n",
+      "stderr": ""
+    },
+    {
+      "stage": "controlled_positive_converter_tests",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "python_wrappers::convert_tests",
+        "--",
+        "--nocapture"
+      ],
+      "selected_environment": {
+        "HOME": "/home/snowy",
+        "PATH": "/home/snowy/.cargo/bin:/usr/local/bin:/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "PYO3_PYTHON": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11",
+        "PYTHONPATH": "",
+        "PYTHONNOUSERSITE": "1",
+        "LD_LIBRARY_PATH": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/lib",
+        "PYTHONHOME": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu"
+      },
+      "returncode": 0,
+      "stdout": "\nrunning 4 tests\ntest python_wrappers::convert_tests::single_profile_dict_counts_routing_direct_phases_and_conversion_once ... ok\ntest python_wrappers::convert_tests::single_profile_dict_counts_fallback_routing_with_zero_direct_fields ... ok\ntest python_wrappers::convert_tests::multi_f64_conversion_preserves_ownership_bits_and_lifetime ... ok\ntest python_wrappers::convert_tests::multi_i64_conversion_preserves_ownership_values_and_lifetime ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 233 filtered out; finished in 0.15s\n\n",
+      "stderr": "    Finished `test` profile [optimized + debuginfo] target(s) in 0.03s\n     Running unittests src/lib.rs (target/debug/deps/pandas_booster-e8e9124cecc4fcd0)\n"
+    },
+    {
+      "stage": "controlled_full_rust_tests",
+      "command": [
+        "cargo",
+        "test",
+        "--locked"
+      ],
+      "selected_environment": {
+        "HOME": "/home/snowy",
+        "PATH": "/home/snowy/.cargo/bin:/usr/local/bin:/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "PYO3_PYTHON": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11",
+        "PYTHONPATH": "",
+        "PYTHONNOUSERSITE": "1",
+        "LD_LIBRARY_PATH": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu/lib",
+        "PYTHONHOME": "/tmp/pr20-ci-python/cpython-3.11.15-linux-x86_64-gnu"
+      },
+      "returncode": 0,
+      "stdout": "\nrunning 237 tests\ntest aggregation::float_tests::test_count_f64_all_nan_returns_zero ... ok\ntest aggregation::float_tests::test_count_f64_skips_nan ... ok\ntest aggregation::float_tests::test_max_f64_all_nan_returns_nan ... ok\ntest aggregation::float_tests::test_max_f64_empty_returns_nan ... ok\ntest aggregation::float_tests::test_max_f64_with_values ... ok\ntest aggregation::float_tests::test_mean_f64_all_nan_returns_nan ... ok\ntest aggregation::float_tests::test_mean_f64_empty_returns_nan ... ok\ntest aggregation::float_tests::test_mean_f64_with_values ... ok\ntest aggregation::float_tests::test_median_f64_empty_and_all_nan_return_nan ... ok\ntest aggregation::float_tests::test_median_f64_even_count_averages_middle_values ... ok\ntest aggregation::float_tests::test_median_f64_even_count_uses_pandas_overflow_semantics ... ok\ntest aggregation::float_tests::test_median_f64_even_signed_zero_matches_pandas_bits ... ok\ntest aggregation::float_tests::test_median_f64_finalize_owned_matches_finalize ... ok\ntest aggregation::float_tests::test_median_f64_merge_order_is_deterministic ... ok\ntest aggregation::float_tests::test_median_f64_odd_count_skips_nan ... ok\ntest aggregation::float_tests::test_median_f64_single_value ... ok\ntest aggregation::float_tests::test_min_f64_all_nan_returns_nan ... ok\ntest aggregation::float_tests::test_min_f64_empty_returns_nan ... ok\ntest aggregation::float_tests::test_min_f64_with_values ... ok\ntest aggregation::float_tests::test_prod_f64_preserves_arithmetic_nan ... ok\ntest aggregation::float_tests::test_prod_f64_skips_input_nan_and_all_nan_returns_one ... ok\ntest aggregation::float_tests::test_sum_f64_all_nan_returns_zero ... ok\ntest aggregation::float_tests::test_sum_f64_skips_nan ... ok\ntest aggregation::integer_tests::test_aggregator_merge ... ok\ntest aggregation::integer_tests::test_count_i64 ... ok\ntest aggregation::integer_tests::test_count_merge ... ok\ntest aggregation::integer_tests::test_max_i64_merge_with_empty ... ok\ntest aggregation::integer_tests::test_mean_i64_empty_returns_nan ... ok\ntest aggregation::integer_tests::test_max_i64_empty_panics - should panic ... ok\ntest aggregation::integer_tests::test_median_i64_empty_returns_nan ... ok\ntest aggregation::integer_tests::test_median_i64_even_count_averages_as_f64_without_overflow ... ok\ntest aggregation::integer_tests::test_median_i64_merge_order_is_deterministic ... ok\ntest aggregation::integer_tests::test_median_i64_mixed_sign_even_count ... ok\ntest aggregation::integer_tests::test_median_i64_finalize_owned_matches_finalize ... ok\ntest aggregation::integer_tests::test_median_i64_single_value ... ok\ntest aggregation::integer_tests::test_min_i64_empty_panics - should panic ... ok\ntest aggregation::integer_tests::test_min_i64_merge ... ok\ntest aggregation::integer_tests::test_median_i64_odd_count_returns_middle_as_f64 ... ok\ntest aggregation::integer_tests::test_sum_i64_uses_i128_no_overflow ... ok\ntest aggregation::integer_tests::test_prod_i64_update_and_merge_wrap ... ok\ntest aggregation::median::tests::median_helper_and_median_agg_finalize_owned_match_finalize ... ok\ntest aggregation::median::tests::median_helper_f64_even_zero_middle_ties_match_pandas_bits ... ok\ntest aggregation::median::tests::median_helper_f64_skips_nan_and_overflows_like_existing_aggregator ... ok\ntest aggregation::median::tests::median_helper_f64_two_value_zero_tie_matches_pandas_bits ... ok\ntest aggregation::median::tests::median_helper_i64_averages_extreme_middle_values_like_existing_aggregator ... ok\ntest aggregation::median::pandas_select::tests::index_scratch_fits_routing_bound_including_rounding ... ok\ntest aggregation::median::tests::public_nan_storage_preserves_total_order_finalization ... ok\ntest aggregation::variance_tests::test_var_and_std_f64_return_nan_for_empty_all_nan_and_singleton_groups ... ok\ntest aggregation::variance_tests::test_var_f64_ddof1_skips_nan_and_std_matches_sqrt_var ... ok\ntest aggregation::variance_tests::test_var_i64_uses_sample_variance_and_returns_f64 ... ok\ntest aggregation::variance_tests::test_variance_merge_is_deterministic_and_finalizes_non_negative ... ok\ntest aggregation::variance_tests::variance_merge_invariance ... ok\ntest aggregation::median::tests::median_helper_nearly_sorted_pivot_adversary ... ok\ntest groupby::api_f64_stats_tests::full_i64_span_preserves_partitioned_sample_boundaries ... ok\ntest aggregation::median::pandas_select::tests::mixed_zero_adversary_has_bounded_index_work ... ok\ntest groupby::api_f64_stats_tests::profile_groupby_median_f64_sorted_high_cardinality_uses_partitioned_shape ... ok\ntest groupby::api_f64_stats_tests::profile_groupby_median_f64_sorted_reports_direct_dense_and_sparse_shapes ... ok\ntest groupby::api_f64_stats_tests::profile_groupby_median_f64_sorted_reports_existing_fallback_shape ... ok\ntest groupby::api_f64_stats_tests::profile_groupby_median_f64_sorted_returns_sorted_profiled_result ... ok\ntest groupby::api_f64_stats_tests::profile_groupby_median_f64_sorted_rejects_mismatched_lengths ... ok\ntest groupby::api_float_tests::test_groupby_all_nan_group ... ok\ntest groupby::api_float_tests::test_groupby_max_all_nan_group ... ok\ntest groupby::api_float_tests::test_groupby_mean_all_nan_group ... ok\ntest groupby::api_float_tests::test_groupby_mean_f64 ... ok\ntest groupby::api_float_tests::test_groupby_min_all_nan_group ... ok\ntest groupby::api_float_tests::test_groupby_prod_f64_nan_and_arithmetic_nan_semantics ... ok\ntest groupby::api_float_tests::test_groupby_prod_f64_preserves_row_order_ieee_semantics ... ok\ntest groupby::api_float_tests::test_groupby_prod_f64_sorted_and_firstseen ... ok\ntest groupby::api_float_tests::test_groupby_sorted_orders_by_key ... ok\ntest groupby::api_float_tests::test_groupby_sorted_orders_negative_keys ... ok\ntest aggregation::median::pandas_select::tests::indexed_selection_preserves_pandas_swaps_across_blocks ... ok\ntest groupby::api_float_tests::test_groupby_with_nan ... ok\ntest groupby::api_float_tests::test_groupby_sum_f64 ... ok\ntest groupby::api_i64_tests::test_groupby_count_f64 ... ok\ntest groupby::api_i64_tests::test_groupby_count_i64 ... ok\ntest groupby::api_float_tests::test_public_single_key_firstseen_baseline_matrix_when_representative_inputs ... ok\ntest groupby::api_i64_tests::test_groupby_max_i64 ... ok\ntest groupby::api_i64_tests::test_groupby_min_i64 ... ok\ntest groupby::api_i64_tests::test_groupby_prod_i64_wraps_and_firstseen_u64 ... ok\ntest groupby::api_i64_tests::test_groupby_sum_i64 ... ok\ntest groupby::api_i64_tests::test_i64_firstseen_target_aggs_preserve_wrap_and_count_semantics_u32_u64 ... ok\ntest groupby::determinism_tests::test_f64_firstseen_target_aggs_preserve_special_value_semantics_u32_u64 ... ok\ntest groupby::api_i64_tests::test_groupby_firstseen_order_u32_across_chunks ... ok\ntest groupby::api_i64_tests::test_groupby_firstseen_order_u64_across_chunks ... ok\ntest groupby::determinism_tests::test_mean_f64_firstseen_u64_bitwise_deterministic_across_threads ... ok\ntest groupby::determinism_tests::test_mean_f64_firstseen_u32_bitwise_deterministic_across_threads ... ok\ntest groupby::determinism_tests::test_mean_f64_sorted_bitwise_deterministic_across_threads ... ok\ntest groupby::determinism_tests::test_std_i64_firstseen_u64_preserves_first_seen_order_and_singleton_nan ... ok\ntest groupby::determinism_tests::test_scalar_firstseen_partitioned_routes_preserve_first_seen_order ... ok\ntest groupby::determinism_tests::test_f64_sum_mean_sort_toggle_preserves_cancellation_sensitive_values ... ok\ntest groupby::determinism_tests::test_sum_f64_firstseen_u64_bitwise_deterministic_across_threads ... ok\ntest groupby::determinism_tests::test_var_f64_firstseen_u32_preserves_first_seen_order_and_nan_semantics ... ok\ntest groupby::engine_tests::deterministic_low_wrapper_selects_low_route_for_high_uniqueness ... ok\ntest groupby::determinism_tests::test_sum_f64_firstseen_u32_bitwise_deterministic_across_threads ... ok\ntest groupby::engine_tests::deterministic_low_wrapper_selects_low_route_for_low_cardinality ... ok\ntest groupby::engine_tests::legacy_low_wrapper_selects_low_route_for_low_cardinality ... ok\ntest groupby::determinism_tests::test_sum_f64_sorted_bitwise_deterministic_across_threads ... ok\ntest groupby::engine_tests::legacy_low_wrapper_selects_partitioned_for_high_uniqueness ... ok\ntest groupby::engine_tests::test_firstseen_materialization_uses_owned_finalize ... ok\ntest groupby::engine_tests::test_parallel_groupby_reduce_merges_owned_aggregators_without_clone ... ok\ntest groupby::engine_tests::test_partitioned_firstseen_materialization_uses_owned_finalize ... ok\ntest groupby::engine_tests::f64_sum_mean_firstseen_high_uniqueness_stays_deterministic_low ... ok\ntest groupby::prod_ordered_tests::partitioned_prod_base_route_avoids_firstseen_finalization ... ok\ntest groupby::prod_ordered_tests::partitioned_prod_preserves_duplicate_key_row_order_when_firstseen ... ok\ntest groupby::prod_ordered_tests::prod_ordered_impl_preserves_interleaved_row_order_semantics ... ok\ntest groupby::prod_ordered_tests::prod_ordered_low_preserves_sorted_and_firstseen_order ... ok\ntest groupby::prod_ordered_tests::prod_ordered_low_validates_lengths ... ok\ntest groupby::prod_ordered_tests::partitioned_prod_preserves_duplicate_key_row_order_when_sorted ... ok\ntest groupby::routing_median::tests::dense_span_accepts_largest_representable_span_but_rejects_full_i64_span ... ok\ntest groupby::routing_median::tests::exact_stats_accepts_cap_and_rejects_next_distinct_key ... ok\ntest groupby::routing_median_estimates::tests::direct_memory_accounts_for_concurrent_float_selector_scratch ... ok\ntest groupby::routing_tests::firstseen_partitioned_routing_accepts_at_min_unique_boundary_when_sample_is_large_enough ... ok\ntest groupby::routing_median::tests::aliased_sample_still_rejects_excess_sparse_groups ... ok\ntest groupby::routing_tests::firstseen_partitioned_routing_accepts_high_uniqueness_sample ... ok\ntest groupby::routing_tests::firstseen_partitioned_routing_rejects_below_min_unique_boundary ... ok\ntest groupby::routing_tests::firstseen_partitioned_routing_rejects_samples_at_low_sample_boundary ... ok\ntest groupby::routing_tests::prod_routing_keeps_partitioned_engine_for_high_uniqueness ... ok\ntest groupby::routing_tests::firstseen_partitioned_routing_keeps_compatibility_wrappers_in_sync ... ok\ntest groupby::routing_tests::prod_routing_prefers_ordered_low_for_standard_cardinality ... ok\ntest groupby::api_f64_stats_tests::full_i64_span_high_cardinality_median_uses_partitioned_aggregation ... ok\ntest groupby::routing_tests::sorted_median_large_dense_standard_cardinality_uses_direct_engine ... ok\ntest groupby::routing_tests::sorted_median_public_api_matches_direct_sorted_semantics ... ok\ntest groupby::routing_tests::sorted_median_standard_cardinality_uses_direct_engine ... ok\ntest groupby::routing_tests::test_median_routing_prefers_legacy_engine_for_low_cardinality_samples ... ok\ntest groupby::routing_tests::test_median_routing_prefers_partitioned_engine_for_high_uniqueness_samples ... ok\ntest groupby::routing_tests::sorted_median_large_sparse_standard_cardinality_uses_sparse_direct_engine ... ok\ntest groupby::routing_tests::sorted_median_high_cardinality_keeps_partitioned_route ... ok\ntest groupby::routing_tests::test_sorted_std_var_routing_prefers_partitioned_engine_for_high_uniqueness_samples ... ok\ntest groupby::routing_tests::test_sorted_std_var_routing_prefers_legacy_engine_for_low_cardinality_samples ... ok\ntest groupby::engine_tests::scalar_firstseen_high_uniqueness_routes_target_aggs_to_partitioned ... ok\ntest groupby::routing_tests::test_std_var_routing_prefers_legacy_engine_for_low_cardinality_samples ... ok\ntest groupby::routing_tests::test_std_var_routing_prefers_partitioned_engine_for_high_uniqueness_samples ... ok\ntest groupby::routing_tests::test_std_f64_partitioned_sorted_bitwise_deterministic_across_threads ... ok\ntest groupby::routing_tests::test_std_f64_firstseen_u32_bitwise_deterministic_across_threads ... ok\ntest groupby::routing_tests::test_std_f64_firstseen_u64_bitwise_deterministic_across_threads ... ok\ntest groupby::sorted_median_tests::sorted_median_direct_empty_and_mismatched_inputs ... ok\ntest groupby::sorted_median_tests::sorted_median_direct_empty_profile_ratio_is_zero ... ok\ntest groupby::sorted_median_tests::sorted_median_direct_f64_preserves_pandas_signed_zero_bits ... ok\ntest groupby::sorted_median_tests::sorted_median_direct_f64_preserves_sorted_keys_and_pandas_edges ... ok\ntest groupby::sorted_median_tests::sorted_median_direct_i64_preserves_sorted_keys_and_extremes ... ok\ntest groupby::routing_tests::test_var_f64_firstseen_u32_bitwise_deterministic_across_threads ... ok\ntest groupby::sorted_median_tests::sorted_median_direct_issue_shape_has_no_chunk_local_buffers ... ok\ntest groupby::sorted_median_tests::sorted_median_direct_is_thread_stable ... ok\ntest groupby::sorted_median_tests::sorted_median_direct_remaps_first_seen_to_sorted_keys_and_retains_all_nan_group ... ok\ntest groupby::sorted_median_tests::sorted_median_direct_issue_shape_matches_between_one_and_eight_threads ... ok\ntest python_wrappers::convert::tests::write_ptr_writes_unique_slots ... ok\ntest groupby::sorted_median_tests::sorted_median_direct_uses_parallel_slice_medians_for_issue_shape ... ok\ntest groupby::routing_tests::test_var_f64_firstseen_u64_bitwise_deterministic_across_threads ... ok\ntest python_wrappers::convert_tests::single_profile_dict_counts_fallback_routing_with_zero_direct_fields ... ok\ntest python_wrappers::convert_tests::single_profile_dict_counts_routing_direct_phases_and_conversion_once ... ok\ntest radix_groupby::api_basic_tests::test_radix_firstseen_materialization_uses_owned_finalize ... ok\ntest radix_groupby::api_basic_tests::test_radix_groupby_empty ... ok\ntest radix_groupby::api_basic_tests::test_radix_groupby_materialization_uses_owned_finalize ... ok\ntest radix_groupby::api_basic_tests::test_radix_groupby_sorted ... ok\ntest groupby::routing_tests::test_var_f64_partitioned_firstseen_u32_bitwise_deterministic_across_threads ... ok\ntest radix_groupby::api_basic_tests::test_radix_groupby_sorted_3keys ... ok\ntest radix_groupby::api_basic_tests::test_radix_groupby_sum_basic ... ok\ntest radix_groupby::api_basic_tests::test_radix_groupby_sorted_negative_keys ... ok\ntest radix_groupby::api_basic_tests::test_radix_groupby_three_keys ... ok\ntest radix_groupby::api_basic_tests::test_radix_groupby_with_nan ... ok\ntest radix_groupby::api_stats_tests::test_radix_groupby_i64 ... ok\ntest radix_groupby::api_stats_tests::test_radix_groupby_mean ... ok\ntest radix_groupby::api_stats_tests::test_radix_groupby_prod_i64_wraps_firstseen_u32_and_sorted ... ok\ntest radix_groupby::api_stats_tests::test_radix_groupby_prod_f64_sorted_and_firstseen_semantics ... ok\ntest radix_groupby::api_stats_tests::test_radix_groupby_std_i64_firstseen_u32_returns_f64_in_first_seen_order ... ok\ntest radix_groupby::api_stats_tests::test_radix_groupby_var_f64_sorted ... ok\ntest radix_groupby::order_sort_strategy_tests::fused_and_packed_permutations_match_tuple_oracle_for_varied_key_counts ... ok\ntest radix_groupby::order_sort_strategy_tests::packed_bit_width_proof_handles_constants_and_negative_domains ... ok\ntest radix_groupby::order_sort_strategy_tests::production_rayon_multi_chunk_paths_match_tuple_oracle ... ok\ntest radix_groupby::dispatch_tests::test_equivalence_fixed_vs_generic ... ok\ntest radix_groupby::order_sort_strategy_tests::selected_sort_strategy_falls_back_for_non_packable_extreme_ranges ... ok\ntest radix_groupby::order_sort_strategy_tests::selected_sort_strategy_uses_packed_for_bounded_three_key_domain ... ok\ntest python_wrappers::convert_tests::multi_f64_conversion_preserves_ownership_bits_and_lifetime ... ok\ntest python_wrappers::convert_tests::multi_i64_conversion_preserves_ownership_values_and_lifetime ... ok\ntest radix_groupby::order_tests::profiled_sorted_large_output_defers_materialization ... ok\ntest radix_groupby::order_tests::test_firstseen_large_output_returns_perm_without_materialized_reorder ... ok\ntest radix_groupby::order_tests::test_radix_groupby_sorted ... ok\ntest radix_groupby::order_tests::test_radix_groupby_sorted_3keys ... ok\ntest radix_groupby::order_tests::test_radix_groupby_sorted_5keys ... ok\ntest radix_groupby::order_tests::test_radix_groupby_sorted_empty ... ok\ntest radix_groupby::order_tests::test_radix_groupby_sorted_i64_count ... ok\ntest radix_groupby::order_tests::test_radix_groupby_sorted_negative_keys ... ok\ntest radix_groupby::partition::tests::perm_ptr_writes_unique_slots ... ok\ntest radix_groupby::partition_tests::test_stable_scatter_by_partition_returns_complete_stable_partition_permutation ... ok\ntest radix_groupby::order_tests::test_radix_groupby_sorted_4keys ... ok\ntest radix_groupby::sort_first_dispatch_tests::admitted_engine_releases_boundary_and_permutation_scratch_before_conversion ... ok\ntest radix_groupby::sort_first_dispatch_tests::packed_discovery_fits_existing_boundary_envelope_with_checked_limits ... ok\ntest radix_groupby::sort_first_dispatch_tests::every_route_allocation_error_propagates_without_hash_retry ... ok\ntest radix_groupby::order_tests::sorted_large_output_returns_perm_without_materialized_reorder ... ok\ntest radix_groupby::sort_first_dispatch_tests::production_packed_boundaries_cover_duplicates_extrema_exact_width_and_constants ... ok\ntest radix_groupby::sort_first_dispatch_tests::rejection_releases_route_scratch_before_hash_fallback ... ok\ntest radix_groupby::sort_first_dispatch_tests::unsupported_reducers_remain_physical_hash_first ... ok\ntest radix_groupby::sort_first_routing_tests::bitmap_rounding_and_cap_edges_are_pure_checked_arithmetic ... ok\ntest radix_groupby::sort_first_routing_tests::checked_budget_observes_real_uneven_chunks_cap_and_overflow_boundaries ... ok\ntest radix_groupby::order_sort_strategy_tests::result_sort_branches_preserve_keys_values_and_stable_ties ... ok\ntest radix_groupby::sort_first_routing_tests::every_phase_enforces_inclusive_cap_without_large_allocations ... ok\ntest radix_groupby::sort_first_routing_tests::deterministic_collisions_can_only_reduce_the_cardinality_proof ... ok\ntest radix_groupby::sort_first_dispatch_tests::production_low_medium_and_over_key_limit_fallbacks_observe_hash_and_postsort ... ok\ntest radix_groupby::sort_first_routing_tests::routing_rejects_low_medium_correlated_and_periodic_cardinality ... ok\ntest radix_groupby::sort_first_routing_tests::routing_unsupported_reducers_small_inputs_key_counts_and_lengths_remain_diagnostic ... ok\ntest radix_groupby::sort_first_routing_tests::routing_allocation_errors_propagate_after_releasing_sample ... ok\ntest radix_groupby::sort_first_routing_tests::sample_collision_rejects_before_proof_but_positive_sample_cannot_admit ... ok\ntest radix_groupby::sort_first_routing_tests::sampler_recovery_probe ... ignored, bounded source-only sampling diagnostic; not a performance gate\ntest radix_groupby::sort_first_routing_tests::sample_occupancy_is_bounded_by_exact_distributed_distinct_count ... ok\ntest radix_groupby::sort_first_routing_tests::threshold_is_inclusive_checked_and_rounded_up ... ok\ntest radix_groupby::sort_first_routing_tests::tuple_hash_matches_independently_frozen_vectors ... ok\ntest radix_groupby::sort_first_routing_tests::unique_looking_distributed_sample_cannot_admit_a_duplicate_heavy_population ... ok\ntest radix_groupby::sort_first_tests::sort_first_count_i64_reorders_reverse_sorted_input_without_first_seen_leakage ... ok\ntest radix_groupby::sort_first_tests::sort_first_max_f64_orders_negative_keys_with_signed_lexicographic_sort ... ok\ntest radix_groupby::sort_first_tests::sort_first_min_f64_scans_already_sorted_segments_once ... ok\ntest radix_groupby::sort_first_tests::sort_first_sum_f64_deduplicates_keys_without_first_seen_order_leakage ... ok\ntest radix_groupby::sort_first_tests::sort_first_sum_f64_keeps_high_uniqueness_like_keys_in_lexicographic_order ... ok\ntest radix_sort::tests::u64_indices_parallel_counting_matches_tuple_oracle ... ok\ntest radix_sort_digit::tests::checked_radix_is_stable_across_actual_uneven_chunks ... ok\ntest radix_sort_digit::tests::checked_radix_returns_errors_without_comparison_or_large_allocation ... ok\ntest radix_sort_digit::tests::checked_workspace_uses_actual_uneven_chunk_count ... ok\ntest radix_sort_digit::tests::digit_guards_include_exact_cap_and_reject_overflow ... ok\ntest radix_sort_digit::tests::injected_reserve_and_capacity_failures_release_partial_radix_scratch ... ok\ntest radix_sort_digit::tests::parallel_scatter_preserves_duplicate_order_with_uneven_chunks ... ok\ntest radix_sort_digit::tests::radix_digit_workspace_is_capped_before_parallel_materialization ... ok\ntest radix_sort_digit::tests::radix_sort_comparison_fallback_matches_radix_order ... ok\ntest radix_sort_digit::tests::radix_sort_materializes_digits_before_scatter ... ok\ntest radix_sort_digit::tests::radix_sort_orders_by_materialized_digit ... ok\ntest radix_sort_digit::tests::radix_sort_rayon_path_orders_multiple_chunks ... ok\ntest radix_sort_digit::tests::radix_sort_rejects_out_of_range_digits_before_scatter - should panic ... ok\ntest radix_sort_multi_key::columnar_tests::columnar_allocation_failures_release_layout_packing_and_radix_scratch ... ok\ntest radix_sort_multi_key::columnar_tests::columnar_base_and_packing_guards_include_exact_cap_and_reject_overflow ... ok\ntest radix_sort_multi_key::columnar_tests::empty_singleton_and_constant_columns_are_identity ... ok\ntest radix_groupby::sort_first_routing_tests::routing_admits_all_four_kernels_only_with_a_proven_lower_bound ... ok\ntest radix_sort_multi_key::columnar_tests::malformed_column_layout_is_rejected ... ok\ntest radix_sort_multi_key::columnar_tests::one_full_width_column_can_pack_without_shift_by_64 ... ok\ntest radix_sort_multi_key::columnar_tests::fused_columns_cover_full_signed_range_and_duplicate_tuples ... ok\ntest tests::test_multi_key_std_var_boundary_skips_threshold_only_for_len_only_validator ... ok\ntest tests::test_single_key_std_var_boundary_skips_threshold_only_for_len_only_validator ... ok\ntest radix_sort_multi_key::columnar_tests::packed_signed_columns_keep_equal_row_order_across_uneven_chunks ... ok\ntest radix_groupby::sort_first_routing_tests::seeded_primary_and_signed_domain_samples_still_require_and_pass_full_proof ... ok\ntest radix_groupby::sort_first_dispatch_tests::production_all_four_kernels_physically_use_stable_segments_for_ordinary_and_profile_calls ... ok\n\ntest result: ok. 236 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.77s\n\n",
+      "stderr": "    Finished `test` profile [optimized + debuginfo] target(s) in 0.03s\n     Running unittests src/lib.rs (target/debug/deps/pandas_booster-e8e9124cecc4fcd0)\n"
+    }
+  ],
+  "bootstrap_caveat": "Owned uv prefix rejected ensurepip via PEP668 before any install. Marker retained. Explicit uv --break-system-packages is used ONLY for this owned /tmp prefix, never host/user/remote environments. CI setup-python uses normal pip; this proof establishes identical interpreter negative/positive NumPy availability.",
+  "status": "PASS",
+  "observed_prior_remote_ci": {
+    "head_sha": "7e2da51768924fa1ba895475f2305b432f3ed546",
+    "job_url": "https://github.com/snowykr/pandas-booster/actions/runs/39466016067/job/118777503753",
+    "result": "FAILURE: 234 passed, 2 ownership converters failed with ModuleNotFoundError for numpy, 1 ignored",
+    "retained_failed_job_log": "/tmp/pr20-ci-remote-failure.log",
+    "log_sha256": "f0e2cfdd178bfa37a1e4ab0a4ea1b0f3115fcc38b0d3d732c4988bd4c84eda94"
+  },
+  "additional_local_verification": {
+    "focused_release_contracts": "29 passed: pytest tests/release/test_build_profile_guardrails.py tests/release/test_publish_workflow_contract.py -q --strict-markers",
+    "quality": "ruff check python tests scripts benchmarks; basedpyright --project pyrightconfig.json: 0 errors/warnings/notes; cargo fmt --all -- --check; cargo clippy --all-targets -- -D warnings all passed",
+    "release_contracts": "metadata, publish workflow and supply-chain-workflow subcommands all passed",
+    "source_equivalence": "git diff --exit-code 3828bb117451b7ce52e5c80f9631e319ba258295 -- src python: no differences",
+    "invocation_correction": "An initial combined gate command used nonexistent tests/test_publish_workflow_contract.py, exited 4 with no tests run; corrected to tests/release/test_publish_workflow_contract.py before the 29-test pass. No test failure hidden or skipped."
+  },
+  "negative_control": "Controlled same-interpreter/same-home NumPy absence: 2 passed/2 expected converter failures",
+  "positive_control": "After NumPy provisioning in SAME owned interpreter/home: 4 converter tests and 236 full Rust tests pass; one diagnostic remains intentionally ignored as separately executed earlier",
+  "untouched": "Host/base Python, user site-packages and remote machines were not modified"
+}
