@@ -13,7 +13,7 @@ from typing import Any, Final, Union
 from profile_json import collect_stats_evidence
 from profile_json_payload import save_profile_json
 from reporting import SUPPORTED_AGGS, save_results_md
-from runner import benchmark_worker, run_benchmarks
+from runner import benchmark_worker, resolve_stats_evidence_aggs, run_benchmarks
 
 JsonScalar = Union[None, bool, int, float, str]
 JsonValue = Union[JsonScalar, list["JsonValue"], dict[str, "JsonValue"]]
@@ -219,7 +219,7 @@ Environment:
                 args.samples,
                 args.cardinality,
                 args.sort_mode,
-                args.aggs,
+                resolve_stats_evidence_aggs(args.aggs),
                 include_median_diagnostics=False,
             )
 
