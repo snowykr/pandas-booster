@@ -4,3 +4,6 @@ pub(crate) mod profile;
 pub(crate) mod register;
 pub(crate) mod shared;
 pub(crate) mod single;
+
+#[cfg(test)]
+mod convert_tests;

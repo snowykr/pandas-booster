@@ -7,19 +7,73 @@ from pathlib import Path
 from typing import Any
 
 from bench_utils import BenchmarkStats
+from profile_json_multi_key import REQUIRED_MULTI_KEY_SORTED_PHASES
 from runner import resolve_stats_evidence_aggs
+
+PHASE_NAMES: tuple[str, ...] = (
+    "prepare_inputs_s",
+    "unique_build_s",
+    "key_sort_s",
+    "count_s",
+    "buffer_setup_s",
+    "scatter_s",
+    "median_select_s",
+    "local_build_s",
+    "merge_s",
+    "reorder_s",
+    "materialize_s",
+    "python_normalize_s",
+    "python_series_build_s",
+    "rust_total_s",
+    "python_total_s",
+    "total_pipeline_s",
+)
+
+
+def zero_phase_stats() -> BenchmarkStats:
+    return BenchmarkStats(0.0, 0.0, 0.0, 0.0, [])
+
+
+def normalize_phase_stats(
+    phases: dict[str, BenchmarkStats], profile_kind: str = "single_key"
+) -> dict[str, BenchmarkStats]:
+    phase_names = (
+        REQUIRED_MULTI_KEY_SORTED_PHASES if profile_kind == "multi_key_sorted" else PHASE_NAMES
+    )
+    zero = zero_phase_stats()
+    return {name: phases.get(name, zero) for name in phase_names}
 
 
 def serialize_stats(stats: BenchmarkStats) -> dict[str, Any]:
     return stats.to_dict()
 
 
-def serialize_phase_stats(phases: dict[str, BenchmarkStats]) -> dict[str, dict[str, Any]]:
-    return {name: serialize_stats(stats) for name, stats in phases.items()}
+def serialize_phase_stats(
+    phases: dict[str, BenchmarkStats], profile_kind: str = "single_key"
+) -> dict[str, dict[str, Any]]:
+    return {
+        name: serialize_stats(stats)
+        for name, stats in normalize_phase_stats(phases, profile_kind).items()
+    }
 
 
-def stats_mean_map(phases: dict[str, BenchmarkStats]) -> dict[str, float]:
-    return {name: stats.mean for name, stats in phases.items()}
+def stats_mean_map(
+    phases: dict[str, BenchmarkStats], profile_kind: str = "single_key"
+) -> dict[str, float]:
+    return {name: stats.mean for name, stats in normalize_phase_stats(phases, profile_kind).items()}
+
+
+def _collapse_route_metadata(profiled_cases: list[dict[str, Any]], field: str) -> str:
+    values = {
+        str(case["breakdown"].get(field, ""))
+        for case in profiled_cases
+        if case["breakdown"].get(field, "")
+    }
+    if len(values) == 1:
+        return next(iter(values))
+    if values:
+        return "mixed"
+    return ""
 
 
 def summarize_profile_cases(cases: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -27,11 +81,14 @@ def summarize_profile_cases(cases: list[dict[str, Any]]) -> dict[str, Any] | Non
     if not profiled_cases:
         return None
 
-    phase_names = list(profiled_cases[0]["breakdown"]["phases"].keys())
+    normalized_phase_maps = [
+        normalize_phase_stats(case["breakdown"]["phases"], _profile_kind(case))
+        for case in profiled_cases
+    ]
     phase_means = {
-        phase_name: sum(case["breakdown"]["phases"][phase_name].mean for case in profiled_cases)
-        / len(profiled_cases)
-        for phase_name in phase_names
+        phase_name: sum(phases[phase_name].mean for phases in normalized_phase_maps)
+        / len(normalized_phase_maps)
+        for phase_name in normalized_phase_maps[0]
     }
     first_breakdown = profiled_cases[0]["breakdown"]
     routes = {str(case["breakdown"]["route"]) for case in profiled_cases}
@@ -53,27 +110,27 @@ def summarize_profile_cases(cases: list[dict[str, Any]]) -> dict[str, Any] | Non
         "partial_group_total": first_breakdown["partial_group_total"],
         "final_group_count": first_breakdown["final_group_count"],
         "partial_to_final_ratio": first_breakdown["partial_to_final_ratio"],
-        "sort_first_segment_scan_count": first_breakdown[
-            "sort_first_segment_scan_count"
-        ],
+        "sort_first_segment_scan_count": first_breakdown["sort_first_segment_scan_count"],
         "selected_sort_strategy": first_breakdown["selected_sort_strategy"],
         "sort_key_bit_widths": first_breakdown["sort_key_bit_widths"],
+        "route_kind": _collapse_route_metadata(profiled_cases, "route_kind"),
+        "route_reason": _collapse_route_metadata(profiled_cases, "route_reason"),
         "per_agg": {
             case["agg"]: {
                 "execution": case["breakdown"]["execution"],
                 "route": case["breakdown"]["route"],
-                "phases": stats_mean_map(case["breakdown"]["phases"]),
+                "phases": stats_mean_map(case["breakdown"]["phases"], _profile_kind(case)),
                 "rust_total_s": case["breakdown"]["rust_total_s"],
                 "python_total_s": case["breakdown"]["python_total_s"],
                 "total_pipeline_s": case["breakdown"]["total_pipeline_s"],
                 "partial_group_total": case["breakdown"]["partial_group_total"],
                 "final_group_count": case["breakdown"]["final_group_count"],
                 "partial_to_final_ratio": case["breakdown"]["partial_to_final_ratio"],
-                "sort_first_segment_scan_count": case["breakdown"][
-                    "sort_first_segment_scan_count"
-                ],
+                "sort_first_segment_scan_count": case["breakdown"]["sort_first_segment_scan_count"],
                 "selected_sort_strategy": case["breakdown"]["selected_sort_strategy"],
                 "sort_key_bit_widths": case["breakdown"]["sort_key_bit_widths"],
+                "route_kind": case["breakdown"].get("route_kind", ""),
+                "route_reason": case["breakdown"].get("route_reason", ""),
             }
             for case in profiled_cases
         },
@@ -91,9 +148,7 @@ def _metadata_selected_aggs(
     evidence: list[dict[str, Any]],
     selected_aggs: list[str] | None,
 ) -> list[str]:
-    profiled_aggs = {
-        item["agg"] for item in evidence if item["breakdown"] is not None
-    }
+    profiled_aggs = {item["agg"] for item in evidence if item["breakdown"] is not None}
     stats_aggs = set(resolve_stats_evidence_aggs(selected_aggs))
     eligible_aggs = stats_aggs | profiled_aggs
 
@@ -110,6 +165,26 @@ def _metadata_selected_aggs(
         if agg in eligible_aggs and agg not in ordered_selected_aggs:
             ordered_selected_aggs.append(agg)
     return ordered_selected_aggs
+
+
+def _requires_selected_median_sorted_breakdown(
+    item: dict[str, Any],
+    *,
+    selected_aggs: list[str] | None,
+) -> bool:
+    booster_execution = item["execution"]["booster"]
+    return (
+        selected_aggs is not None
+        and "median" in resolve_stats_evidence_aggs(selected_aggs)
+        and item["agg"] == "median"
+        and item["sort"] is True
+        and booster_execution == "booster->rust.groupby_median_f64_sorted"
+        and (
+            item["breakdown"] is None
+            or not item["breakdown"].get("route_kind")
+            or not item["breakdown"].get("route_reason")
+        )
+    )
 
 
 def build_profile_json_payload(
@@ -133,6 +208,12 @@ def build_profile_json_payload(
     grouped: dict[tuple[str, bool], list[dict[str, Any]]] = {}
     multi_key_sorted: dict[str, list[dict[str, Any]]] = {}
     for item in evidence:
+        if _requires_selected_median_sorted_breakdown(item, selected_aggs=selected_aggs):
+            raise ValueError(
+                "selected median sorted profile breakdown is unavailable; "
+                "profile JSON would omit required median evidence"
+            )
+
         if _profile_kind(item) == "multi_key_sorted":
             multi_key_sorted.setdefault(item["workload"], []).append(item)
         else:
@@ -170,17 +251,17 @@ def build_profile_json_payload(
                     "profile_kind": breakdown.get("profile_kind", "single_key"),
                     "route": breakdown["route"],
                     "execution": breakdown["execution"],
-                    "phases": serialize_phase_stats(breakdown["phases"]),
-                    "phase_means": stats_mean_map(breakdown["phases"]),
+                    "route_kind": breakdown.get("route_kind", ""),
+                    "route_reason": breakdown.get("route_reason", ""),
+                    "phases": serialize_phase_stats(breakdown["phases"], _profile_kind(item)),
+                    "phase_means": stats_mean_map(breakdown["phases"], _profile_kind(item)),
                     "rust_total_s": breakdown["rust_total_s"],
                     "python_total_s": breakdown["python_total_s"],
                     "total_pipeline_s": breakdown["total_pipeline_s"],
                     "partial_group_total": breakdown["partial_group_total"],
                     "final_group_count": breakdown["final_group_count"],
                     "partial_to_final_ratio": breakdown["partial_to_final_ratio"],
-                    "sort_first_segment_scan_count": breakdown[
-                        "sort_first_segment_scan_count"
-                    ],
+                    "sort_first_segment_scan_count": breakdown["sort_first_segment_scan_count"],
                     "selected_sort_strategy": breakdown["selected_sort_strategy"],
                     "sort_key_bit_widths": breakdown["sort_key_bit_widths"],
                 },
@@ -201,6 +282,14 @@ def build_profile_json_payload(
         summary = summarize_profile_cases(cases)
         if summary is not None:
             payload[f"multi_key_sorted_{workload}"] = summary
+
+    for (workload, sort), cases in grouped.items():
+        if workload in {"standard", "high"}:
+            continue
+        suffix = "unsorted" if not sort else "sorted"
+        summary = summarize_profile_cases(cases)
+        if summary is not None:
+            payload[f"single_key_{suffix}_{workload}"] = summary
 
     if "single_key_unsorted_high" in payload:
         payload["single_key_unsorted"] = payload["single_key_unsorted_high"]

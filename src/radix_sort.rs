@@ -175,53 +175,33 @@ pub(crate) fn radix_sort_perm_by_u64_for_indices_par(
     for pass in 0..8 {
         let shift = pass * 8;
 
-        // Phase 1: local histograms per chunk
-        let counts: Vec<[usize; 256]> = a
+        let chunk_buckets: Vec<Vec<u8>> = a
             .par_chunks(chunk_size)
             .map(|chunk| {
+                chunk
+                    .iter()
+                    .map(|&idx| ((keys[idx] >> shift) & 0xFF) as u8)
+                    .collect()
+            })
+            .collect();
+        // Materialize digits once, then build disjoint output slices for scatter.
+        let counts: Vec<[usize; 256]> = chunk_buckets
+            .par_iter()
+            .map(|buckets| {
                 let mut local = [0usize; 256];
-                for &idx in chunk {
-                    let byte = ((keys[idx] >> shift) & 0xFF) as usize;
-                    local[byte] += 1;
+                for &bucket in buckets {
+                    local[usize::from(bucket)] += 1;
                 }
                 local
             })
             .collect();
-
-        // Phase 2: global offsets
-        let mut global = [0usize; 256];
-        for local in &counts {
-            for bkt in 0..256 {
-                global[bkt] += local[bkt];
-            }
-        }
-
-        let mut offsets = [0usize; 256];
-        let mut sum = 0usize;
-        for bkt in 0..256 {
-            let tmp = global[bkt];
-            offsets[bkt] = sum;
-            sum += tmp;
-        }
-
-        // Phase 3: per-thread starting offsets (preserve chunk order)
-        let mut thread_offsets: Vec<[usize; 256]> = vec![[0usize; 256]; counts.len()];
-        let mut running = offsets;
-        for (t, local) in counts.iter().enumerate() {
-            thread_offsets[t] = running;
-            for bkt in 0..256 {
-                running[bkt] += local[bkt];
-            }
-        }
-
-        for (chunk, mut write) in a.chunks(chunk_size).zip(thread_offsets) {
-            for &idx in chunk {
-                let byte = ((keys[idx] >> shift) & 0xFF) as usize;
-                let pos = write[byte];
-                write[byte] = pos + 1;
-                b[pos] = idx;
-            }
-        }
+        crate::radix_sort_digit::scatter_digit_chunks(
+            &a,
+            &mut b,
+            chunk_size,
+            &chunk_buckets,
+            &counts,
+        );
 
         #[cfg(debug_assertions)]
         {

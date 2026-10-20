@@ -84,7 +84,7 @@ def test_main_profile_json_wires_evidence_collection_and_file_write(
         }
     ]
     captured_run_args: list[dict[str, object]] = []
-    captured_evidence_args: list[tuple[int, str, str, list[str] | None]] = []
+    captured_evidence_args: list[tuple[int, str, str, list[str] | None, bool]] = []
 
     def fake_run_benchmarks(*, cardinality, diagnostic, sort_mode, n_samples, aggs):
         captured_run_args.append(
@@ -98,8 +98,12 @@ def test_main_profile_json_wires_evidence_collection_and_file_write(
         )
         return results
 
-    def fake_collect_stats_evidence(n_samples, cardinality, sort_mode, selected_aggs=None):
-        captured_evidence_args.append((n_samples, cardinality, sort_mode, selected_aggs))
+    def fake_collect_stats_evidence(
+        n_samples, cardinality, sort_mode, selected_aggs=None, *, include_median_diagnostics=False
+    ):
+        captured_evidence_args.append(
+            (n_samples, cardinality, sort_mode, selected_aggs, include_median_diagnostics)
+        )
         return evidence
 
     profile_path = tmp_path / "profiles" / "std_profile"
@@ -136,13 +140,11 @@ def test_main_profile_json_wires_evidence_collection_and_file_write(
             "aggs": ["std"],
         }
     ]
-    assert captured_evidence_args == [(3, "standard", "sorted", ["std"])]
+    assert captured_evidence_args == [(3, "standard", "sorted", ["std"], True)]
     assert payload["metadata"] == {
         "cardinality": "standard",
         "sort_mode": "sorted",
         "samples": 3,
         "selected_aggs": ["std"],
     }
-    assert payload["cases"][0]["breakdown"]["execution"] == (
-        "booster->rust.groupby_std_f64_sorted"
-    )
+    assert payload["cases"][0]["breakdown"]["execution"] == ("booster->rust.groupby_std_f64_sorted")

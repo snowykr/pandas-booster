@@ -100,17 +100,17 @@ pub(super) fn sort_groupby_result<V: Copy>(result: &mut GroupByMultiResult<V>) {
     debug_assert_eq!(result.keys_flat.len(), n_groups * n_keys);
 
     let keys_flat = &result.keys_flat;
-    let mut perm: Vec<usize> = (0..n_groups).collect();
-
-    if n_groups < RADIX_SORT_THRESHOLD {
+    let perm = if n_groups < RADIX_SORT_THRESHOLD {
+        let mut perm: Vec<usize> = (0..n_groups).collect();
         perm.sort_unstable_by(|&i, &j| {
             let k_i = &keys_flat[i * n_keys..(i + 1) * n_keys];
             let k_j = &keys_flat[j * n_keys..(j + 1) * n_keys];
             k_i.cmp(k_j).then(i.cmp(&j))
         });
+        perm
     } else {
-        perm = multi_key_sort_perm_with_proof(keys_flat, n_keys).0;
-    }
+        multi_key_sort_perm_with_proof(keys_flat, n_keys).0
+    };
 
     if n_groups.saturating_mul(n_keys) > SMALL_DIRECT_THRESHOLD_ELEMS {
         result.perm = Some(perm);
@@ -148,13 +148,13 @@ pub(super) fn sort_groupby_result_profiled<V: Copy>(
     debug_assert_eq!(result.keys_flat.len(), n_groups * n_keys);
 
     let keys_flat = &result.keys_flat;
-    let mut perm: Vec<usize> = (0..n_groups).collect();
     let mut sort_key_construction_s = 0.0;
     let mut radix_sort_s = 0.0;
     let mut selected_sort_strategy = "small_comparator";
     let mut sort_key_bit_widths = Vec::new();
 
-    if n_groups < RADIX_SORT_THRESHOLD {
+    let perm = if n_groups < RADIX_SORT_THRESHOLD {
+        let mut perm: Vec<usize> = (0..n_groups).collect();
         let sort_start = Instant::now();
         perm.sort_unstable_by(|&i, &j| {
             let k_i = &keys_flat[i * n_keys..(i + 1) * n_keys];
@@ -162,6 +162,7 @@ pub(super) fn sort_groupby_result_profiled<V: Copy>(
             k_i.cmp(k_j).then(i.cmp(&j))
         });
         radix_sort_s = sort_start.elapsed().as_secs_f64();
+        perm
     } else {
         let (sorted_perm, proof, construction_s, sort_s) =
             multi_key_sort_perm_with_profile(keys_flat, n_keys);
@@ -169,8 +170,8 @@ pub(super) fn sort_groupby_result_profiled<V: Copy>(
         radix_sort_s += sort_s;
         selected_sort_strategy = proof.strategy.label();
         sort_key_bit_widths = proof.bit_widths;
-        perm = sorted_perm;
-    }
+        sorted_perm
+    };
 
     if n_groups.saturating_mul(n_keys) > SMALL_DIRECT_THRESHOLD_ELEMS {
         result.perm = Some(perm);

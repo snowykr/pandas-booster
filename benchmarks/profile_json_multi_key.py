@@ -9,6 +9,7 @@ from bench_utils import compute_stats
 from dispatch import resolve_booster_benchmark_dispatch
 
 REQUIRED_MULTI_KEY_SORTED_PHASES = (
+    "prepare_inputs_s",
     "hash_build_s",
     "partition_scatter_s",
     "partition_aggregation_s",
@@ -19,6 +20,7 @@ REQUIRED_MULTI_KEY_SORTED_PHASES = (
     "sort_first_permutation_s",
     "sort_first_segment_scan_s",
     "conversion_s",
+    "python_normalize_s",
     "pandas_index_construction_s",
 )
 MULTI_KEY_SORTED_HIGH_PRESET = "high_cardinality_3key"
@@ -72,17 +74,18 @@ def measure_booster_multi_key_sorted_breakdown(
 
     for _ in range(n_samples):
         total_start = time.perf_counter()
+        prepare_start = time.perf_counter()
         keys = [
-            groupby_accel.to_i64_contiguous(key_col.to_numpy(copy=False))
-            for key_col in key_series
+            groupby_accel.to_i64_contiguous(key_col.to_numpy(copy=False)) for key_col in key_series
         ]
         if is_val_int:
             values = np.ascontiguousarray(val_col.to_numpy(dtype=np.int64))
         else:
             values = np.ascontiguousarray(val_col.to_numpy(dtype=np.float64))
+        prepare_inputs_s = time.perf_counter() - prepare_start
 
         result_keys, result_values, profile = profile_func(keys, values)
-        conversion_start = time.perf_counter()
+        normalize_start = time.perf_counter()
         result_values_arr = abi_compat.normalize_result_values(
             result_values,
             agg=agg,
@@ -95,9 +98,8 @@ def measure_booster_multi_key_sorted_breakdown(
             n_keys=len(key_cols),
             context="benchmark",
         )
-        conversion_s = float(profile["conversion_s"]) + (
-            time.perf_counter() - conversion_start
-        )
+        python_normalize_s = time.perf_counter() - normalize_start
+        conversion_s = float(profile["conversion_s"])
 
         index_start = time.perf_counter()
         _ = groupby_accel.build_series_from_multi_result(
@@ -114,14 +116,21 @@ def measure_booster_multi_key_sorted_breakdown(
         )
         pandas_index_construction_s = time.perf_counter() - index_start
         for phase_name in REQUIRED_MULTI_KEY_SORTED_PHASES:
-            if phase_name == "conversion_s":
+            if phase_name == "prepare_inputs_s":
+                phase_samples[phase_name].append(prepare_inputs_s)
+            elif phase_name == "conversion_s":
                 phase_samples[phase_name].append(conversion_s)
+            elif phase_name == "python_normalize_s":
+                phase_samples[phase_name].append(python_normalize_s)
             elif phase_name == "pandas_index_construction_s":
                 phase_samples[phase_name].append(pandas_index_construction_s)
             else:
                 phase_samples[phase_name].append(float(profile[phase_name]))
-        phase_samples["rust_total_s"].append(float(profile["rust_total_s"]))
-        phase_samples["python_total_s"].append(conversion_s + pandas_index_construction_s)
+        # The Rust profile total covers engine phases, not NumPy conversion.
+        phase_samples["rust_total_s"].append(float(profile["rust_total_s"]) + conversion_s)
+        phase_samples["python_total_s"].append(
+            prepare_inputs_s + python_normalize_s + pandas_index_construction_s
+        )
         phase_samples["total_pipeline_s"].append(time.perf_counter() - total_start)
         partial_group_total = int(profile["partial_group_total"])
         final_group_count = int(profile["final_group_count"])

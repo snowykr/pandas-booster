@@ -1,7 +1,5 @@
 use super::dispatch::SortedDispatchRoute;
-use super::sort_first_routing::{
-    SortFirstFallbackReason, SortFirstReducer, UNIQUE_RATIO_DENOMINATOR, UNIQUE_RATIO_NUMERATOR,
-};
+use super::sort_first_routing::{SortFirstFallbackReason, SortFirstReducer};
 use super::test_support::{key_at_out, value_at_out};
 use super::*;
 
@@ -32,8 +30,6 @@ fn assert_sort_first_not_reached_for_target_route(
         Some(SortFirstFallbackReason::SortFirstNotCertified)
     );
     assert!(diagnostics.sort_first.is_none());
-    assert_eq!(diagnostics.routing_decision.sample_rows, 5_000);
-    assert_eq!(diagnostics.routing_decision.sample_unique_tuples, 5_000);
 }
 
 fn assert_hash_first_route(
@@ -112,12 +108,12 @@ fn production_routing_low_ratio_count_stays_hash_first() {
             .expect("low-ratio count should fall back to hash-first dispatch");
 
     // Then it keeps the hash-first aggregation plus sorted-output path.
-    assert_hash_first_route(&diagnostics, SortFirstFallbackReason::LowTupleRatio);
+    assert_hash_first_route(&diagnostics, SortFirstFallbackReason::SortFirstNotCertified);
 }
 
 #[test]
-fn production_routing_medium_ratio_below_threshold_stays_hash_first() {
-    // Given sampled tuple uniqueness just below the production sort-first threshold.
+fn production_routing_medium_ratio_stays_hash_first_without_sampling() {
+    // Given medium tuple uniqueness; disabled routing must not sample it.
     let n_rows = 5_000usize;
     let unique_tuples = 3_700i64;
     let left: Vec<i64> = (0..n_rows as i64).map(|row| row % unique_tuples).collect();
@@ -135,17 +131,8 @@ fn production_routing_medium_ratio_below_threshold_stays_hash_first() {
             .expect("medium-ratio i64 count should fall back to hash-first dispatch");
 
     // Then both supported reducers remain on the hash-first sorted-output path.
-    assert!(
-        (unique_tuples as usize).saturating_mul(UNIQUE_RATIO_DENOMINATOR)
-            < n_rows.saturating_mul(UNIQUE_RATIO_NUMERATOR)
-    );
     for diagnostics in [&max_diagnostics, &count_diagnostics] {
-        assert_hash_first_route(diagnostics, SortFirstFallbackReason::LowTupleRatio);
-        assert_eq!(diagnostics.routing_decision.sample_rows, n_rows);
-        assert_eq!(
-            diagnostics.routing_decision.sample_unique_tuples,
-            unique_tuples as usize
-        );
+        assert_hash_first_route(diagnostics, SortFirstFallbackReason::SortFirstNotCertified);
     }
 }
 

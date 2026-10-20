@@ -12,6 +12,7 @@ from ._helpers import (
     _accessor_groupby_result,
     _patch_all_numeric_kernels_for_agg_to_raise,
     _patch_pandas_series_groupby_agg_to_raise,
+    _patch_single_std_var_firstseen_only_kernel,
     _patch_single_std_var_kernel,
     _proxy_groupby_result,
 )
@@ -139,5 +140,43 @@ class TestMedianDispatchContracts:
         accessor_result = _accessor_groupby_result(df, "key", "val", "median")
         proxy_result = _proxy_groupby_result(df, "key", "val", "median")
 
+        pd.testing.assert_series_equal(accessor_result, expected, check_exact=False, rtol=1e-12)
+        pd.testing.assert_series_equal(proxy_result, expected, check_exact=False, rtol=1e-12)
+
+    def test_single_key_float_median_sort_false_uses_firstseen_kernel(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        import pandas_booster._rust as rust
+
+        monkeypatch.delenv("PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY", raising=False)
+
+        df = pd.DataFrame(
+            {
+                "key": [3, 1, 3, 2, 1, 2],
+                "val": [9.0, 1.0, 3.0, 10.0, 5.0, 14.0],
+            }
+        )
+        expected = df.groupby("key", sort=False)["val"].median()
+        calls: list[str] = []
+
+        _patch_single_std_var_firstseen_only_kernel(
+            monkeypatch,
+            rust,
+            expected,
+            "median",
+            kernel="f64",
+            result_dtype=np.dtype(np.float64),
+            calls=calls,
+        )
+        _patch_pandas_series_groupby_agg_to_raise(
+            monkeypatch,
+            "median",
+            "sort=False single-key float median should not use pandas fallback",
+        )
+
+        accessor_result = _accessor_groupby_result(df, "key", "val", "median", sort=False)
+        proxy_result = _proxy_groupby_result(df, "key", "val", "median", sort=False)
+
+        assert calls == ["firstseen", "firstseen"]
         pd.testing.assert_series_equal(accessor_result, expected, check_exact=False, rtol=1e-12)
         pd.testing.assert_series_equal(proxy_result, expected, check_exact=False, rtol=1e-12)

@@ -2,10 +2,22 @@
 
 from __future__ import annotations
 
-import sys
-import types
-
 from ._report_output_helpers import _make_breakdown, _make_result
+
+
+def test_false_low_sample_preset_hides_sparse_cardinality_from_router(benchmark_module):
+    from pandas_booster import _rust
+
+    config = benchmark_module.PRESETS["median_false_low_sample_tail_unique"]
+    df = benchmark_module.generate_multi_key_dataset(**config)
+    keys = df["key"].to_numpy()
+    stride = (len(keys) + 16_383) // 16_384
+    assert len(benchmark_module.np.unique(keys)) == 500_000
+    assert len(benchmark_module.np.unique(keys[::stride])) == 1
+    assert int(keys.max()) - int(keys.min()) > 1_000_000_000
+    _, _, profile = _rust.profile_groupby_median_f64_sorted(keys, df["value"].to_numpy())
+    assert profile["route_kind"] == "existing_sorted_fallback"
+    assert profile["route_reason"] == "sparse_exact_groups_exceed_cap"
 
 
 def test_collect_stats_evidence_uses_actual_force_pandas_sort_setting(
@@ -64,7 +76,6 @@ def test_measure_booster_single_key_breakdown_returns_none_when_float_rollback_f
     import pandas_booster._groupby_accel as groupby_accel
 
     monkeypatch.setenv("PANDAS_BOOSTER_FORCE_PANDAS_FLOAT_GROUPBY", "1")
-    monkeypatch.setitem(sys.modules, "pandas_booster._rust", types.SimpleNamespace())
     monkeypatch.setattr(
         benchmark_module,
         "generate_multi_key_dataset",

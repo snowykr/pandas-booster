@@ -109,6 +109,70 @@ fn fused_and_packed_permutations_match_tuple_oracle_for_varied_key_counts() {
 
 #[test]
 #[cfg(not(miri))]
+fn result_sort_branches_preserve_keys_values_and_stable_ties() {
+    use super::order::{sort_groupby_result, sort_groupby_result_profiled};
+    use super::partition::SMALL_DIRECT_THRESHOLD_ELEMS;
+    use super::result::GroupByMultiResult;
+
+    for n_groups in [2047, 2048, 2049, SMALL_DIRECT_THRESHOLD_ELEMS / 2 + 1] {
+        for extreme_keys in [false, true] {
+            let keys_flat: Vec<i64> = (0..n_groups)
+                .flat_map(|idx| {
+                    let key = ((n_groups - idx) % 257) as i64;
+                    let first = match (extreme_keys, idx % 2) {
+                        (true, 0) => i64::MIN,
+                        (true, _) => i64::MAX,
+                        (false, _) => key,
+                    };
+                    [first, -key]
+                })
+                .collect();
+            let expected_perm = tuple_sorted_perm(&keys_flat, 2);
+            let expected_strategy = if n_groups < 2048 {
+                "small_comparator"
+            } else if extreme_keys {
+                "fused_multi_key_radix"
+            } else {
+                "packed_u64"
+            };
+
+            for profiled in [false, true] {
+                let mut result = GroupByMultiResult {
+                    keys_flat: keys_flat.clone(),
+                    n_keys: 2,
+                    values: (0..n_groups).collect::<Vec<usize>>(),
+                    perm: None,
+                };
+                if profiled {
+                    let profile = sort_groupby_result_profiled(&mut result);
+                    assert_eq!(profile.selected_sort_strategy, expected_strategy);
+                } else {
+                    sort_groupby_result(&mut result);
+                }
+
+                if n_groups * 2 > SMALL_DIRECT_THRESHOLD_ELEMS {
+                    assert_eq!(result.perm.as_ref(), Some(&expected_perm));
+                    assert_eq!(result.keys_flat, keys_flat);
+                    assert_eq!(result.values, (0..n_groups).collect::<Vec<usize>>());
+                } else {
+                    assert!(result.perm.is_none());
+                    assert_eq!(result.values, expected_perm);
+                }
+                for (out, &source) in expected_perm.iter().enumerate() {
+                    let actual = result.perm.as_ref().map_or(out, |perm| perm[out]);
+                    assert_eq!(result.values[actual], source);
+                    assert_eq!(
+                        &result.keys_flat[actual * 2..(actual + 1) * 2],
+                        &keys_flat[source * 2..(source + 1) * 2],
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[cfg(not(miri))]
 fn production_rayon_multi_chunk_paths_match_tuple_oracle() {
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(4)

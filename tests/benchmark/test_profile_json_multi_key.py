@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from ._profile_json_helpers import (
@@ -7,6 +9,7 @@ from ._profile_json_helpers import (
     make_multi_key_sorted_breakdown,
     make_multi_key_sorted_result,
 )
+from ._report_output_helpers import _make_breakdown, _make_result
 
 
 def test_build_profile_json_payload_exposes_multi_key_sorted_profile_section(
@@ -34,26 +37,19 @@ def test_build_profile_json_payload_exposes_multi_key_sorted_profile_section(
     )
 
     assert "multi_key_sorted_high" in payload, (
-        "missing multi-key sorted profile JSON section for "
-        "high_cardinality_3key/max/sort=True"
+        "missing multi-key sorted profile JSON section for high_cardinality_3key/max/sort=True"
     )
-    assert set(payload["multi_key_sorted_high"]["phases"]) == set(
-        REQUIRED_MULTI_KEY_SORTED_PHASES
-    )
+    assert set(payload["multi_key_sorted_high"]["phases"]) == set(REQUIRED_MULTI_KEY_SORTED_PHASES)
     assert payload["multi_key_sorted_high"]["preset"] == "high_cardinality_3key"
     assert payload["multi_key_sorted_high"]["aggs"] == ["max"]
     assert payload["multi_key_sorted_high"]["route"] == "hash_first"
     assert payload["multi_key_sorted_high"]["sort_first_segment_scan_count"] == 0
     assert payload["multi_key_sorted_high"]["per_agg"]["max"]["route"] == "hash_first"
-    assert payload["multi_key_sorted_high"]["per_agg"]["max"][
-        "sort_first_segment_scan_count"
-    ] == 0
-    assert payload["multi_key_sorted_high"]["per_agg"]["max"][
-        "selected_sort_strategy"
-    ] == "packed_u64"
-    assert payload["multi_key_sorted_high"]["per_agg"]["max"][
-        "sort_key_bit_widths"
-    ] == [9, 9, 9]
+    assert payload["multi_key_sorted_high"]["per_agg"]["max"]["sort_first_segment_scan_count"] == 0
+    assert (
+        payload["multi_key_sorted_high"]["per_agg"]["max"]["selected_sort_strategy"] == "packed_u64"
+    )
+    assert payload["multi_key_sorted_high"]["per_agg"]["max"]["sort_key_bit_widths"] == [9, 9, 9]
     case_breakdown = payload["cases"][0]["breakdown"]
     assert case_breakdown is not None
     assert case_breakdown["route"] == "hash_first"
@@ -61,6 +57,80 @@ def test_build_profile_json_payload_exposes_multi_key_sorted_profile_section(
     assert case_breakdown["selected_sort_strategy"] == "packed_u64"
     assert case_breakdown["sort_key_bit_widths"] == [9, 9, 9]
     assert payload["metadata"]["selected_aggs"] == ["max"]
+
+
+def test_mixed_profiles_preserve_kind_specific_phases_through_json(benchmark_module):
+    cases = []
+    for agg in ("std", "median", "max"):
+        execution = f"booster->rust.groupby_{agg}_f64_sorted"
+        breakdown = _make_breakdown(benchmark_module, execution=execution)
+        result = _make_result(benchmark_module, preset="1key", agg=agg, sort=True)
+        if agg == "std":
+            del breakdown["phases"]["median_select_s"]
+        if agg == "max":
+            breakdown = make_multi_key_sorted_breakdown(benchmark_module)
+            result = make_multi_key_sorted_result(benchmark_module)
+            execution = "booster->rust.groupby_multi_max_f64_sorted"
+            breakdown["phases"] = {
+                name: benchmark_module.compute_stats([float(index)])
+                for index, name in enumerate(REQUIRED_MULTI_KEY_SORTED_PHASES, start=1)
+            }
+        cases.append(
+            {
+                "preset": result["preset"],
+                "workload": "high",
+                "agg": agg,
+                "sort": True,
+                "execution": {
+                    "pandas": f"pandas.groupby.{agg}",
+                    "booster": execution,
+                },
+                "result": result,
+                "breakdown": breakdown,
+            }
+        )
+
+    payload = json.loads(
+        json.dumps(
+            benchmark_module.build_profile_json_payload(
+                cases,
+                cardinality="high",
+                sort_mode="sorted",
+                n_samples=1,
+                selected_aggs=["median", "std", "max"],
+            )
+        )
+    )
+
+    expected = {
+        name: float(index) for index, name in enumerate(REQUIRED_MULTI_KEY_SORTED_PHASES, start=1)
+    }
+    multi_case = payload["cases"][2]["breakdown"]
+    assert {name: stats["mean"] for name, stats in multi_case["phases"].items()} == expected
+    assert multi_case["phase_means"] == expected
+    multi_summary = payload["multi_key_sorted_high"]
+    assert multi_summary["phases"] == expected
+    assert multi_summary["per_agg"]["max"]["phases"] == expected
+    single_summary = payload["single_key_sorted_high"]
+    assert single_summary["aggs"] == ["std", "median"]
+    assert single_summary["phases"]["median_select_s"] == pytest.approx(0.05)
+    assert single_summary["per_agg"]["std"]["phases"]["median_select_s"] == 0.0
+    assert single_summary["per_agg"]["median"]["route_kind"] == "direct_dense"
+    assert "hash_build_s" not in single_summary["phases"]
+    assert "median_select_s" not in multi_summary["phases"]
+    assert payload["metadata"]["selected_aggs"] == ["median", "std", "max"]
+
+    # A mixed payload must still reject missing selected-median route evidence.
+    del cases[1]["breakdown"]["route_kind"]
+    with pytest.raises(ValueError, match="selected median sorted profile breakdown"):
+        benchmark_module.build_profile_json_payload(
+            cases,
+            cardinality="high",
+            sort_mode="sorted",
+            n_samples=1,
+            selected_aggs=["median", "std", "max"],
+        )
+
 
 def test_build_profile_json_payload_requires_explicit_multi_key_sorted_route(
     benchmark_module,
@@ -117,6 +187,7 @@ def test_build_profile_json_payload_requires_explicit_sort_strategy_evidence(
             selected_aggs=["max"],
         )
 
+
 def test_collect_stats_evidence_requests_multi_key_sorted_profile_for_high_max(
     benchmark_module,
     monkeypatch,
@@ -132,9 +203,7 @@ def test_collect_stats_evidence_requests_multi_key_sorted_profile_for_high_max(
         return result
 
     def fake_generate_multi_key_dataset(**kwargs):
-        key_columns = {
-            col_name: [0, 1, 2] for col_name, _cardinality in kwargs["key_configs"]
-        }
+        key_columns = {col_name: [0, 1, 2] for col_name, _cardinality in kwargs["key_configs"]}
         return benchmark_module.pd.DataFrame({**key_columns, "value": [1.0, 2.0, 3.0]})
 
     def fake_describe_booster_execution(_df, key_cols, _value_col, agg, sort):

@@ -41,6 +41,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         groupby_std_f64_sorted,
         profile_groupby_var_f64_sorted,
         profile_groupby_std_f64_sorted,
+        profile_groupby_median_f64_sorted,
         groupby_min_f64_sorted,
         groupby_max_f64_sorted,
         groupby_count_f64_sorted,

@@ -3,6 +3,7 @@ from __future__ import annotations
 from ._report_output_helpers import _make_result
 
 REQUIRED_MULTI_KEY_SORTED_PHASES = (
+    "prepare_inputs_s",
     "hash_build_s",
     "partition_scatter_s",
     "partition_aggregation_s",
@@ -13,6 +14,7 @@ REQUIRED_MULTI_KEY_SORTED_PHASES = (
     "sort_first_permutation_s",
     "sort_first_segment_scan_s",
     "conversion_s",
+    "python_normalize_s",
     "pandas_index_construction_s",
 )
 

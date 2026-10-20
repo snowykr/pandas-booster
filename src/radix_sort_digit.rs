@@ -3,6 +3,45 @@ use rayon::prelude::*;
 
 const MAX_RADIX_DIGIT_WORKSPACE_BYTES: usize = 512 * 1024 * 1024;
 
+// Split every bucket into disjoint, input-chunk-ordered slices before sending
+// them to Rayon. Bounds-checked writes need neither shared pointers nor atomics.
+pub(crate) fn scatter_digit_chunks(
+    input: &[usize],
+    output: &mut [usize],
+    chunk_size: usize,
+    buckets: &[Vec<u8>],
+    counts: &[[usize; 256]],
+) {
+    use rayon::prelude::*;
+
+    let mut destinations: Vec<Vec<&mut [usize]>> =
+        (0..counts.len()).map(|_| Vec::with_capacity(256)).collect();
+    let mut remaining = output;
+    for bucket in 0..256 {
+        let total: usize = counts.iter().map(|local| local[bucket]).sum();
+        let (mut bucket_output, rest) = remaining.split_at_mut(total);
+        remaining = rest;
+        for (destination, local) in destinations.iter_mut().zip(counts) {
+            let (chunk_output, rest) = bucket_output.split_at_mut(local[bucket]);
+            destination.push(chunk_output);
+            bucket_output = rest;
+        }
+    }
+    assert!(remaining.is_empty());
+    input
+        .par_chunks(chunk_size)
+        .zip(buckets.par_iter())
+        .zip(destinations.into_par_iter())
+        .for_each(|((chunk, digits), mut destination)| {
+            let mut positions = [0usize; 256];
+            for (&index, &digit) in chunk.iter().zip(digits) {
+                let digit = usize::from(digit);
+                destination[digit][positions[digit]] = index;
+                positions[digit] += 1;
+            }
+        });
+}
+
 pub(crate) fn radix_sort_perm_by_digit_par<F>(n: usize, passes: usize, digit: F) -> Vec<usize>
 where
     F: Fn(usize, usize) -> usize + Sync,
@@ -141,40 +180,7 @@ where
             })
             .collect();
 
-        let mut global = [0usize; 256];
-        for local in &counts {
-            for bkt in 0..256 {
-                global[bkt] += local[bkt];
-            }
-        }
-
-        let mut offsets = [0usize; 256];
-        let mut sum = 0usize;
-        for bkt in 0..256 {
-            let tmp = global[bkt];
-            offsets[bkt] = sum;
-            sum += tmp;
-        }
-
-        let mut thread_offsets: Vec<[usize; 256]> = vec![[0usize; 256]; counts.len()];
-        let mut running = offsets;
-        for (t, local) in counts.iter().enumerate() {
-            thread_offsets[t] = running;
-            for bkt in 0..256 {
-                running[bkt] += local[bkt];
-            }
-        }
-
-        for ((chunk, buckets), mut write) in
-            a.chunks(chunk_size).zip(chunk_buckets).zip(thread_offsets)
-        {
-            for (&idx, bucket) in chunk.iter().zip(buckets) {
-                let bucket = usize::from(bucket);
-                let pos = write[bucket];
-                write[bucket] = pos + 1;
-                b[pos] = idx;
-            }
-        }
+        scatter_digit_chunks(&a, &mut b, chunk_size, &chunk_buckets, &counts);
 
         #[cfg(debug_assertions)]
         {
@@ -247,6 +253,25 @@ mod tests {
         });
 
         assert_eq!(perm, vec![3, 4, 1, 2, 0]);
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn parallel_scatter_preserves_duplicate_order_with_uneven_chunks() {
+        let n = 10_003;
+        for threads in [1, 2, 4] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap();
+            for modulus in [1, 7, 256] {
+                let perm = pool
+                    .install(|| super::radix_sort_perm_by_digit_par(n, 1, |idx, _| idx % modulus));
+                let mut expected: Vec<usize> = (0..n).collect();
+                expected.sort_by_key(|idx| idx % modulus);
+                assert_eq!(perm, expected);
+            }
+        }
     }
 
     #[test]
