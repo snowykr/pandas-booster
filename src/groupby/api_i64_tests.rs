@@ -94,6 +94,56 @@ fn test_groupby_count_i64() {
 }
 
 #[test]
+fn test_i64_firstseen_target_aggs_preserve_wrap_and_count_semantics_u32_u64() {
+    let keys = vec![3, 1, 3, 2, 1, 4, 4];
+    let values = vec![i64::MAX, i64::MIN, 2, -5, -1, 7, -9];
+    let expected_keys = vec![3, 1, 2, 4];
+
+    let sum_u32 = parallel_groupby_sum_i64_firstseen_u32(&keys, &values).unwrap();
+    let sum_u64 = parallel_groupby_sum_i64_firstseen_u64(&keys, &values).unwrap();
+    assert_eq!(sum_u32.keys, expected_keys);
+    assert_eq!(sum_u64.keys, expected_keys);
+    assert_eq!(sum_u32.values, vec![i64::MIN + 1, i64::MAX, -5, -2]);
+    assert_eq!(sum_u64.values, sum_u32.values);
+
+    let mean_u32 = parallel_groupby_mean_i64_firstseen_u32(&keys, &values).unwrap();
+    let mean_u64 = parallel_groupby_mean_i64_firstseen_u64(&keys, &values).unwrap();
+    assert_eq!(mean_u32.keys, expected_keys);
+    assert_eq!(mean_u64.keys, expected_keys);
+    assert_eq!(
+        mean_u32.values,
+        vec![
+            ((i64::MAX as i128 + 2) as f64) / 2.0,
+            ((i64::MIN as i128 - 1) as f64) / 2.0,
+            -5.0,
+            -1.0,
+        ]
+    );
+    assert_eq!(mean_u64.values, mean_u32.values);
+
+    let min_u32 = parallel_groupby_min_i64_firstseen_u32(&keys, &values).unwrap();
+    let min_u64 = parallel_groupby_min_i64_firstseen_u64(&keys, &values).unwrap();
+    assert_eq!(min_u32.keys, expected_keys);
+    assert_eq!(min_u64.keys, expected_keys);
+    assert_eq!(min_u32.values, vec![2, i64::MIN, -5, -9]);
+    assert_eq!(min_u64.values, min_u32.values);
+
+    let max_u32 = parallel_groupby_max_i64_firstseen_u32(&keys, &values).unwrap();
+    let max_u64 = parallel_groupby_max_i64_firstseen_u64(&keys, &values).unwrap();
+    assert_eq!(max_u32.keys, expected_keys);
+    assert_eq!(max_u64.keys, expected_keys);
+    assert_eq!(max_u32.values, vec![i64::MAX, -1, -5, 7]);
+    assert_eq!(max_u64.values, max_u32.values);
+
+    let count_u32 = parallel_groupby_count_i64_firstseen_u32(&keys, &values).unwrap();
+    let count_u64 = parallel_groupby_count_i64_firstseen_u64(&keys, &values).unwrap();
+    assert_eq!(count_u32.keys, expected_keys);
+    assert_eq!(count_u64.keys, expected_keys);
+    assert_eq!(count_u32.values, vec![2, 2, 1, 2]);
+    assert_eq!(count_u64.values, count_u32.values);
+}
+
+#[test]
 fn test_groupby_firstseen_order_u32_across_chunks() {
     // Force multiple Rayon threads so chunking happens.
     let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();

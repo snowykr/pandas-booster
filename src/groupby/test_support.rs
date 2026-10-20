@@ -136,7 +136,7 @@ pub(super) fn row_order_prod_for_key(keys: &[i64], values: &[f64], target_key: i
     let mut prod = 1.0;
     for (&key, &value) in keys.iter().zip(values.iter()) {
         if key == target_key && !value.is_nan() {
-            prod *= value;
+            prod *= std::hint::black_box(value);
         }
     }
     prod

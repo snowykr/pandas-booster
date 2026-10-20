@@ -63,6 +63,102 @@ def test_worker_rejects_symlink_output_file(benchmark_module, monkeypatch):
         target.unlink(missing_ok=True)
 
 
+@pytest.mark.parametrize("mode", ["cold", "warm"])
+@pytest.mark.parametrize("sort", [True, False])
+@pytest.mark.parametrize("all_nan", [False, True])
+@pytest.mark.parametrize("backend", ["booster", "polars"])
+def test_worker_validates_nan_median_with_retained_groups(
+    benchmark_module, monkeypatch, mode, sort, all_nan, backend
+):
+    import runner_worker
+
+    if backend == "polars":
+        pytest.importorskip("polars")
+    nan = float("nan")
+    df = benchmark_module.pd.DataFrame(
+        {
+            "key": [2, 1, 2, 3, 1, 3],
+            "value": [nan, nan, nan if all_nan else 4.0, nan, nan if all_nan else 8.0, nan],
+        }
+    )
+    monkeypatch.setattr(runner_worker, "generate_multi_key_dataset", lambda **kwargs: df)
+    monkeypatch.setitem(runner_worker.PRESETS, "test_nan_median", {"key_configs": [("key", 3)]})
+
+    result = runner_worker.benchmark_worker(
+        "test_nan_median",
+        backend,
+        agg="median",
+        sort=sort,
+        verify_correctness=True,
+        mode=mode,
+    )
+
+    assert result["correctness"] == "pass"
+
+
+@pytest.mark.parametrize("mode", ["cold", "warm"])
+def test_worker_nan_median_validation_detects_dropped_all_nan_group(
+    benchmark_module, monkeypatch, mode
+):
+    import runner_worker
+    from pandas_booster.accessor import BoosterAccessor
+
+    df = benchmark_module.pd.DataFrame(
+        {
+            "key": [1, 1, 2, 2],
+            "value": [2.0, float("nan"), float("nan"), float("nan")],
+        }
+    )
+    monkeypatch.setattr(runner_worker, "generate_multi_key_dataset", lambda **kwargs: df)
+    monkeypatch.setitem(runner_worker.PRESETS, "test_nan_median", {"key_configs": [("key", 2)]})
+    incomplete = df.groupby("key")["value"].median().dropna()
+    monkeypatch.setattr(BoosterAccessor, "groupby", lambda *args, **kwargs: incomplete)
+
+    result = runner_worker.benchmark_worker(
+        "test_nan_median",
+        "booster",
+        agg="median",
+        verify_correctness=True,
+        mode=mode,
+    )
+
+    assert result["correctness"].startswith("fail:")
+
+
+@pytest.mark.parametrize("agg", ["sum", "mean", "prod", "std", "var", "min", "max", "count"])
+def test_worker_keeps_nonmedian_nan_value_guard(benchmark_module, monkeypatch, agg):
+    import runner_worker
+
+    df = benchmark_module.pd.DataFrame({"key": [1], "value": [float("nan")]})
+    monkeypatch.setattr(runner_worker, "generate_multi_key_dataset", lambda **kwargs: df)
+    monkeypatch.setitem(runner_worker.PRESETS, "test_nan_guard", {"key_configs": [("key", 1)]})
+
+    with pytest.raises(ValueError, match="contains NaNs"):
+        runner_worker.benchmark_worker(
+            "test_nan_guard",
+            "booster",
+            agg=agg,
+            verify_correctness=True,
+        )
+
+
+@pytest.mark.parametrize("keys", [[1.0, float("nan")], ["a", "b"]])
+def test_worker_median_preserves_integer_key_guard(benchmark_module, monkeypatch, keys):
+    import runner_worker
+
+    df = benchmark_module.pd.DataFrame({"key": keys, "value": [float("nan"), 1.0]})
+    monkeypatch.setattr(runner_worker, "generate_multi_key_dataset", lambda **kwargs: df)
+    monkeypatch.setitem(runner_worker.PRESETS, "test_key_guard", {"key_configs": [("key", 2)]})
+
+    with pytest.raises(ValueError, match="must be integer dtype"):
+        runner_worker.benchmark_worker(
+            "test_key_guard",
+            "booster",
+            agg="median",
+            verify_correctness=True,
+        )
+
+
 def test_worker_rejects_nested_temp_output_file(benchmark_module, monkeypatch, tmp_path):
     output_path = tmp_path / "worker-output.json"
 
@@ -76,8 +172,7 @@ def test_worker_rejects_nested_temp_output_file(benchmark_module, monkeypatch, t
 
 def test_worker_writes_valid_temp_output_file(benchmark_module, monkeypatch):
     output_path = (
-        Path(tempfile.gettempdir())
-        / f"pandas-booster-worker-output-{uuid.uuid4().hex}.json"
+        Path(tempfile.gettempdir()) / f"pandas-booster-worker-output-{uuid.uuid4().hex}.json"
     )
     output_path.unlink(missing_ok=True)
 

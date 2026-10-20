@@ -10,6 +10,16 @@ pub(crate) type MultiGroupByReturnI64<'py> =
     (MultiGroupByKeysReturn<'py>, Bound<'py, PyArray1<i64>>);
 
 pub(crate) type MultiGroupByReturn<'py> = MultiGroupByReturnF64<'py>;
+pub(crate) type MultiGroupByProfileReturnF64<'py> = (
+    MultiGroupByKeysReturn<'py>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyDict>,
+);
+pub(crate) type MultiGroupByProfileReturnI64<'py> = (
+    MultiGroupByKeysReturn<'py>,
+    Bound<'py, PyArray1<i64>>,
+    Bound<'py, PyDict>,
+);
 
 pub(crate) type SingleGroupByReturnF64<'py> =
     (Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<f64>>);

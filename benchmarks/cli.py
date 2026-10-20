@@ -13,7 +13,7 @@ from typing import Any, Final, Union
 from profile_json import collect_stats_evidence
 from profile_json_payload import save_profile_json
 from reporting import SUPPORTED_AGGS, save_results_md
-from runner import benchmark_worker, run_benchmarks
+from runner import benchmark_worker, resolve_stats_evidence_aggs, run_benchmarks
 
 JsonScalar = Union[None, bool, int, float, str]
 JsonValue = Union[JsonScalar, list["JsonValue"], dict[str, "JsonValue"]]
@@ -39,9 +39,7 @@ def _validate_worker_output_file(output_file: JsonValue) -> Path:
     try:
         resolved_parent = output_path.parent.resolve(strict=True)
     except FileNotFoundError as exc:
-        raise ValueError(
-            "output_file must be directly inside the system temp directory"
-        ) from exc
+        raise ValueError("output_file must be directly inside the system temp directory") from exc
     if resolved_parent != temp_root:
         raise ValueError("output_file must be directly inside the system temp directory")
 
@@ -124,7 +122,8 @@ Environment:
         choices=SUPPORTED_AGGS,
         help=(
             "Aggregation function to benchmark. Repeatable. "
-            "Defaults to core=sum for benchmark reports; profile JSON defaults to std/var evidence."
+            "Defaults to core=sum for benchmark reports; profile JSON defaults to std/var "
+            "evidence and includes median evidence when --agg median is selected."
         ),
     )
     parser.add_argument(
@@ -140,7 +139,10 @@ Environment:
     parser.add_argument(
         "--profile-json",
         type=str,
-        help="Internal-use profile JSON output path for single-key std/var evidence",
+        help=(
+            "Internal-use profile JSON output path for single-key std/var evidence "
+            "and selected median evidence"
+        ),
     )
     parser.add_argument(
         "--worker",
@@ -149,6 +151,9 @@ Environment:
     )
 
     args = parser.parse_args()
+
+    if args.samples < 1:
+        parser.error("--samples must be at least 1")
 
     if args.diagnostic == "threshold" and args.sort_mode != "unsorted":
         parser.error(
@@ -173,11 +178,7 @@ Environment:
     if args.worker:
         worker_args = _parse_worker_args(args.worker)
         output_file = worker_args.pop("output_file", None)
-        output_path = (
-            _validate_worker_output_file(output_file)
-            if output_file is not None
-            else None
-        )
+        output_path = _validate_worker_output_file(output_file) if output_file is not None else None
 
         try:
             result = benchmark_worker_func(**worker_args)
@@ -205,6 +206,7 @@ Environment:
             args.cardinality,
             args.sort_mode,
             args.aggs,
+            include_median_diagnostics=True,
         )
 
     if args.output:
@@ -217,7 +219,8 @@ Environment:
                 args.samples,
                 args.cardinality,
                 args.sort_mode,
-                args.aggs,
+                resolve_stats_evidence_aggs(args.aggs),
+                include_median_diagnostics=False,
             )
 
         save_results_md_func(

@@ -3,6 +3,59 @@ use super::test_support::{
 };
 use super::*;
 
+fn assert_f64_values_eq(actual: &[f64], expected: &[f64]) {
+    assert_eq!(actual.len(), expected.len());
+    for (&actual_value, &expected_value) in actual.iter().zip(expected.iter()) {
+        if expected_value.is_nan() {
+            assert!(actual_value.is_nan());
+        } else {
+            assert_eq!(actual_value.to_bits(), expected_value.to_bits());
+        }
+    }
+}
+
+fn target_value_bits(result: &GroupByResultF64, target_key: i64) -> u64 {
+    let position = result
+        .keys
+        .iter()
+        .position(|&key| key == target_key)
+        .unwrap();
+    result.values[position].to_bits()
+}
+
+fn make_high_uniqueness_cancellation_data() -> (Vec<i64>, Vec<f64>, i64) {
+    let target_key = -1;
+    let mut keys = Vec::with_capacity(20_004);
+    let mut values = Vec::with_capacity(20_004);
+
+    for key in 0..20_000 {
+        match key {
+            0 => {
+                keys.push(target_key);
+                values.push(1e16);
+            }
+            5_000 => {
+                keys.push(target_key);
+                values.push(1.0);
+            }
+            10_000 => {
+                keys.push(target_key);
+                values.push(-1e16);
+            }
+            15_000 => {
+                keys.push(target_key);
+                values.push(1.0);
+            }
+            _ => {}
+        }
+
+        keys.push(key);
+        values.push(key as f64);
+    }
+
+    (keys, values, target_key)
+}
+
 #[test]
 fn test_sum_f64_sorted_bitwise_deterministic_across_threads() {
     let (keys, values) = make_sensitive_single_key_float_data();
@@ -53,6 +106,102 @@ fn test_mean_f64_firstseen_u64_bitwise_deterministic_across_threads() {
         &keys,
         &values,
     );
+}
+
+#[test]
+fn test_f64_sum_mean_sort_toggle_preserves_cancellation_sensitive_values() {
+    let (keys, values, target_key) = make_high_uniqueness_cancellation_data();
+
+    let sum_firstseen = parallel_groupby_sum_f64_firstseen_u32(&keys, &values).unwrap();
+    let sum_sorted = parallel_groupby_sum_f64_sorted(&keys, &values).unwrap();
+    assert_eq!(
+        target_value_bits(&sum_firstseen, target_key),
+        target_value_bits(&sum_sorted, target_key),
+    );
+
+    let mean_firstseen = parallel_groupby_mean_f64_firstseen_u64(&keys, &values).unwrap();
+    let mean_sorted = parallel_groupby_mean_f64_sorted(&keys, &values).unwrap();
+    assert_eq!(
+        target_value_bits(&mean_firstseen, target_key),
+        target_value_bits(&mean_sorted, target_key),
+    );
+}
+
+#[test]
+fn test_scalar_firstseen_partitioned_routes_preserve_first_seen_order() {
+    let n = 5_000usize;
+    let keys: Vec<i64> = (0..n).map(|i| ((i + n / 2) % n) as i64).collect();
+    let values_f64: Vec<f64> = (0..n).map(|i| i as f64).collect();
+    let values_i64: Vec<i64> = (0..n).map(|i| i as i64).collect();
+
+    let count_f64 = parallel_groupby_count_f64_firstseen_u32(&keys, &values_f64).unwrap();
+    assert_eq!(count_f64.keys, keys);
+    assert_eq!(count_f64.values, vec![1_i64; n]);
+
+    let max_i64 = parallel_groupby_max_i64_firstseen_u64(&keys, &values_i64).unwrap();
+    assert_eq!(max_i64.keys, keys);
+    assert_eq!(max_i64.values, values_i64);
+}
+
+#[test]
+fn test_f64_firstseen_target_aggs_preserve_special_value_semantics_u32_u64() {
+    let keys = vec![8, 1, 8, 2, 1, 3, 3, 4, 4];
+    let values = vec![
+        1e16,
+        f64::NAN,
+        -1e16,
+        f64::INFINITY,
+        5.0,
+        f64::NAN,
+        f64::NAN,
+        f64::NEG_INFINITY,
+        7.0,
+    ];
+    let expected_keys = vec![8, 1, 2, 3, 4];
+
+    let sum_u32 = parallel_groupby_sum_f64_firstseen_u32(&keys, &values).unwrap();
+    let sum_u64 = parallel_groupby_sum_f64_firstseen_u64(&keys, &values).unwrap();
+    assert_eq!(sum_u32.keys, expected_keys);
+    assert_eq!(sum_u64.keys, expected_keys);
+    assert_f64_values_eq(
+        &sum_u32.values,
+        &[0.0, 5.0, f64::INFINITY, 0.0, f64::NEG_INFINITY],
+    );
+    assert_f64_values_eq(&sum_u64.values, &sum_u32.values);
+
+    let mean_u32 = parallel_groupby_mean_f64_firstseen_u32(&keys, &values).unwrap();
+    let mean_u64 = parallel_groupby_mean_f64_firstseen_u64(&keys, &values).unwrap();
+    assert_eq!(mean_u32.keys, expected_keys);
+    assert_eq!(mean_u64.keys, expected_keys);
+    assert_f64_values_eq(
+        &mean_u32.values,
+        &[0.0, 5.0, f64::INFINITY, f64::NAN, f64::NEG_INFINITY],
+    );
+    assert_f64_values_eq(&mean_u64.values, &mean_u32.values);
+
+    let min_u32 = parallel_groupby_min_f64_firstseen_u32(&keys, &values).unwrap();
+    let min_u64 = parallel_groupby_min_f64_firstseen_u64(&keys, &values).unwrap();
+    assert_eq!(min_u32.keys, expected_keys);
+    assert_eq!(min_u64.keys, expected_keys);
+    assert_f64_values_eq(
+        &min_u32.values,
+        &[-1e16, 5.0, f64::INFINITY, f64::NAN, f64::NEG_INFINITY],
+    );
+    assert_f64_values_eq(&min_u64.values, &min_u32.values);
+
+    let max_u32 = parallel_groupby_max_f64_firstseen_u32(&keys, &values).unwrap();
+    let max_u64 = parallel_groupby_max_f64_firstseen_u64(&keys, &values).unwrap();
+    assert_eq!(max_u32.keys, expected_keys);
+    assert_eq!(max_u64.keys, expected_keys);
+    assert_f64_values_eq(&max_u32.values, &[1e16, 5.0, f64::INFINITY, f64::NAN, 7.0]);
+    assert_f64_values_eq(&max_u64.values, &max_u32.values);
+
+    let count_u32 = parallel_groupby_count_f64_firstseen_u32(&keys, &values).unwrap();
+    let count_u64 = parallel_groupby_count_f64_firstseen_u64(&keys, &values).unwrap();
+    assert_eq!(count_u32.keys, expected_keys);
+    assert_eq!(count_u64.keys, expected_keys);
+    assert_eq!(count_u32.values, vec![2, 1, 1, 0, 2]);
+    assert_eq!(count_u64.values, count_u32.values);
 }
 
 #[test]

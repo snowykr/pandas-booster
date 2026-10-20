@@ -10,9 +10,13 @@ use super::partitioned::{
     build_partitioned_deterministic_firstseen_states,
     materialize_partitioned_deterministic_firstseen_states,
 };
+use super::prod_ordered::groupby_prod_f64_ordered_low;
 use super::reduce::PairwiseReduceValue;
 use super::result::{GroupByResult, GroupByResultF64};
-use super::routing::{should_use_partitioned_median_engine, should_use_partitioned_std_var_engine};
+use super::routing::{
+    should_use_partitioned_median_engine, should_use_partitioned_prod_engine,
+    should_use_partitioned_std_var_engine,
+};
 
 pub(super) fn parallel_groupby_firstseen_partitioned_impl<T, A, O, I>(
     keys: &[i64],
@@ -120,13 +124,30 @@ where
     }
 }
 
+pub(super) fn parallel_groupby_prod_f64_firstseen_impl<I: FirstSeenRowIndex>(
+    keys: &[i64],
+    values: &[f64],
+) -> PyResult<GroupByResultF64> {
+    if should_use_partitioned_prod_engine(keys) {
+        parallel_groupby_firstseen_partitioned_impl::<f64, ProdAggF64, f64, I>(keys, values)
+    } else {
+        groupby_prod_f64_ordered_low::<I>(keys, values)
+    }
+}
+
 pub(super) fn parallel_groupby_prod_f64_ordered_impl(
     keys: &[i64],
     values: &[f64],
 ) -> PyResult<GroupByResultF64> {
-    if keys.len() <= u32::MAX as usize {
-        parallel_groupby_partitioned_unordered_impl::<f64, ProdAggF64, f64, u32>(keys, values)
+    if should_use_partitioned_prod_engine(keys) {
+        if keys.len() <= u32::MAX as usize {
+            parallel_groupby_partitioned_unordered_impl::<f64, ProdAggF64, f64, u32>(keys, values)
+        } else {
+            parallel_groupby_partitioned_unordered_impl::<f64, ProdAggF64, f64, u64>(keys, values)
+        }
+    } else if keys.len() <= u32::MAX as usize {
+        groupby_prod_f64_ordered_low::<u32>(keys, values)
     } else {
-        parallel_groupby_partitioned_unordered_impl::<f64, ProdAggF64, f64, u64>(keys, values)
+        groupby_prod_f64_ordered_low::<u64>(keys, values)
     }
 }

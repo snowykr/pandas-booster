@@ -15,6 +15,31 @@ class TestMedianNumericalExtremes:
     """Tests for accelerated median arithmetic at f64 boundaries."""
 
     @pytest.mark.parametrize("sort", [True, False])
+    @pytest.mark.parametrize("case", ["zero-middle-odd", "zero-middle-even", "pivot-adversary"])
+    def test_mixed_zero_large_groups_match_pandas_bits(self, case, sort, monkeypatch):
+        import pandas_booster  # noqa: F401
+
+        if case == "pivot-adversary":
+            values = np.concatenate(
+                [np.arange(1, 2001, dtype=float), [-0.0], np.arange(2001, 4001), [0.0]]
+            )
+        else:
+            values = np.resize(np.array([-np.inf, -0.0, 0.0, 0.0, -0.0, np.inf]), 1025)
+            np.random.default_rng(42).shuffle(values)
+            if case == "zero-middle-even":
+                values = np.append(values, -0.0)
+        df = pd.DataFrame({"key": np.ones(len(values), dtype=np.int64), "val": values})
+        expected = df.groupby("key", sort=sort)["val"].median()
+        _patch_pandas_series_groupby_agg_to_raise(
+            monkeypatch, "median", "mixed-zero groups must stay on the Rust path"
+        )
+        actual = df.booster.groupby("key", "val", "median", sort=sort)
+        pd.testing.assert_series_equal(actual, expected, check_exact=True)
+        np.testing.assert_array_equal(
+            actual.to_numpy().view(np.uint64), expected.to_numpy().view(np.uint64)
+        )
+
+    @pytest.mark.parametrize("sort", [True, False])
     @pytest.mark.parametrize(
         ("values", "expected"),
         [
