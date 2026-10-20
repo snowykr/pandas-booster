@@ -13,6 +13,8 @@ const BITMAP_CAP: usize = 64 * 1024 * 1024;
 #[cfg(test)]
 thread_local! {
     static COLLISION_BITS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    static SAMPLE_COLLISION_BITS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    static SAMPLE_POSITIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static SCRATCH_EVENTS: std::cell::RefCell<Vec<(&'static str, usize)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
@@ -36,6 +38,90 @@ pub(super) fn with_collision_bits<R>(bits: usize, action: impl FnOnce() -> R) ->
     }
     let _restore = Restore(COLLISION_BITS.with(|slot| slot.replace(Some(bits.max(1)))));
     action()
+}
+
+#[cfg(test)]
+pub(super) fn with_sample_control<R>(
+    bits: Option<usize>,
+    positive: bool,
+    action: impl FnOnce() -> R,
+) -> R {
+    struct Restore(Option<usize>, bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SAMPLE_COLLISION_BITS.with(|slot| slot.set(self.0));
+            SAMPLE_POSITIVE.with(|slot| slot.set(self.1));
+        }
+    }
+    let _restore = Restore(
+        SAMPLE_COLLISION_BITS.with(|slot| slot.replace(bits.map(|bits| bits.max(1)))),
+        SAMPLE_POSITIVE.with(|slot| slot.replace(positive)),
+    );
+    action()
+}
+
+pub(super) fn tuple_hash(key_slices: &[&[i64]], row: usize) -> u64 {
+    let mut hash = 0x6a09e667f3bcc909u64;
+    for col in key_slices {
+        let mut word = (col[row] as u64).wrapping_add(0x9e3779b97f4a7c15);
+        word = (word ^ (word >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+        word = (word ^ (word >> 27)).wrapping_mul(0x94d049bb133111eb);
+        hash ^= word ^ (word >> 31);
+        hash = hash
+            .rotate_left(27)
+            .wrapping_mul(0x3c79ac492ba7b653)
+            .wrapping_add(0x1c69b3f74ac4ae35);
+    }
+    // Avalanche the final tuple, including correlated adjacent integer keys.
+    hash = (hash ^ (hash >> 33)).wrapping_mul(0xff51afd7ed558ccd);
+    hash = (hash ^ (hash >> 33)).wrapping_mul(0xc4ceb9fe1a85ec53);
+    hash ^ (hash >> 33)
+}
+
+pub(super) fn sample_row(idx: usize, n_rows: usize, sample_len: usize) -> Result<usize, String> {
+    idx.checked_mul(n_rows / sample_len)
+        .and_then(|base| {
+            idx.checked_mul(n_rows % sample_len)
+                .and_then(|remainder| base.checked_add(remainder / sample_len))
+        })
+        .ok_or_else(|| "sort-first sample index overflow".to_string())
+}
+
+pub(super) fn reaches_threshold(occupied: usize, rows: usize) -> Result<bool, String> {
+    occupied
+        .checked_mul(10)
+        .zip(rows.checked_mul(9))
+        .map(|(occupied, threshold)| occupied >= threshold)
+        .ok_or_else(|| "sort-first admission arithmetic overflow".to_string())
+}
+
+// This lower bound is rejection-only: collisions can never add distinct tuples.
+pub(super) fn sample_occupancy(key_slices: &[&[i64]], n_rows: usize) -> Result<usize, String> {
+    let sample_len = n_rows.min(8192);
+    if sample_len == 0 {
+        return Ok(0);
+    }
+    let (words, _) = bitmap_storage(sample_len).ok_or("sort-first sample bitmap overflow")?;
+    let bits = words
+        .checked_mul(64)
+        .ok_or("sort-first sample bitmap overflow")?;
+    #[cfg(test)]
+    let bits =
+        SAMPLE_COLLISION_BITS.with(|slot| slot.get().map_or(bits, |forced| forced.min(bits)));
+    let mut sample = checked_route_vec::<u64>(words)?;
+    #[cfg(test)]
+    observe_scratch("sample_live", sample.capacity() * size_of::<u64>());
+    sample.resize(words, 0);
+    for idx in 0..sample_len {
+        let row = sample_row(idx, n_rows, sample_len)?;
+        let bit = (tuple_hash(key_slices, row) % bits as u64) as usize;
+        sample[bit / 64] |= 1u64 << (bit % 64);
+    }
+    let occupied = sample.iter().map(|word| word.count_ones() as usize).sum();
+    drop(sample);
+    #[cfg(test)]
+    observe_scratch("sample_released", 0);
+    Ok(occupied)
 }
 
 pub(super) fn phases_fit(phases: &[usize; 5], cap: usize) -> bool {
@@ -252,42 +338,16 @@ pub(super) fn try_choose_sort_first_route(
     // Rejection only: distributed tuple sampling avoids an O(n) bitmap pass on
     // ordinary/low-cardinality inputs. A good sample never establishes admission.
     let sample_len = n_rows.min(8192);
-    let mut sample = checked_route_vec::<usize>(sample_len)?;
+    let sample_distinct = sample_occupancy(key_slices, n_rows)?;
     #[cfg(test)]
-    observe_scratch("sample_live", sample.capacity() * size_of::<usize>());
-    for idx in 0..sample_len {
-        let row = idx
-            .checked_mul(n_rows / sample_len)
-            .and_then(|base| {
-                idx.checked_mul(n_rows % sample_len)
-                    .and_then(|remainder| base.checked_add(remainder / sample_len))
-            })
-            .ok_or("sort-first sample index overflow")?;
-        sample.push(row);
-    }
-    sample.sort_unstable_by(|left, right| {
-        for col in key_slices {
-            let ordering = col[*left].cmp(&col[*right]);
-            if !ordering.is_eq() {
-                return ordering;
-            }
+    let sample_distinct = SAMPLE_POSITIVE.with(|slot| {
+        if slot.get() {
+            sample_len
+        } else {
+            sample_distinct
         }
-        std::cmp::Ordering::Equal
     });
-    let sample_distinct = 1 + sample
-        .windows(2)
-        .filter(|pair| key_slices.iter().any(|col| col[pair[0]] != col[pair[1]]))
-        .count();
-    drop(sample);
-    #[cfg(test)]
-    observe_scratch("sample_released", 0);
-    if sample_distinct
-        .checked_mul(10)
-        .ok_or("sort-first sample count overflow")?
-        < sample_len
-            .checked_mul(9)
-            .ok_or("sort-first sample threshold overflow")?
-    {
+    if !reaches_threshold(sample_distinct, sample_len)? {
         return Ok(SortFirstRoutingDecision {
             bitmap_bytes: budget.bitmap_bytes,
             modeled_peak_bytes: budget.peak_bytes,
@@ -306,21 +366,7 @@ pub(super) fn try_choose_sort_first_route(
     #[cfg(test)]
     let bits = COLLISION_BITS.with(|slot| slot.get().map_or(bits, |forced| forced.min(bits)));
     (0..n_rows).into_par_iter().for_each(|row| {
-        let mut hash = 0x6a09e667f3bcc909u64;
-        for col in key_slices {
-            let mut word = (col[row] as u64).wrapping_add(0x9e3779b97f4a7c15);
-            word = (word ^ (word >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-            word = (word ^ (word >> 27)).wrapping_mul(0x94d049bb133111eb);
-            hash ^= word ^ (word >> 31);
-            hash = hash
-                .rotate_left(27)
-                .wrapping_mul(0x3c79ac492ba7b653)
-                .wrapping_add(0x1c69b3f74ac4ae35);
-        }
-        // Avalanche the final tuple, including correlated adjacent integer keys.
-        hash = (hash ^ (hash >> 33)).wrapping_mul(0xff51afd7ed558ccd);
-        hash = (hash ^ (hash >> 33)).wrapping_mul(0xc4ceb9fe1a85ec53);
-        hash ^= hash >> 33;
+        let hash = tuple_hash(key_slices, row);
         let bit = (hash % bits as u64) as usize;
         bitmap[bit / 64].fetch_or(1u64 << (bit % 64), Ordering::Relaxed);
     });
@@ -331,17 +377,14 @@ pub(super) fn try_choose_sort_first_route(
     drop(bitmap);
     #[cfg(test)]
     observe_scratch("bitmap_released", 0);
-    let admitted = lower_bound
-        .checked_mul(10)
-        .zip(n_rows.checked_mul(9))
-        .ok_or("sort-first admission arithmetic overflow")?;
+    let admitted = reaches_threshold(lower_bound, n_rows)?;
     Ok(SortFirstRoutingDecision {
-        route: if admitted.0 >= admitted.1 {
+        route: if admitted {
             SortFirstRoute::SortFirst
         } else {
             SortFirstRoute::HashFirst
         },
-        fallback_reason: if admitted.0 >= admitted.1 {
+        fallback_reason: if admitted {
             None
         } else {
             Some(SortFirstFallbackReason::CardinalityLowerBound)
