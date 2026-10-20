@@ -1,6 +1,8 @@
 {
   "provenance": "pandas-booster issue17 local evidence; observed data, not certification",
   "status": "DRAFT; not ready for merge; issue17 remains open",
+  "historical_scope": "Point-in-time observations through PR20 head49fbbfc; every original failed classification and raw archive remains unchanged. Later candidate-bound recovery is separate, not a reclassification of these samples.",
+  "recovery_receipt": "benchmarks/evidence/issue17-recovery-summary.json",
   "baseline_sha": "291bc4af284119fd84e5408fd411dd6b4e0171d4",
   "native_candidate_sha": "714fc6890c67c126aff6482101d3dbd043d9a9bb",
   "host": "Intel N100; local 1/2/4 Rayon workers; NOT OCI scalability evidence",
