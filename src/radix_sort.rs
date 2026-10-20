@@ -1,5 +1,11 @@
 // Shared radix-sort utilities used for first-seen group ordering.
 
+#[cfg(test)]
+pub(crate) use crate::radix_sort_multi_key::MultiKeySortStrategy;
+pub(crate) use crate::radix_sort_multi_key::{
+    multi_key_sort_perm_with_profile, multi_key_sort_perm_with_proof,
+};
+
 const I64_SIGN_MASK: u64 = 1 << 63;
 
 #[inline]
@@ -166,72 +172,36 @@ pub(crate) fn radix_sort_perm_by_u64_for_indices_par(
     #[cfg(debug_assertions)]
     b.fill(usize::MAX);
 
-    #[derive(Clone, Copy)]
-    struct Ptr(usize);
-    unsafe impl Send for Ptr {}
-    unsafe impl Sync for Ptr {}
-
-    impl Ptr {
-        #[inline(always)]
-        unsafe fn write(self, pos: usize, val: usize) {
-            (self.0 as *mut usize).add(pos).write(val)
-        }
-    }
-
     for pass in 0..8 {
         let shift = pass * 8;
 
-        // Phase 1: local histograms per chunk
-        let counts: Vec<[usize; 256]> = a
+        let chunk_buckets: Vec<Vec<u8>> = a
             .par_chunks(chunk_size)
             .map(|chunk| {
+                chunk
+                    .iter()
+                    .map(|&idx| ((keys[idx] >> shift) & 0xFF) as u8)
+                    .collect()
+            })
+            .collect();
+        // Materialize digits once, then build disjoint output slices for scatter.
+        let counts: Vec<[usize; 256]> = chunk_buckets
+            .par_iter()
+            .map(|buckets| {
                 let mut local = [0usize; 256];
-                for &idx in chunk {
-                    let byte = ((keys[idx] >> shift) & 0xFF) as usize;
-                    local[byte] += 1;
+                for &bucket in buckets {
+                    local[usize::from(bucket)] += 1;
                 }
                 local
             })
             .collect();
-
-        // Phase 2: global offsets
-        let mut global = [0usize; 256];
-        for local in &counts {
-            for bkt in 0..256 {
-                global[bkt] += local[bkt];
-            }
-        }
-
-        let mut offsets = [0usize; 256];
-        let mut sum = 0usize;
-        for bkt in 0..256 {
-            let tmp = global[bkt];
-            offsets[bkt] = sum;
-            sum += tmp;
-        }
-
-        // Phase 3: per-thread starting offsets (preserve chunk order)
-        let mut thread_offsets: Vec<[usize; 256]> = vec![[0usize; 256]; counts.len()];
-        let mut running = offsets;
-        for (t, local) in counts.iter().enumerate() {
-            thread_offsets[t] = running;
-            for bkt in 0..256 {
-                running[bkt] += local[bkt];
-            }
-        }
-
-        // Phase 4: stable scatter in parallel
-        let out_ptr = Ptr(b.as_mut_ptr() as usize);
-        a.par_chunks(chunk_size)
-            .zip(thread_offsets.into_par_iter())
-            .for_each(|(chunk, mut write)| {
-                for &idx in chunk {
-                    let byte = ((keys[idx] >> shift) & 0xFF) as usize;
-                    let pos = write[byte];
-                    write[byte] = pos + 1;
-                    unsafe { out_ptr.write(pos, idx) };
-                }
-            });
+        crate::radix_sort_digit::scatter_digit_chunks(
+            &a,
+            &mut b,
+            chunk_size,
+            &chunk_buckets,
+            &counts,
+        );
 
         #[cfg(debug_assertions)]
         {
@@ -249,4 +219,30 @@ pub(crate) fn radix_sort_perm_by_i64_par(keys: &[i64]) -> Vec<usize> {
     sortable_keys.extend(keys.iter().map(|&key| i64_to_sortable_u64(key)));
     let indices: Vec<usize> = (0..keys.len()).collect();
     radix_sort_perm_by_u64_for_indices_par(&sortable_keys, &indices)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::radix_sort_perm_by_u64_for_indices_par;
+
+    #[test]
+    fn u64_indices_parallel_counting_matches_tuple_oracle() {
+        let keys: Vec<u64> = (0usize..4096)
+            .map(|i| {
+                let mixed = i.wrapping_mul(1_103_515_245).wrapping_add(12_345) & 0xFFFF;
+                ((mixed as u64) << 32) | ((4095 - i) as u64)
+            })
+            .collect();
+        let indices: Vec<usize> = (0..keys.len()).rev().collect();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .expect("test thread pool builds");
+
+        let perm = pool.install(|| radix_sort_perm_by_u64_for_indices_par(&keys, &indices));
+        let mut expected = indices;
+        expected.sort_unstable_by(|&left, &right| keys[left].cmp(&keys[right]));
+
+        assert_eq!(perm, expected);
+    }
 }

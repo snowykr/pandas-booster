@@ -11,6 +11,7 @@ def _zero_phase_stats() -> BenchmarkStats:
 
 
 def render_stats_evidence_section(evidence: list[dict[str, Any]]) -> str:
+    evidence = _single_key_stats_evidence(evidence)
     if not evidence:
         return ""
 
@@ -92,6 +93,18 @@ def _stats_overhead_summary() -> str:
     )
 
 
+def _single_key_stats_evidence(evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in evidence
+        if item["result"]["n_keys"] == 1
+        and (
+            item["breakdown"] is None
+            or item["breakdown"].get("profile_kind", "single_key") == "single_key"
+        )
+    ]
+
+
 def _append_backend_evidence_rows(lines: list[str], item: dict[str, Any]) -> None:
     agg = item["agg"]
     sort = "True" if item["sort"] else "False"
@@ -153,7 +166,7 @@ def _append_breakdown_table(lines: list[str], evidence: list[dict[str, Any]]) ->
     has_breakdown_rows = False
     for item in evidence:
         breakdown = item["breakdown"]
-        if breakdown is None:
+        if breakdown is None or breakdown.get("profile_kind", "single_key") != "single_key":
             continue
         has_breakdown_rows = True
         phases = breakdown["phases"]

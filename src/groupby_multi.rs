@@ -6,7 +6,8 @@
 use pyo3::prelude::*;
 
 use crate::radix_groupby::{
-    self, radix_groupby_count_f64, radix_groupby_count_f64_firstseen_u32,
+    self, profile_radix_groupby_max_f64_sorted, profile_radix_groupby_max_i64_sorted,
+    radix_groupby_count_f64, radix_groupby_count_f64_firstseen_u32,
     radix_groupby_count_f64_firstseen_u64, radix_groupby_count_f64_sorted, radix_groupby_count_i64,
     radix_groupby_count_i64_firstseen_u32, radix_groupby_count_i64_firstseen_u64,
     radix_groupby_count_i64_sorted, radix_groupby_max_f64, radix_groupby_max_f64_firstseen_u32,
@@ -39,6 +40,8 @@ use crate::radix_groupby::{
 
 pub type GroupByMultiResultF64 = radix_groupby::GroupByMultiResult<f64>;
 pub type GroupByMultiResultI64 = radix_groupby::GroupByMultiResult<i64>;
+pub type ProfiledGroupByMultiResultF64 = radix_groupby::ProfiledGroupByMultiResult<f64>;
+pub type ProfiledGroupByMultiResultI64 = radix_groupby::ProfiledGroupByMultiResult<i64>;
 
 pub fn multi_groupby_sum_f64(
     key_slices: &[&[i64]],
@@ -234,6 +237,14 @@ pub fn multi_groupby_max_f64_sorted(
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
+pub fn profile_multi_groupby_max_f64_sorted(
+    key_slices: &[&[i64]],
+    values: &[f64],
+) -> PyResult<ProfiledGroupByMultiResultF64> {
+    profile_radix_groupby_max_f64_sorted(key_slices, values)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
 pub fn multi_groupby_count_f64_sorted(
     key_slices: &[&[i64]],
     values: &[f64],
@@ -303,6 +314,14 @@ pub fn multi_groupby_max_i64_sorted(
     values: &[i64],
 ) -> PyResult<GroupByMultiResultI64> {
     radix_groupby_max_i64_sorted(key_slices, values)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+pub fn profile_multi_groupby_max_i64_sorted(
+    key_slices: &[&[i64]],
+    values: &[i64],
+) -> PyResult<ProfiledGroupByMultiResultI64> {
+    profile_radix_groupby_max_i64_sorted(key_slices, values)
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
 

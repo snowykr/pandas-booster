@@ -140,7 +140,7 @@ Emergency toggle (panic button):
 
 Single-key float `prod` uses a verified Rust path that preserves per-key row-order IEEE-754 overflow/underflow semantics without merging partial products; multi-key float `prod` remains Rust-eligible. These toggles are intended for quick rollback if a Rust ordering or deterministic-float reduction issue is discovered. Forcing Python sort moves the `sort=True` cost to Pandas and is slower. Forcing pandas float groupby rolls single-key float `sum`/`mean`/`prod`/`std`/`var`/`median` back to pandas semantics/performance.
 
-Note: the Rust-side `sort=True` kernels allocate a permutation vector and perform an `O(G log G)` comparison sort over groups (G = number of groups). This can increase memory usage at very high cardinality.
+Note: Rust-side `sort=True` ordering uses a hybrid strategy. Multi-key results with fewer than 2,048 groups use comparison sorting; larger results use packed-u64 radix sorting when the key ranges fit in 64 bits, or fused multi-key radix sorting otherwise. Both radix paths fall back to comparison sorting when estimated radix workspace exceeds the 512 MiB cap. Comparison sorting takes `O(G log G)` comparisons (G = number of groups). Permutation vectors and radix workspace can increase memory usage at very high cardinality; the workspace cap is not a total-memory limit.
 
 Note: the benchmark runner defaults `PANDAS_BOOSTER_FORCE_PANDAS_SORT=0`.
 
