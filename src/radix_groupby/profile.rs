@@ -1,12 +1,13 @@
 use crate::aggregation::Aggregator;
 
-use super::dispatch::radix_groupby_dispatch_with_profile;
-use super::order::sort_groupby_result_profiled;
+use super::dispatch_sorted::radix_groupby_sorted_with_optional_profile;
 use super::result::{MultiKeySortedPhaseProfile, ProfiledGroupByMultiResult};
+use super::sort_first_routing::SortFirstReducer;
 
 pub(super) fn profile_radix_groupby_sorted<T, A, O>(
     key_slices: &[&[i64]],
     values: &[T],
+    reducer: SortFirstReducer,
 ) -> Result<ProfiledGroupByMultiResult<O>, String>
 where
     T: Copy + Send + Sync,
@@ -15,6 +16,16 @@ where
 {
     let mut profile = MultiKeySortedPhaseProfile {
         route_label: "hash_first",
+        route_reason: "",
+        routing_s: 0.0,
+        sort_first_boundary_s: 0.0,
+        sort_first_setup_s: 0.0,
+        hash_first_aggregation_count: 0,
+        post_aggregation_sort_count: 0,
+        distinct_lower_bound: 0,
+        estimated_peak_bytes: 0,
+        rayon_threads: 0,
+        rust_elapsed_s: 0.0,
         hash_build_s: 0.0,
         partition_scatter_s: 0.0,
         partition_aggregation_s: 0.0,
@@ -30,16 +41,11 @@ where
         partial_group_total: 0,
         final_group_count: 0,
     };
-    let mut result =
-        radix_groupby_dispatch_with_profile::<T, A, O>(key_slices, values, Some(&mut profile))?;
-    if !values.is_empty() {
-        let sort_profile = sort_groupby_result_profiled(&mut result);
-        profile.sort_key_construction_s = sort_profile.sort_key_construction_s;
-        profile.radix_sort_s = sort_profile.radix_sort_s;
-        profile.sorted_materialization_s = sort_profile.sorted_materialization_s;
-        profile.selected_sort_strategy = sort_profile.selected_sort_strategy;
-        profile.sort_key_bit_widths = sort_profile.sort_key_bit_widths;
-        profile.final_group_count = result.values.len();
-    }
+    let (result, _) = radix_groupby_sorted_with_optional_profile::<T, A, O>(
+        key_slices,
+        values,
+        reducer,
+        Some(&mut profile),
+    )?;
     Ok(ProfiledGroupByMultiResult { result, profile })
 }

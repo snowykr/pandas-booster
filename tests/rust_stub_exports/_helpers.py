@@ -202,6 +202,8 @@ def _expected_profile_exports() -> set[str]:
     } | {
         "profile_groupby_multi_max_f64_sorted",
         "profile_groupby_multi_max_i64_sorted",
+        "profile_groupby_multi_count_f64_sorted",
+        "profile_groupby_multi_count_i64_sorted",
     }
     return std_var_exports | {"profile_groupby_median_f64_sorted"}
 

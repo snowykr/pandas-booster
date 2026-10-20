@@ -10,6 +10,7 @@ from dispatch import resolve_booster_benchmark_dispatch
 
 REQUIRED_MULTI_KEY_SORTED_PHASES = (
     "prepare_inputs_s",
+    "routing_s",
     "hash_build_s",
     "partition_scatter_s",
     "partition_aggregation_s",
@@ -17,13 +18,23 @@ REQUIRED_MULTI_KEY_SORTED_PHASES = (
     "sort_key_construction_s",
     "radix_sort_s",
     "sorted_materialization_s",
-    "sort_first_permutation_s",
+    "sort_first_boundary_s",
+    "sort_first_setup_s",
     "sort_first_segment_scan_s",
     "conversion_s",
     "python_normalize_s",
     "pandas_index_construction_s",
 )
 MULTI_KEY_SORTED_HIGH_PRESET = "high_cardinality_3key"
+
+MULTI_KEY_ROUTE_FIELDS = (
+    "route_reason",
+    "hash_first_aggregation_count",
+    "post_aggregation_sort_count",
+    "distinct_lower_bound",
+    "estimated_peak_bytes",
+    "rayon_threads",
+)
 
 
 def _profile_float_phase_samples() -> dict[str, list[float]]:
@@ -45,7 +56,7 @@ def measure_booster_multi_key_sorted_breakdown(
     import pandas_booster._rust as rust
     from pandas_booster import _groupby_accel as groupby_accel
 
-    if agg != "max" or not sort:
+    if agg not in {"max", "count"} or not sort:
         return None
 
     val_col = cast(pd.Series, df["value"])
@@ -71,6 +82,7 @@ def measure_booster_multi_key_sorted_breakdown(
     sort_first_segment_scan_count = 0
     selected_sort_strategy = ""
     sort_key_bit_widths: list[int] = []
+    route_metadata: dict[str, Any] = {}
 
     for _ in range(n_samples):
         total_start = time.perf_counter()
@@ -139,6 +151,7 @@ def measure_booster_multi_key_sorted_breakdown(
         sort_first_segment_scan_count = int(profile["sort_first_segment_scan_count"])
         selected_sort_strategy = str(profile["selected_sort_strategy"])
         sort_key_bit_widths = [int(width) for width in profile["sort_key_bit_widths"]]
+        route_metadata = {field: profile[field] for field in MULTI_KEY_ROUTE_FIELDS}
 
     stats = {name: compute_stats(samples) for name, samples in phase_samples.items()}
     return {
@@ -155,4 +168,5 @@ def measure_booster_multi_key_sorted_breakdown(
         "sort_first_segment_scan_count": sort_first_segment_scan_count,
         "selected_sort_strategy": selected_sort_strategy,
         "sort_key_bit_widths": sort_key_bit_widths,
+        **route_metadata,
     }

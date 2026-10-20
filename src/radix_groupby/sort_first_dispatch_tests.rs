@@ -1,202 +1,366 @@
-use super::dispatch::SortedDispatchRoute;
-use super::sort_first_routing::{SortFirstFallbackReason, SortFirstReducer};
-use super::test_support::{key_at_out, value_at_out};
+use std::collections::BTreeMap;
+
+use super::dispatch::{SortedDispatchDiagnostics, SortedDispatchRoute};
+use super::sort_first_routing::{SortFirstFallbackReason, ROUTE_MEMORY_CAP};
+use super::test_support::{key_at_out, take_physical_operations, value_at_out};
 use super::*;
 
-fn high_ratio_keys(n_rows: usize) -> (Vec<i64>, Vec<i64>) {
-    let left: Vec<i64> = (0..n_rows as i64).rev().collect();
-    let right: Vec<i64> = (0..n_rows as i64).collect();
-    (left, right)
+fn assert_admitted(diagnostics: &SortedDispatchDiagnostics, n: usize) {
+    assert_eq!(diagnostics.route, SortedDispatchRoute::SortFirst);
+    assert_eq!(diagnostics.hash_first_aggregation_count, 0);
+    assert_eq!(diagnostics.post_aggregation_sort_count, 0);
+    assert_eq!(diagnostics.routing_decision.fallback_reason, None);
+    assert!(diagnostics.routing_decision.cardinality_lower_bound * 10 >= n * 9);
+    assert!(diagnostics.routing_decision.modeled_peak_bytes <= ROUTE_MEMORY_CAP);
+    let segment = diagnostics
+        .sort_first
+        .expect("admitted route must report segment execution");
+    assert!(segment.lexicographic_permutation_built);
+    assert_eq!(segment.segment_scan_count, 1);
+    assert_eq!(segment.post_aggregation_sort_count, 0);
+    assert_eq!(take_physical_operations(), (0, 0));
 }
 
-fn low_ratio_keys(n_rows: usize) -> (Vec<i64>, Vec<i64>) {
-    let left: Vec<i64> = (0..n_rows as i64).map(|row| row % 64).collect();
-    let right: Vec<i64> = (0..n_rows as i64).map(|row| (row * 3) % 64).collect();
-    (left, right)
+fn assert_profile_admitted(profile: &MultiKeySortedPhaseProfile, n: usize) {
+    assert_eq!(profile.route_label, "sort_first");
+    assert_eq!(profile.route_reason, "cardinality_lower_bound_admitted");
+    assert_eq!(profile.hash_first_aggregation_count, 0);
+    assert_eq!(profile.post_aggregation_sort_count, 0);
+    assert!(profile.distinct_lower_bound * 10 >= n * 9);
+    assert!(profile.estimated_peak_bytes <= ROUTE_MEMORY_CAP);
+    assert_eq!(profile.rayon_threads, rayon::current_num_threads());
+    assert_eq!(profile.sort_first_segment_scan_count, 1);
+    assert_eq!(take_physical_operations(), (0, 0));
 }
 
-fn key_slices<'a>(left: &'a [i64], right: &'a [i64]) -> Vec<&'a [i64]> {
-    vec![left, right]
-}
-
-fn assert_sort_first_not_reached_for_target_route(
-    diagnostics: &super::dispatch::SortedDispatchDiagnostics,
-) {
-    assert_eq!(diagnostics.route, SortedDispatchRoute::HashFirst);
-    assert_eq!(diagnostics.hash_first_aggregation_count, 1);
-    assert_eq!(diagnostics.post_aggregation_sort_count, 1);
-    assert_eq!(
-        diagnostics.routing_decision.fallback_reason,
-        Some(SortFirstFallbackReason::SortFirstNotCertified)
-    );
-    assert!(diagnostics.sort_first.is_none());
-}
-
-fn assert_hash_first_route(
-    diagnostics: &super::dispatch::SortedDispatchDiagnostics,
-    reason: SortFirstFallbackReason,
-) {
+fn assert_fallback(diagnostics: &SortedDispatchDiagnostics, reason: SortFirstFallbackReason) {
     assert_eq!(diagnostics.route, SortedDispatchRoute::HashFirst);
     assert_eq!(diagnostics.hash_first_aggregation_count, 1);
     assert_eq!(diagnostics.post_aggregation_sort_count, 1);
     assert_eq!(diagnostics.routing_decision.fallback_reason, Some(reason));
     assert!(diagnostics.sort_first.is_none());
+    assert_eq!(take_physical_operations(), (1, 1));
 }
 
-#[test]
-fn production_routing_high_ratio_max_uses_hash_first_until_sort_first_is_certified() {
-    // Given high tuple uniqueness in reverse lexicographic order.
-    let (left, right) = high_ratio_keys(5_000);
-    let values_f64: Vec<f64> = left.iter().map(|&key| key as f64).collect();
-    let values_i64: Vec<i64> = left.clone();
-    let keys = key_slices(&left, &right);
-
-    // When production sorted max dispatch runs.
-    let (float_result, float_diagnostics) =
-        super::api_sorted::radix_groupby_max_f64_sorted_with_diagnostics(&keys, &values_f64)
-            .expect("high-ratio f64 max should dispatch");
-    let (integer_result, integer_diagnostics) =
-        super::api_sorted::radix_groupby_max_i64_sorted_with_diagnostics(&keys, &values_i64)
-            .expect("high-ratio i64 max should dispatch");
-
-    // Then both value dtypes use certified hash-first plus post-aggregation sort.
-    assert_sort_first_not_reached_for_target_route(&float_diagnostics);
-    assert_sort_first_not_reached_for_target_route(&integer_diagnostics);
-    assert_eq!(key_at_out(&float_result, 0, 0), 0);
-    assert_eq!(key_at_out(&integer_result, 0, 0), 0);
-    assert_eq!(value_at_out(&float_result, 0), 0.0);
-    assert_eq!(value_at_out(&integer_result, 0), 0);
+// Seven sparse pairs span uneven 1/2/4-thread chunks. Remaining tuples are unique.
+fn fixture(fused: bool, order: usize) -> (Vec<Vec<i64>>, Vec<f64>, Vec<i64>) {
+    let n = 5_003;
+    let mut keys = vec![(0..n as i64).rev().collect::<Vec<_>>(), vec![7; n]];
+    if fused {
+        keys[0][0] = i64::MIN;
+        keys[0][1] = i64::MAX;
+        keys[1][0] = i64::MAX;
+        keys[1][1] = i64::MIN;
+    }
+    let mut floats: Vec<f64> = (0..n).map(|row| row as f64 - 100.0).collect();
+    let mut integers: Vec<i64> = (0..n).map(|row| row as i64).collect();
+    let pairs = [
+        (-0.0, 0.0),
+        (0.0, -0.0),
+        (f64::NAN, 9.0),
+        (f64::NAN, f64::NAN),
+        (f64::NEG_INFINITY, f64::INFINITY),
+        (f64::NEG_INFINITY, f64::NEG_INFINITY),
+        (f64::INFINITY, f64::NAN),
+    ];
+    for (j, (first, second)) in pairs.into_iter().enumerate() {
+        let a = n / 4 - 1 + j;
+        let b = 3 * n / 4 + j;
+        for column in &mut keys {
+            column[b] = column[a];
+        }
+        floats[a] = first;
+        floats[b] = second;
+        integers[a] = i64::MIN;
+        integers[b] = i64::MAX;
+    }
+    let mut rows: Vec<usize> = (0..n).collect();
+    match order {
+        0 => {}
+        1 => rows.reverse(),
+        2 => rows.sort_by_key(|&row| (row * 7919) % n),
+        _ => rows.sort_by_key(|&row| (keys[0][row], keys[1][row])),
+    }
+    (
+        keys.iter()
+            .map(|col| rows.iter().map(|&row| col[row]).collect())
+            .collect(),
+        rows.iter().map(|&row| floats[row]).collect(),
+        rows.iter().map(|&row| integers[row]).collect(),
+    )
 }
 
-#[test]
-fn production_routing_high_ratio_count_uses_hash_first_until_sort_first_is_certified() {
-    // Given high tuple uniqueness with values that exercise f64 NaN count semantics.
-    let (left, right) = high_ratio_keys(5_000);
-    let values_f64: Vec<f64> = (0..left.len())
-        .map(|row| if row % 11 == 0 { f64::NAN } else { row as f64 })
-        .collect();
-    let values_i64: Vec<i64> = (0..left.len() as i64).collect();
-    let keys = key_slices(&left, &right);
-
-    // When production sorted count dispatch runs.
-    let (float_result, float_diagnostics) =
-        super::api_sorted::radix_groupby_count_f64_sorted_with_diagnostics(&keys, &values_f64)
-            .expect("high-ratio f64 count should dispatch");
-    let (integer_result, integer_diagnostics) =
-        super::api_sorted::radix_groupby_count_i64_sorted_with_diagnostics(&keys, &values_i64)
-            .expect("high-ratio i64 count should dispatch");
-
-    // Then both value dtypes use certified hash-first plus post-aggregation sort.
-    assert_sort_first_not_reached_for_target_route(&float_diagnostics);
-    assert_sort_first_not_reached_for_target_route(&integer_diagnostics);
-    assert_eq!(key_at_out(&float_result, 0, 0), 0);
-    assert_eq!(key_at_out(&integer_result, 0, 0), 0);
-    assert_eq!(value_at_out(&float_result, 0), 1);
-    assert_eq!(value_at_out(&integer_result, 0), 1);
+fn reference_groups(keys: &[Vec<i64>]) -> BTreeMap<Vec<i64>, Vec<usize>> {
+    let mut groups = BTreeMap::<Vec<i64>, Vec<usize>>::new();
+    for row in 0..keys[0].len() {
+        groups
+            .entry(keys.iter().map(|col| col[row]).collect())
+            .or_default()
+            .push(row);
+    }
+    groups
 }
 
-#[test]
-fn production_routing_low_ratio_count_stays_hash_first() {
-    // Given enough rows but duplicate-heavy sampled key tuples.
-    let (left, right) = low_ratio_keys(5_000);
-    let values: Vec<i64> = (0..left.len() as i64).collect();
-    let keys = key_slices(&left, &right);
-
-    // When production sorted count dispatch runs.
-    let (_result, diagnostics) =
-        super::api_sorted::radix_groupby_count_i64_sorted_with_diagnostics(&keys, &values)
-            .expect("low-ratio count should fall back to hash-first dispatch");
-
-    // Then it keeps the hash-first aggregation plus sorted-output path.
-    assert_hash_first_route(&diagnostics, SortFirstFallbackReason::SortFirstNotCertified);
+fn assert_keys<V>(result: &GroupByMultiResult<V>, groups: &BTreeMap<Vec<i64>, Vec<usize>>) {
+    assert!(
+        result.perm.is_none(),
+        "sort-first must already emit sorted materialized groups"
+    );
+    assert_eq!(result.values.len(), groups.len());
+    for (out, key) in groups.keys().enumerate() {
+        for (col, &expected) in key.iter().enumerate() {
+            assert_eq!(key_at_out(result, out, col), expected);
+        }
+    }
 }
 
-#[test]
-fn production_routing_medium_ratio_stays_hash_first_without_sampling() {
-    // Given medium tuple uniqueness; disabled routing must not sample it.
-    let n_rows = 5_000usize;
-    let unique_tuples = 3_700i64;
-    let left: Vec<i64> = (0..n_rows as i64).map(|row| row % unique_tuples).collect();
-    let right: Vec<i64> = (0..n_rows as i64).map(|row| row % unique_tuples).collect();
-    let values_f64: Vec<f64> = left.iter().map(|&key| key as f64).collect();
-    let values_i64: Vec<i64> = (0..n_rows as i64).collect();
-    let keys = key_slices(&left, &right);
+fn assert_float_result(
+    result: &GroupByMultiResult<f64>,
+    groups: &BTreeMap<Vec<i64>, Vec<usize>>,
+    values: &[f64],
+) {
+    assert_keys(result, groups);
+    for (out, rows) in groups.values().enumerate() {
+        let mut expected = f64::NAN;
+        for &row in rows {
+            let value = values[row];
+            if !value.is_nan() && (expected.is_nan() || value > expected) {
+                expected = value;
+            }
+        }
+        let actual = value_at_out(result, out);
+        if expected.is_nan() {
+            assert!(actual.is_nan());
+        } else {
+            assert_eq!(actual.to_bits(), expected.to_bits());
+        }
+    }
+}
 
-    // When production sorted max and count dispatch run.
-    let (_max_result, max_diagnostics) =
-        super::api_sorted::radix_groupby_max_f64_sorted_with_diagnostics(&keys, &values_f64)
-            .expect("medium-ratio f64 max should fall back to hash-first dispatch");
-    let (_count_result, count_diagnostics) =
-        super::api_sorted::radix_groupby_count_i64_sorted_with_diagnostics(&keys, &values_i64)
-            .expect("medium-ratio i64 count should fall back to hash-first dispatch");
-
-    // Then both supported reducers remain on the hash-first sorted-output path.
-    for diagnostics in [&max_diagnostics, &count_diagnostics] {
-        assert_hash_first_route(diagnostics, SortFirstFallbackReason::SortFirstNotCertified);
+fn assert_integer_result(
+    result: &GroupByMultiResult<i64>,
+    groups: &BTreeMap<Vec<i64>, Vec<usize>>,
+    values: &[i64],
+    count_values: Option<&[f64]>,
+    max: bool,
+) {
+    assert_keys(result, groups);
+    for (out, rows) in groups.values().enumerate() {
+        let expected = if max {
+            rows.iter().map(|&row| values[row]).max().unwrap()
+        } else if let Some(floats) = count_values {
+            rows.iter().filter(|&&row| !floats[row].is_nan()).count() as i64
+        } else {
+            rows.len() as i64
+        };
+        assert_eq!(value_at_out(result, out), expected);
     }
 }
 
 #[test]
-fn production_routing_sum_and_min_remain_hash_first_when_ratio_is_high() {
-    // Given high tuple uniqueness.
-    let (left, right) = high_ratio_keys(5_000);
-    let keys = key_slices(&left, &right);
+fn production_all_four_kernels_physically_use_stable_segments_for_ordinary_and_profile_calls() {
+    for threads in [1, 2, 4] {
+        rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
+            for fused in [false, true] {
+                for order in 0..4 {
+                    let (storage, floats, integers) = fixture(fused, order);
+                    let keys: Vec<&[i64]> = storage.iter().map(Vec::as_slice).collect();
+                    let groups = reference_groups(&storage);
+                    take_physical_operations();
+                    let (result, diagnostics) = super::api_sorted::radix_groupby_max_f64_sorted_with_diagnostics(&keys, &floats).unwrap();
+                    assert_admitted(&diagnostics, floats.len());
+                    assert_float_result(&result, &groups, &floats);
+                    take_physical_operations();
+                    let profiled = profile_radix_groupby_max_f64_sorted(&keys, &floats).unwrap();
+                    assert_profile_admitted(&profiled.profile, floats.len());
+                    assert_eq!(profiled.profile.selected_sort_strategy,
+                        if fused { "fused_multi_key_radix" } else { "packed_u64" });
+                    assert_float_result(&profiled.result, &groups, &floats);
 
-    // When routing considers reducers that are not production-routed in T8.
-    for reducer in [SortFirstReducer::SumF64, SortFirstReducer::MinF64] {
-        let decision =
-            super::sort_first_routing::choose_sort_first_route(reducer, &keys, left.len());
-
-        // Then they are explicitly rejected before production dispatch can use sort-first.
-        assert_eq!(
-            decision.route,
-            super::sort_first_routing::SortFirstRoute::HashFirst
-        );
-        assert_eq!(
-            decision.fallback_reason,
-            Some(SortFirstFallbackReason::UnsupportedReducer)
-        );
+                    macro_rules! integer_kernel {
+                        ($ordinary:ident, $profile:ident, $values:expr, $count_values:expr, $max:expr) => {{
+                            take_physical_operations();
+                            let (result, diagnostics) = super::api_sorted::$ordinary(&keys, $values).unwrap();
+                            assert_admitted(&diagnostics, floats.len());
+                            assert_integer_result(&result, &groups, &integers, $count_values, $max);
+                            take_physical_operations();
+                            let profiled = $profile(&keys, $values).unwrap();
+                            assert_profile_admitted(&profiled.profile, floats.len());
+                            assert_integer_result(&profiled.result, &groups, &integers, $count_values, $max);
+                        }};
+                    }
+                    integer_kernel!(radix_groupby_max_i64_sorted_with_diagnostics, profile_radix_groupby_max_i64_sorted, &integers, None, true);
+                    integer_kernel!(radix_groupby_count_f64_sorted_with_diagnostics, profile_radix_groupby_count_f64_sorted, &floats, Some(floats.as_slice()), false);
+                    integer_kernel!(radix_groupby_count_i64_sorted_with_diagnostics, profile_radix_groupby_count_i64_sorted, &integers, None, false);
+                }
+            }
+        });
     }
 }
 
 #[test]
-fn production_routing_more_than_ten_keys_stays_hash_first_before_sort_first() {
-    // Given the Rust-side maximum-supported key count is exceeded.
-    let n_rows = 5_000usize;
-    let keys_storage: Vec<Vec<i64>> = (0..11)
-        .map(|col| {
-            (0..n_rows as i64)
-                .map(|row| row.wrapping_mul(13) + col)
-                .collect()
-        })
-        .collect();
-    let keys: Vec<&[i64]> = keys_storage.iter().map(Vec::as_slice).collect();
-    let values: Vec<i64> = (0..n_rows as i64).collect();
-
-    // When production sorted count dispatch runs.
-    let (_result, diagnostics) =
-        super::api_sorted::radix_groupby_count_i64_sorted_with_diagnostics(&keys, &values)
-            .expect("over-cap key counts should fall back instead of sort-first routing");
-
-    // Then the cap is decided before the sort-first route can run.
-    assert_hash_first_route(&diagnostics, SortFirstFallbackReason::UnsupportedKeyCount);
+fn production_low_medium_and_over_key_limit_fallbacks_observe_hash_and_postsort() {
+    for (n, groups, k, reason) in [
+        (5_003, 64, 2, SortFirstFallbackReason::CardinalityLowerBound),
+        (
+            5_003,
+            3_700,
+            2,
+            SortFirstFallbackReason::CardinalityLowerBound,
+        ),
+        (
+            5_003,
+            5_003,
+            11,
+            SortFirstFallbackReason::UnsupportedKeyCount,
+        ),
+        (17, 17, 2, SortFirstFallbackReason::TooFewRows),
+    ] {
+        let storage: Vec<Vec<i64>> = (0..k)
+            .map(|_| (0..n).map(|row| (row % groups) as i64).collect())
+            .collect();
+        let keys: Vec<&[i64]> = storage.iter().map(Vec::as_slice).collect();
+        let values = vec![1i64; n];
+        take_physical_operations();
+        let (_, diagnostics) =
+            super::api_sorted::radix_groupby_count_i64_sorted_with_diagnostics(&keys, &values)
+                .unwrap();
+        assert_fallback(&diagnostics, reason);
+        take_physical_operations();
+        let profiled = profile_radix_groupby_count_i64_sorted(&keys, &values).unwrap();
+        assert_eq!(profiled.profile.route_label, "hash_first");
+        assert_eq!(profiled.profile.hash_first_aggregation_count, 1);
+        assert_eq!(profiled.profile.post_aggregation_sort_count, 1);
+        assert_eq!(take_physical_operations(), (1, 1));
+    }
 }
 
 #[test]
-fn production_routing_profile_high_ratio_max_labels_hash_first() {
-    // Given a high tuple ratio max profile workload.
-    let (left, right) = high_ratio_keys(5_000);
-    let values: Vec<f64> = left.iter().map(|&key| key as f64).collect();
-    let keys = key_slices(&left, &right);
+fn unsupported_reducers_remain_physical_hash_first() {
+    let (storage, values, _) = fixture(false, 0);
+    let keys: Vec<&[i64]> = storage.iter().map(Vec::as_slice).collect();
+    take_physical_operations();
+    radix_groupby_sum_f64_sorted(&keys, &values).unwrap();
+    assert_eq!(take_physical_operations(), (1, 1));
+    radix_groupby_min_f64_sorted(&keys, &values).unwrap();
+    assert_eq!(take_physical_operations(), (1, 1));
+}
 
-    // When the existing profile export runs.
-    let profiled = profile_radix_groupby_max_f64_sorted(&keys, &values)
-        .expect("profiled high-ratio max should dispatch");
+#[test]
+fn rejection_releases_route_scratch_before_hash_fallback() {
+    use super::sort_first_routing::{take_scratch_events, with_collision_bits};
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .build()
+        .unwrap()
+        .install(|| {
+            let n = 5_003;
+            let constant = vec![1; n];
+            let unique: Vec<i64> = (0..n as i64).collect();
+            let values = vec![1i64; n];
+            for bitmap_rejection in [false, true] {
+                take_scratch_events();
+                take_physical_operations();
+                let left = if bitmap_rejection { &unique } else { &constant };
+                with_collision_bits(1, || {
+                    let (_, diagnostics) =
+                        super::api_sorted::radix_groupby_count_i64_sorted_with_diagnostics(
+                            &[left, &constant],
+                            &values,
+                        )
+                        .unwrap();
+                    assert_fallback(&diagnostics, SortFirstFallbackReason::CardinalityLowerBound);
+                });
+                let events = take_scratch_events();
+                assert_eq!(events.last(), Some(&("hash_fallback", 0)));
+                let sample_release = events
+                    .iter()
+                    .position(|event| *event == ("sample_released", 0))
+                    .unwrap();
+                if bitmap_rejection {
+                    let bitmap_live = events
+                        .iter()
+                        .position(|(phase, _)| *phase == "bitmap_live")
+                        .unwrap();
+                    assert!(sample_release < bitmap_live);
+                    assert_eq!(events[events.len() - 2], ("bitmap_released", 0));
+                } else {
+                    assert_eq!(events[events.len() - 2], ("sample_released", 0));
+                    assert!(!events.iter().any(|(phase, _)| *phase == "bitmap_live"));
+                }
+            }
+        });
+}
 
-    // Then its route label describes the certified hash-first sorted-output path.
-    assert_eq!(profiled.profile.route_label, "hash_first");
-    assert_eq!(profiled.profile.sort_first_permutation_s, 0.0);
-    assert_eq!(profiled.profile.sort_first_segment_scan_s, 0.0);
-    assert_eq!(profiled.profile.sort_first_segment_scan_count, 0);
-    assert_eq!(profiled.result.values.len(), left.len());
+#[test]
+fn admitted_engine_releases_boundary_and_permutation_scratch_before_conversion() {
+    use super::sort_first_routing::take_scratch_events;
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .build()
+        .unwrap()
+        .install(|| {
+            let (storage, _, values) = fixture(false, 0);
+            let keys: Vec<&[i64]> = storage.iter().map(Vec::as_slice).collect();
+            take_scratch_events();
+            take_physical_operations();
+            let (result, diagnostics) =
+                super::api_sorted::radix_groupby_count_i64_sorted_with_diagnostics(&keys, &values)
+                    .unwrap();
+            assert_admitted(&diagnostics, values.len());
+            let events = take_scratch_events();
+            let bytes = |phase| events.iter().find(|(name, _)| *name == phase).unwrap().1;
+            let p = std::mem::size_of::<usize>();
+            assert_eq!(bytes("radix_returned"), values.len() * p);
+            assert_eq!(bytes("boundary_live"), values.len() * (p + 1));
+            assert!(bytes("starts_live") > bytes("boundary_released"));
+            assert_eq!(
+                bytes("boundary_released"),
+                (values.len() + result.values.len() + 1) * p
+            );
+            assert_eq!(events.last(), Some(&("conversion_ready", 0)));
+            assert!(!events.iter().any(|(phase, _)| *phase == "hash_fallback"));
+        });
+}
+
+#[test]
+fn every_route_allocation_error_propagates_without_hash_retry() {
+    use crate::radix_sort_digit::route_allocation_test::{with_failure, Failure};
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .build()
+        .unwrap()
+        .install(|| {
+            let (storage, _, values) = fixture(false, 0);
+            let keys: Vec<&[i64]> = storage.iter().map(Vec::as_slice).collect();
+            // A successful discovery run gives the exact finite allocation count;
+            // no hard-coded assumptions about radix pass count or layout buffers.
+            let (result, discovery) = with_failure(usize::MAX, Failure::Reserve, || {
+                super::api_sorted::radix_groupby_count_i64_sorted_with_diagnostics(&keys, &values)
+            });
+            result.unwrap();
+            assert!(discovery.attempts > 0);
+            for failure in [Failure::Reserve, Failure::Capacity] {
+                for fail_at in 1..=discovery.attempts {
+                    take_physical_operations();
+                    let (result, observation) = with_failure(fail_at, failure, || {
+                        super::api_sorted::radix_groupby_count_i64_sorted_with_diagnostics(
+                            &keys, &values,
+                        )
+                    });
+                    assert!(
+                        result.is_err(),
+                        "allocation index={fail_at}, failure={failure:?}"
+                    );
+                    assert_eq!(observation.attempts, fail_at);
+                    assert_eq!(observation.live, 0);
+                    assert_eq!(take_physical_operations(), (0, 0));
+                }
+            }
+            // The scoped injector must not poison a later call on this same worker.
+            let (_, diagnostics) =
+                super::api_sorted::radix_groupby_count_i64_sorted_with_diagnostics(&keys, &values)
+                    .unwrap();
+            assert_admitted(&diagnostics, values.len());
+        });
 }

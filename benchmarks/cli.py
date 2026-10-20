@@ -141,7 +141,7 @@ Environment:
         type=str,
         help=(
             "Internal-use profile JSON output path for single-key std/var evidence "
-            "and selected median evidence"
+            "and selected median evidence; also sorted multi-key max/count evidence"
         ),
     )
     parser.add_argument(

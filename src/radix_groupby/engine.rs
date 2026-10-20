@@ -20,6 +20,8 @@ where
     O: Copy + Send + Sync,
     A: Aggregator<T, O> + Clone + Default + Send,
 {
+    #[cfg(test)]
+    super::test_support::observe_hash_aggregation();
     let n_rows = values.len();
 
     // Safety check: ensure all key columns have the same length as values

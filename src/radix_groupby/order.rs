@@ -90,6 +90,8 @@ pub(super) fn reorder_result_by_first_seen_u64<V: Copy>(
 }
 
 pub(super) fn sort_groupby_result<V: Copy>(result: &mut GroupByMultiResult<V>) {
+    #[cfg(test)]
+    super::test_support::observe_output_sort();
     if result.values.is_empty() {
         return;
     }
@@ -135,6 +137,8 @@ pub(super) fn sort_groupby_result_profiled<V: Copy>(
 ) -> SortPhaseProfile {
     use std::time::Instant;
 
+    #[cfg(test)]
+    super::test_support::observe_output_sort();
     if result.values.is_empty() {
         return SortPhaseProfile {
             selected_sort_strategy: "empty",
