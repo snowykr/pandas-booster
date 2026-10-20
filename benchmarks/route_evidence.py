@@ -24,6 +24,7 @@ import base64
 import csv
 import hashlib
 import importlib.metadata
+import inspect
 import io
 import json
 import math
@@ -91,9 +92,11 @@ def clean_env(threads: int = 1) -> dict[str, str]:
     }
 
 
-def command(args: list[str], cwd: Path, env: dict[str, str]) -> str:
+def command(args: list[str], cwd: Path, env: dict[str, str], transcript: Path | None = None) -> str:
     """Run a checked command, retaining stderr on failure."""
     result = subprocess.run(args, cwd=str(cwd), env=env, text=True, capture_output=True)
+    if transcript is not None:
+        transcript.write_text(result.stdout + result.stderr)
     if result.returncode:
         raise RuntimeError(f"{args!r}: exit {result.returncode}\n{result.stdout}\n{result.stderr}")
     return result.stdout
@@ -184,8 +187,7 @@ def prepare(args: argparse.Namespace) -> None:
         "--interpreter",
         build_python,
     ]
-    build_log = command(build_args, source, build_env)
-    (root / "build.log").write_text(build_log)
+    command(build_args, source, build_env, transcript=root / "build.log")
     if files_manifest(source) != sources:
         raise ValueError("Build modified immutable source snapshot")
     wheels = list((root / "wheels").glob("*.whl"))
@@ -232,17 +234,39 @@ def prepare(args: argparse.Namespace) -> None:
     print(root / "runtime.json")
 
 
-INVENTORY = """
+def python_identity() -> dict[str, object]:
+    """Fingerprint the actual interpreter, not its virtualenv symlink."""
+    import hashlib
+    import platform
+    import sys
+    from pathlib import Path
+
+    executable = Path(sys.executable).resolve(strict=True)
+    return {
+        "implementation": platform.python_implementation(),
+        "version": sys.version,
+        "build": list(platform.python_build()),
+        "executable": str(executable),
+        "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+    }
+
+
+INVENTORY = (
+    "from __future__ import annotations\n"
+    + inspect.getsource(python_identity)
+    + """
 import hashlib, importlib.metadata, json, pathlib
 import pandas_booster, pandas_booster._rust
 p = pathlib.Path(pandas_booster.__file__).resolve().parent
 print(json.dumps({
+ 'python_identity': python_identity(),
  'package': str(p), 'extension': str(pathlib.Path(pandas_booster._rust.__file__).resolve()),
  'installed_files': {str(f.relative_to(p)): hashlib.sha256(f.read_bytes()).hexdigest()
     for f in sorted(p.rglob('*')) if f.is_file() and '__pycache__' not in f.parts},
  'dependencies': sorted((d.metadata['Name'].lower(), d.version)
     for d in importlib.metadata.distributions())}))
 """
+)
 
 
 def validate_runtime(descriptor: dict[str, Any], threads: int) -> dict[str, Any]:
@@ -252,6 +276,8 @@ def validate_runtime(descriptor: dict[str, Any], threads: int) -> dict[str, Any]
 
     if Path(sys.executable).absolute() != Path(descriptor["python"]).absolute():
         raise ValueError("Unexpected runtime interpreter")
+    if descriptor.get("python_identity") != python_identity():
+        raise ValueError("Runtime Python identity missing or different")
     expected_env = clean_env(threads)
     if dict(os.environ) != expected_env:
         raise ValueError("Worker environment differs from explicit environment")
@@ -325,7 +351,28 @@ def validate_runtime(descriptor: dict[str, Any], threads: int) -> dict[str, Any]
         "dependencies": dependencies,
         "environment": dict(os.environ),
         "python": sys.executable,
+        "python_identity": descriptor["python_identity"],
+        "rustc": manifest.get("rustc"),
+        "cargo": manifest.get("cargo"),
     }
+
+
+def validate_comparison(runtimes: dict[str, Any]) -> None:
+    """Require actual matching interpreter and recorded build toolchain identities."""
+    baseline, candidate = runtimes["baseline"], runtimes["candidate"]
+    required = ("implementation", "version", "build", "executable", "executable_sha256")
+    for runtime in runtimes.values():
+        identity = runtime.get("python_identity", {})
+        if not isinstance(identity, dict) or any(not identity.get(k) for k in required):
+            raise ValueError("Missing Python identity")
+    if baseline["python_identity"] != candidate["python_identity"]:
+        raise ValueError("Baseline/candidate Python identities differ")
+    for tool in ("rustc", "cargo"):
+        identities = [runtime["manifest"].get(tool) for runtime in runtimes.values()]
+        if any(not isinstance(value, str) or not value.strip() for value in identities):
+            raise ValueError("Missing build toolchain identity: " + tool)
+        if baseline["manifest"][tool] != candidate["manifest"][tool]:
+            raise ValueError("Baseline/candidate build toolchain differs: " + tool)
 
 
 def paired_summary(pairs: list[dict[str, float]], draws: int = 10000) -> dict[str, Any]:
@@ -528,14 +575,28 @@ def failure_strings(value: Any) -> list[str]:
 
 def worker(request_path: Path, response_path: Path) -> None:
     """Execute exactly one isolated timing, parity/profile, or memory observation."""
+    result: dict[str, Any] = {"status": "failed", "stage": "startup"}
+    try:
+        _worker(request_path, result)
+        result.update(status="passed", stage="complete")
+    except Exception as error:
+        result["error"] = {"type": type(error).__name__, "message": str(error)}
+        raise
+    finally:
+        save(response_path, result)
+
+
+def _worker(request_path: Path, result: dict[str, Any]) -> None:
     import numpy as np
     import pandas as pd
     import pandas_booster  # noqa: F401 -- registers public accessor
     import pandas_booster._rust as rust
 
     request = json.loads(request_path.read_text())
+    result["stage"] = "runtime_validation"
     identity = validate_runtime(request["runtime"], request["threads"])
     pre_input = rss()
+    result["stage"] = "dataset_validation"
     directory = Path(request["dataset"])
     manifest = json.loads((directory / "dataset.json").read_text())
     if manifest != request["dataset_manifest"]:
@@ -551,17 +612,18 @@ def worker(request_path: Path, response_path: Path) -> None:
     frame = pd.DataFrame(arrays, copy=False)
     keys = [f"k{i}" for i in range(len(request["case"]["widths"]))]
     case = request["case"]
-    result = {
-        "identity": identity,
-        "fingerprint": manifest["fingerprint"],
-        "groups": manifest["groups"],
-        "pre_input": pre_input,
-    }
+    result.update(
+        identity=identity,
+        fingerprint=manifest["fingerprint"],
+        groups=manifest["groups"],
+        pre_input=pre_input,
+    )
 
     def public_call() -> Any:
         return frame.booster.groupby(keys, "value", case["agg"], sort=case["sort"])
 
     if request["kind"] in ("cold", "warm", "rss", "scaling"):
+        result["stage"] = "ordinary_call"
         if request["kind"] in ("warm", "scaling"):
             for _ in range(2):
                 warmup = public_call()
@@ -576,16 +638,22 @@ def worker(request_path: Path, response_path: Path) -> None:
         )
         result["cpu_to_wall_ratio"] = result["cpu_s"] / result["elapsed_s"]
         result["thread_saturation"] = result["cpu_to_wall_ratio"] / request["threads"]
+        result["stage"] = "ordinary_output_validation"
         if len(output) != manifest["groups"]:
             raise ValueError("Ordinary-call output group count mismatch")
         # No pandas reference exists in either ordinary timing or RSS workers.
     else:
+        result["stage"] = "reference_validation"
         reference = getattr(frame.groupby(keys, sort=case["sort"])["value"], case["agg"])()
         if len(reference) != manifest["groups"]:
             raise ValueError("Exact group count differs from dataset manifest")
         public_start = time.perf_counter()
+        public_cpu_start = time.process_time()
+        result["stage"] = "public_call"
         public_output = public_call()
         result["public_pipeline_s"] = time.perf_counter() - public_start
+        result.update(public_cpu_s=time.process_time() - public_cpu_start, rss=rss())
+        result["stage"] = "public_parity"
         exact_equal(public_output, reference)
         result["parity"] = True
         suffix = "i64" if case["dtype"] == "int64" else "f64"
@@ -604,8 +672,18 @@ def worker(request_path: Path, response_path: Path) -> None:
             profile_values = np.ascontiguousarray(arrays["value"])
             preparation_s = time.perf_counter() - preparation_start
             start = time.perf_counter()
+            cpu_start = time.process_time()
+            result["stage"] = "profile_call"
             out_keys, out_values, profile = getattr(rust, export)(profile_keys, profile_values)
             outer = time.perf_counter() - start
+            result.update(
+                profile=profile,
+                profile_outer_s=outer,
+                profile_cpu_s=time.process_time() - cpu_start,
+                rss=rss(),
+                prepare_inputs_s=preparation_s,
+            )
+            result["stage"] = "profile_normalization"
             normalize_start = time.perf_counter()
             columns = list(out_keys)
             normalized_values = np.asarray(out_values)
@@ -620,7 +698,9 @@ def worker(request_path: Path, response_path: Path) -> None:
                 pandas_index_construction_s=index_s,
                 profile_pipeline_s=time.perf_counter() - pipeline_start,
             )
+            result["stage"] = "profile_parity"
             exact_equal(profiled_output, reference)
+            result["stage"] = "profile_validation"
             admitted = case["name"] in ("primary", "packed2", "packed10", "fused3")
             gaps.extend(profile_gaps(profile, request["candidate"], admitted))
             if request["candidate"]:
@@ -642,10 +722,8 @@ def worker(request_path: Path, response_path: Path) -> None:
                         - sum(float(profile[k]) for k in LEAVES + FALLBACK_LEAVES)
                         - float(profile["conversion_s"])
                     )
-            result.update(profile=profile, profile_outer_s=outer)
             gaps.extend(failure_strings(profile))
         result["unmet_gates"] = gaps
-    save(response_path, result)
 
 
 def memory_gaps(
@@ -680,6 +758,7 @@ def run(args: argparse.Namespace) -> None:
         role: json.loads(Path(getattr(args, role)).read_text())
         for role in ("baseline", "candidate")
     }
+    validate_comparison(runtimes)
     for runtime in runtimes.values():
         if not Path(runtime["python"]).is_absolute():
             raise ValueError("Runtime interpreter must be an absolute path")
@@ -724,6 +803,18 @@ def run(args: argparse.Namespace) -> None:
         "affinity": sorted(os.sched_getaffinity(0)),
     }
     gaps = report["unmet_gates"]
+    selected_cases = args.cases
+    memory_only = args.memory_only
+    cases = [
+        case
+        for case in case_specs(args.quick)
+        if selected_cases is None or case["name"] in selected_cases
+    ]
+    report["collection"] = {"cases": selected_cases, "memory_only": memory_only}
+    if selected_cases is not None:
+        gaps.append("Explicit case subset: incomplete certification matrix")
+    if memory_only:
+        gaps.append("Memory-only collection: timing/scaling absent; incomplete certification")
     if args.quick:
         gaps.append("Quick exploration is explicitly uncertified")
     if args.host != "oci":
@@ -776,18 +867,25 @@ def run(args: argparse.Namespace) -> None:
                 clean_env(threads),
             )
             observation["result"] = json.loads(response_path.read_text())
+            if observation["result"].get("status") != "passed":
+                raise ValueError("Worker response did not pass")
             gaps.extend(failure_strings(observation["result"]))
             for gap in observation["result"].get("unmet_gates", []):
                 gaps.append(f"{case['name']}/{case['agg']}/T{threads}/{role}: {gap}")
         except (RuntimeError, ValueError, OSError) as error:
             observation["error"] = str(error)
+            if response_path.is_file():
+                try:
+                    observation["result"] = json.loads(response_path.read_text())
+                except (ValueError, OSError) as partial_error:
+                    observation["partial_response_error"] = str(partial_error)
             gaps.append("Worker failed: " + str(request_path))
         report["raw"].append(observation)
         save(output, report)
-        return observation.get("result", {})
+        return {} if "error" in observation else observation["result"]
 
     try:
-        for case in case_specs(args.quick):
+        for case in cases:
             directory = artifact / (case["name"] + "-" + case["agg"])
             dataset = create_dataset(case, directory)
             for threads in args.threads:
@@ -795,7 +893,7 @@ def run(args: argparse.Namespace) -> None:
                     role: observe(case, directory, threads, "evidence", role, -1)
                     for role in runtimes
                 }
-                for mode in ("cold", "warm"):
+                for mode in () if memory_only else ("cold", "warm"):
                     pairs = []
                     for pair in range(2 if args.quick else 40):
                         roles = (
@@ -833,7 +931,7 @@ def run(args: argparse.Namespace) -> None:
                             gaps.append(
                                 f"Performance gate: {case['name']}/{case['agg']}/{mode}/T{threads}"
                             )
-                if threads in (1, max(args.threads)):
+                if memory_only or threads in (1, max(args.threads)):
                     measurements = {
                         role: [
                             observe(case, directory, threads, "rss", role, i)
@@ -863,7 +961,7 @@ def run(args: argparse.Namespace) -> None:
                                 )
             save(output, report)
         # Larger resource refusal is diagnostic, not an admitted-domain speed claim.
-        if not args.quick:
+        if not args.quick and selected_cases is None:
             for agg in ("max", "count"):
                 refused = {
                     "name": "refused10",
@@ -881,8 +979,8 @@ def run(args: argparse.Namespace) -> None:
                         observe(refused, directory, threads, "evidence", role, -1)
                         for i in range(10):
                             observe(refused, directory, threads, "rss", role, i)
-        if args.host == "oci":
-            for case in [c for c in case_specs(args.quick) if c["name"] == "primary"]:
+        if args.host == "oci" and not memory_only:
+            for case in [c for c in cases if c["name"] == "primary"]:
                 directory = artifact / (case["name"] + "-" + case["agg"])
                 pairs = []
                 for pair in range(2 if args.quick else 40):
@@ -908,7 +1006,10 @@ def run(args: argparse.Namespace) -> None:
     except (ValueError, OSError, RuntimeError) as error:
         gaps.append("Collection aborted: " + str(error))
     report["unmet_gates"] = sorted(set(gaps))
-    report["status"] = "UNCERTIFIED" if args.quick else ("DRAFT" if gaps else "HOST_GATES_PASS")
+    if selected_cases is not None or memory_only:
+        report["status"] = "DRAFT"
+    else:
+        report["status"] = "UNCERTIFIED" if args.quick else ("DRAFT" if gaps else "HOST_GATES_PASS")
     # Host evidence alone cannot certify the union of N100 and OCI gates.
     report["certified"] = False
     save(output, report)
@@ -939,6 +1040,17 @@ def main() -> None:
     collect.add_argument("--host", choices=("n100", "oci"), default="n100")
     collect.add_argument("--threads", type=int, nargs="+", default=[1, 2, 4])
     collect.add_argument("--quick", action="store_true", help="2 pairs; never certified")
+    collect.add_argument(
+        "--cases",
+        nargs="+",
+        choices=("primary", "low", "ordinary", "unsorted", "packed2", "packed10", "fused3"),
+        help="collect only named cases; always an incomplete DRAFT matrix",
+    )
+    collect.add_argument(
+        "--memory-only",
+        action="store_true",
+        help="profiles and RSS only, without cold/warm or scaling pairs; always DRAFT",
+    )
     collect.add_argument(
         "--refusal-rows",
         type=int,

@@ -35,6 +35,17 @@ def test_environment_does_not_inherit_overrides(driver, monkeypatch):
     assert environment["RAYON_NUM_THREADS"] == "4"
 
 
+def test_python_identity_records_actual_executable_and_full_build(driver):
+    import platform
+
+    identity = driver.python_identity()
+    assert identity["version"] == sys.version
+    assert identity["implementation"] == platform.python_implementation()
+    assert identity["build"] == list(platform.python_build())
+    assert identity["executable"] == str(Path(sys.executable).resolve())
+    assert identity["executable_sha256"] == driver.digest(Path(sys.executable).resolve())
+
+
 def test_stamp_wheel_embeds_provenance_and_rehashes_record(driver, tmp_path):
     wheel = tmp_path / "test.whl"
     with zipfile.ZipFile(wheel, "w") as archive:
@@ -71,6 +82,8 @@ def runtime(driver, tmp_path, monkeypatch):
     extension = package / "_rust.so"
     extension.write_bytes(b"test extension")
     python = root / "runtime/bin/python"
+    python.parent.mkdir(parents=True)
+    python.write_bytes(b"test interpreter")
     lock = root / "requirements.lock"
     lock.write_text("locked dependencies\n")
     wheel = root / "package.whl"
@@ -100,6 +113,8 @@ def runtime(driver, tmp_path, monkeypatch):
         "build_environment": build_environment,
         "lock_sha256": driver.digest(lock),
         "build_log_sha256": driver.digest(root / "build.log"),
+        "rustc": "rustc test verbose identity",
+        "cargo": "cargo test identity",
     }
     driver.save(package / "_route_evidence_manifest.json", manifest)
     descriptor = {
@@ -123,6 +138,7 @@ def runtime(driver, tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "pandas_booster", fake_package)
     monkeypatch.setitem(sys.modules, "pandas_booster._rust", fake_rust)
     monkeypatch.setattr(driver.sys, "executable", str(python))
+    descriptor["python_identity"] = driver.python_identity()
     monkeypatch.setattr(driver.sys, "flags", SimpleNamespace(isolated=1))
     monkeypatch.setattr(driver.os, "environ", driver.clean_env(4))
     monkeypatch.setattr(
@@ -140,6 +156,18 @@ def test_runtime_identity_validates_artifacts(driver, runtime, monkeypatch):
     identity = driver.validate_runtime(runtime, 4)
     assert identity["sha"] == driver.BASELINE
     assert identity["wheel_sha256"] == runtime["wheel_sha256"]
+    assert identity["python_identity"] == runtime["python_identity"]
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_runtime_rejects_interpreter_identity_skew(driver, runtime, monkeypatch, missing):
+    monkeypatch.setattr(driver.os, "environ", driver.clean_env(4))
+    if missing:
+        del runtime["python_identity"]
+    else:
+        Path(runtime["python"]).write_bytes(b"different interpreter")
+    with pytest.raises(ValueError, match="Python identity"):
+        driver.validate_runtime(runtime, 4)
 
 
 @pytest.mark.parametrize(

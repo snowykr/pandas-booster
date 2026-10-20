@@ -1,10 +1,61 @@
 from __future__ import annotations
 
+import copy
+
 import pytest
 
 from . import test_route_evidence
 
 driver = test_route_evidence.driver
+
+
+def comparison_runtimes():
+    runtime = {
+        "python_identity": {
+            "implementation": "CPython",
+            "version": "full version",
+            "build": ["build", "date"],
+            "executable": "/resolved/python",
+            "executable_sha256": "sha256",
+        },
+        "manifest": {"rustc": "rustc verbose", "cargo": "cargo version"},
+    }
+    return {"baseline": runtime, "candidate": copy.deepcopy(runtime)}
+
+
+def test_matching_interpreter_and_toolchain_identities(driver):
+    driver.validate_comparison(comparison_runtimes())
+
+
+def test_comparison_rejects_absent_identity(driver):
+    runtimes = comparison_runtimes()
+    del runtimes["candidate"]["python_identity"]
+    with pytest.raises(ValueError, match="Missing Python identity"):
+        driver.validate_comparison(runtimes)
+
+
+@pytest.mark.parametrize(
+    "field", ["implementation", "version", "build", "executable", "executable_sha256"]
+)
+@pytest.mark.parametrize("missing", [False, True])
+def test_comparison_rejects_python_skew_and_missing(driver, field, missing):
+    runtimes = comparison_runtimes()
+    identity = runtimes["candidate"]["python_identity"]
+    if missing:
+        del identity[field]
+    else:
+        identity[field] = "different"
+    with pytest.raises(ValueError, match="Python identit"):
+        driver.validate_comparison(runtimes)
+
+
+@pytest.mark.parametrize("tool", ["rustc", "cargo"])
+@pytest.mark.parametrize("missing", [False, True])
+def test_comparison_rejects_toolchain_skew_and_missing(driver, tool, missing):
+    runtimes = comparison_runtimes()
+    runtimes["candidate"]["manifest"][tool] = None if missing else "different"
+    with pytest.raises(ValueError, match="toolchain"):
+        driver.validate_comparison(runtimes)
 
 
 def test_bootstrap_uses_matched_pairs_and_ratio_of_medians(driver):

@@ -1,0 +1,1423 @@
+{
+  "provenance": "pandas-booster issue17 local evidence; observed data, not certification",
+  "status": "DRAFT; not ready for merge; issue17 remains open",
+  "baseline_sha": "291bc4af284119fd84e5408fd411dd6b4e0171d4",
+  "native_candidate_sha": "714fc6890c67c126aff6482101d3dbd043d9a9bb",
+  "host": "Intel N100; local 1/2/4 Rayon workers; NOT OCI scalability evidence",
+  "interruption": {
+    "report": "issue17-local-v3.json",
+    "tool_timeout_seconds": 3600,
+    "raw_observations": 1208,
+    "completed_summaries": 13,
+    "complete_full_matrix": false,
+    "recovery": "Original checkpoint preserved; fresh bounded subset reports collect required T4 controls/domains and T1 memory. No failed primary sample/gate discarded."
+  },
+  "method": {
+    "pairs": 40,
+    "order": "adjacent alternating AB/BA",
+    "cold": "first call",
+    "warm": "third call after two untimed warmups",
+    "bootstrap_draws": 10000,
+    "bootstrap_seed": 42,
+    "u95": "one-sided nearest-rank 95th percentile of paired bootstrap ratio of medians",
+    "primary_T4_gate": "warm ratio <=0.90 and U95<1.00; cold U95<=1.05",
+    "control_domain_T4_gate": "cold/warm U95<=1.05"
+  },
+  "verification": {
+    "cargo_test": "226 passed",
+    "cargo_clippy_all_targets_D_warnings": "passed",
+    "cargo_fmt_check": "passed",
+    "pytest_nonstress": "860 passed, 4 deselected, 43 warnings retained",
+    "ruff_check": "passed",
+    "basedpyright": "0 errors, 0 warnings, 0 notes",
+    "release_contract": "metadata, publish workflow and supply-chain workflow passed",
+    "miri": "1 exact sequential radix test passed; not a qualification of the threaded production route",
+    "extension": "release develop build, actual admitted export/accessor/proxy tests at 1/2/4 threads, isolated release-wheel primary/domain parity and route diagnostics",
+    "native_equivalence": "git diff 714fc6890c67c126aff6482101d3dbd043d9a9bb -- src python was empty after evidence-method fixes"
+  },
+  "review_history": {
+    "pre_plan_product_edits": false,
+    "planning": "planner1 -> critic2 pass1 REQUEST CHANGES -> planner v2 -> critic2 pass2 APPROVE before product edits",
+    "core": "critic7 pass1 requested resource/collision proof tests; fixes and 226 Rust tests; pass2 APPROVE core code/tests",
+    "radix": "critic8 pass1 requested allocation/cap-boundary proof; fixes and 226 Rust tests; pass2 APPROVE code/tests",
+    "evidence_method": "critic9 requested interpreter comparability and partial-failure retention; bounded executor10 recovery; critic11 APPROVE E1/E2 and subsequent bounded-collection delta",
+    "final_artifact_publication": "critic11 required disclosure of 20 fused3 T1 RSS-envelope failures (E3); summary corrected, all memory observations re-audited; final verdict APPROVE DRAFT PUBLICATION only, readiness_approved=false"
+  },
+  "outstanding": [
+    "Primary T4 warm gate FAILED: max ratio0.9054798668 and count ratio0.9283800088 exceed required <=0.90. Both improve statistically; neither meets binding 10% gate.",
+    "Admitted fused3 T1 RSS-envelope gates FAILED for max and count: all 10 candidate workers per reducer (20 total) exceeded the unchanged analytical-plus-overhead envelope by 1669120-1902592 bytes. Example max HWM323383296 versus envelope321628160; count HWM323346432 versus envelope321525760. Lower RSS than baseline does not make these gates pass. Raw reports, archive, thresholds and failed classifications remain unchanged.",
+    "OCI 1/2/4/8/16/32/64-thread scaling, T32/T64 max+count performance/control/domain gates and isolated memory remain unmeasured.",
+    "Merged baseline has no count profile export. Separate baseline native diagnostic test passed, but independent operation-traced baseline count wheel audit remains outstanding.",
+    "Unsorted operation audit and modeled-peak diagnostic are unavailable; observed RSS and unchanged-path timing are retained, not substituted sorted profiles.",
+    "Original all-case run was interrupted; separate subset reports remain DRAFT and are not presented as a completed single certification run.",
+    "Preexisting baseline/candidate preparation build.log files are empty; hashed as empty, not represented as build transcripts. Future driver preparations capture stdout/stderr.",
+    "Quick 100003-row two-pair exploration showed adverse small-input control observations; preserved, uncertified, not discarded or treated as a 40-pair regression certificate."
+  ],
+  "performance": [
+    {
+      "report": "issue17-local-v3.json",
+      "case": "primary",
+      "agg": "max",
+      "rows": 5000000,
+      "threads": 1,
+      "mode": "cold",
+      "pairs": 40,
+      "baseline_median_s": 1.638847756490577,
+      "candidate_median_s": 1.4592448629555292,
+      "ratio": 0.8904090432904831,
+      "u95": 0.900881705519282
+    },
+    {
+      "report": "issue17-local-v3.json",
+      "case": "primary",
+      "agg": "max",
+      "rows": 5000000,
+      "threads": 1,
+      "mode": "warm",
+      "pairs": 40,
+      "baseline_median_s": 1.6385003894683905,
+      "candidate_median_s": 1.4136382084689103,
+      "ratio": 0.8627634253584545,
+      "u95": 0.8733362271861033
+    },
+    {
+      "report": "issue17-local-v3.json",
+      "case": "primary",
+      "agg": "max",
+      "rows": 5000000,
+      "threads": 2,
+      "mode": "cold",
+      "pairs": 40,
+      "baseline_median_s": 1.1735254859668203,
+      "candidate_median_s": 1.020959526009392,
+      "ratio": 0.8699934839235849,
+      "u95": 0.8765193049247426
+    },
+    {
+      "report": "issue17-local-v3.json",
+      "case": "primary",
+      "agg": "max",
+      "rows": 5000000,
+      "threads": 2,
+      "mode": "warm",
+      "pairs": 40,
+      "baseline_median_s": 1.1730154870310798,
+      "candidate_median_s": 1.014079802960623,
+      "ratio": 0.8645067470739662,
+      "u95": 0.8745045611849727
+    },
+    {
+      "report": "issue17-local-v3.json",
+      "case": "primary",
+      "agg": "max",
+      "rows": 5000000,
+      "threads": 4,
+      "mode": "cold",
+      "pairs": 40,
+      "baseline_median_s": 0.9724766509607434,
+      "candidate_median_s": 0.8701352530042641,
+      "ratio": 0.8947621026629557,
+      "u95": 0.9133455022824952
+    },
+    {
+      "report": "issue17-local-v3.json",
+      "case": "primary",
+      "agg": "max",
+      "rows": 5000000,
+      "threads": 4,
+      "mode": "warm",
+      "pairs": 40,
+      "baseline_median_s": 0.9500767874997109,
+      "candidate_median_s": 0.8602754029561765,
+      "ratio": 0.9054798667591258,
+      "u95": 0.917283462911463
+    },
+    {
+      "report": "issue17-local-v3.json",
+      "case": "primary",
+      "agg": "count",
+      "rows": 5000000,
+      "threads": 1,
+      "mode": "cold",
+      "pairs": 40,
+      "baseline_median_s": 1.601742283499334,
+      "candidate_median_s": 1.41302801592974,
+      "ratio": 0.8821818781250444,
+      "u95": 0.8906070286735781
+    },
+    {
+      "report": "issue17-local-v3.json",
+      "case": "primary",
+      "agg": "count",
+      "rows": 5000000,
+      "threads": 1,
+      "mode": "warm",
+      "pairs": 40,
+      "baseline_median_s": 1.597988602006808,
+      "candidate_median_s": 1.410625868535135,
+      "ratio": 0.8827508949460737,
+      "u95": 0.8900746537792968
+    },
+    {
+      "report": "issue17-local-v3.json",
+      "case": "primary",
+      "agg": "count",
+      "rows": 5000000,
+      "threads": 2,
+      "mode": "cold",
+      "pairs": 40,
+      "baseline_median_s": 1.162115307583008,
+      "candidate_median_s": 1.012633569072932,
+      "ratio": 0.8713709925902523,
+      "u95": 0.8811497460239867
+    },
+    {
+      "report": "issue17-local-v3.json",
+      "case": "primary",
+      "agg": "count",
+      "rows": 5000000,
+      "threads": 2,
+      "mode": "warm",
+      "pairs": 40,
+      "baseline_median_s": 1.1459180649835616,
+      "candidate_median_s": 1.011935027432628,
+      "ratio": 0.883077995150678,
+      "u95": 0.8959325168018577
+    },
+    {
+      "report": "issue17-local-v3.json",
+      "case": "primary",
+      "agg": "count",
+      "rows": 5000000,
+      "threads": 4,
+      "mode": "cold",
+      "pairs": 40,
+      "baseline_median_s": 0.9475990124628879,
+      "candidate_median_s": 0.861454595986288,
+      "ratio": 0.9090919098230131,
+      "u95": 0.9252427609084194
+    },
+    {
+      "report": "issue17-local-v3.json",
+      "case": "primary",
+      "agg": "count",
+      "rows": 5000000,
+      "threads": 4,
+      "mode": "warm",
+      "pairs": 40,
+      "baseline_median_s": 0.9298910460202023,
+      "candidate_median_s": 0.8632922574761324,
+      "ratio": 0.9283800087880155,
+      "u95": 0.9426576203275507
+    },
+    {
+      "report": "issue17-local-v3.json",
+      "case": "low",
+      "agg": "max",
+      "rows": 5000000,
+      "threads": 1,
+      "mode": "cold",
+      "pairs": 40,
+      "baseline_median_s": 0.47409863298526034,
+      "candidate_median_s": 0.47548611043021083,
+      "ratio": 1.002926558628136,
+      "u95": 1.0090761283393312
+    },
+    {
+      "report": "issue17-controls-sorted-t4-v3.json",
+      "case": "low",
+      "agg": "max",
+      "rows": 5000000,
+      "threads": 4,
+      "mode": "cold",
+      "pairs": 40,
+      "baseline_median_s": 0.19027199497213587,
+      "candidate_median_s": 0.19471658242400736,
+      "ratio": 1.0233591257216932,
+      "u95": 1.0379292747798836
+    },
+    {
+      "report": "issue17-controls-sorted-t4-v3.json",
+      "case": "low",
+      "agg": "max",
+      "rows": 5000000,
+      "threads": 4,
+      "mode": "warm",
+      "pairs": 40,
+      "baseline_median_s": 0.1889204609906301,
+      "candidate_median_s": 0.19346981099806726,
+      "ratio": 1.0240807691426437,
+      "u95": 1.0431450466905487
+    },
+    {
+      "report": "issue17-controls-sorted-t4-v3.json",
+      "case": "low",
+      "agg": "count",
+      "rows": 5000000,
+      "threads": 4,
+      "mode": "cold",
+      "pairs": 40,
+      "baseline_median_s": 0.19038951152469963,
+      "candidate_median_s": 0.18984379101311788,
+      "ratio": 0.9971336629459709,
+      "u95": 1.0199170230770134
+    },
+    {
+      "report": "issue17-controls-sorted-t4-v3.json",
+      "case": "low",
+      "agg": "count",
+      "rows": 5000000,
+      "threads": 4,
+      "mode": "warm",
+      "pairs": 40,
+      "baseline_median_s": 0.1890572280390188,
+      "candidate_median_s": 0.1895078830420971,
+      "ratio": 1.002383696237127,
+      "u95": 1.0239035998565469
+    },
+    {
+      "report": "issue17-controls-sorted-t4-v3.json",
+      "case": "ordinary",
+      "agg": "max",
+      "rows": 5000000,
+      "threads": 4,
+      "mode": "cold",
+      "pairs": 40,
+      "baseline_median_s": 0.198184359469451,
+      "candidate_median_s": 0.19764721498358995,
+      "ratio": 0.9972896726699371,
+      "u95": 1.0450241650258214
+    },
+    {
+      "report": "issue17-controls-sorted-t4-v3.json",
+      "case": "ordinary",
+      "agg": "max",
+      "rows": 5000000,
+      "threads": 4,
+      "mode": "warm",
+      "pairs": 40,
+      "baseline_median_s": 0.19698462495580316,
+      "candidate_median_s": 0.19961632345803082,
+      "ratio": 1.0133599183328046,
+      "u95": 1.0376380098235634
+    },
+    {
+      "report": "issue17-controls-sorted-t4-v3.json",
+      "case": "ordinary",
+      "agg": "count",
+      "rows": 5000000,
+      "threads": 4,
+      "mode": "cold",
+      "pairs": 40,
+      "baseline_median_s": 0.19742930546635762,
+      "candidate_median_s": 0.19724894547834992,
+      "ratio": 0.9990864578711774,
+      "u95": 1.027065566688206
+    },
+    {
+      "report": "issue17-controls-sorted-t4-v3.json",
+      "case": "ordinary",
+      "agg": "count",
+      "rows": 5000000,
+      "threads": 4,
+      "mode": "warm",
+      "pairs": 40,
+      "baseline_median_s": 0.19367939000949264,
+      "candidate_median_s": 0.19620099099120125,
+      "ratio": 1.0130194595386997,
+      "u95": 1.0373764107097512
+    },
+    {
+      "report": "issue17-control-unsorted-t4-v3.json",
+      "case": "unsorted",
+      "agg": "max",
+      "rows": 5000000,
+      "threads": 4,
+      "mode": "cold",
+      "pairs": 40,
+      "baseline_median_s": 1.1107705275062472,
+      "candidate_median_s": 1.115447147982195,
+      "ratio": 1.0042102489759492,
+      "u95": 1.0156562936216755
+    },
+    {
+      "report": "issue17-control-unsorted-t4-v3.json",
+      "case": "unsorted",
+      "agg": "max",
+      "rows": 5000000,
+      "threads": 4,
+      "mode": "warm",
+      "pairs": 40,
+      "baseline_median_s": 1.0970616305130534,
+      "candidate_median_s": 1.0957620484987274,
+      "ratio": 0.9988153974415109,
+      "u95": 1.0095686221076952
+    },
+    {
+      "report": "issue17-control-unsorted-t4-v3.json",
+      "case": "unsorted",
+      "agg": "count",
+      "rows": 5000000,
+      "threads": 4,
+      "mode": "cold",
+      "pairs": 40,
+      "baseline_median_s": 1.0956828239723109,
+      "candidate_median_s": 1.0871927975676954,
+      "ratio": 0.992251383138566,
+      "u95": 1.0092286919644402
+    },
+    {
+      "report": "issue17-control-unsorted-t4-v3.json",
+      "case": "unsorted",
+      "agg": "count",
+      "rows": 5000000,
+      "threads": 4,
+      "mode": "warm",
+      "pairs": 40,
+      "baseline_median_s": 1.0853035650216043,
+      "candidate_median_s": 1.0792908755247481,
+      "ratio": 0.9944599007221205,
+      "u95": 1.0076262043475535
+    },
+    {
+      "report": "issue17-domains-t4-v3.json",
+      "case": "packed2",
+      "agg": "max",
+      "rows": 1000000,
+      "threads": 4,
+      "mode": "cold",
+      "pairs": 40,
+      "baseline_median_s": 0.1857741754502058,
+      "candidate_median_s": 0.12689438398228958,
+      "ratio": 0.6830571777523613,
+      "u95": 0.694205686693364
+    },
+    {
+      "report": "issue17-domains-t4-v3.json",
+      "case": "packed2",
+      "agg": "max",
+      "rows": 1000000,
+      "threads": 4,
+      "mode": "warm",
+      "pairs": 40,
+      "baseline_median_s": 0.17910241649951786,
+      "candidate_median_s": 0.1254627679591067,
+      "ratio": 0.7005085158046679,
+      "u95": 0.7080432820344195
+    },
+    {
+      "report": "issue17-domains-t4-v3.json",
+      "case": "packed2",
+      "agg": "count",
+      "rows": 1000000,
+      "threads": 4,
+      "mode": "cold",
+      "pairs": 40,
+      "baseline_median_s": 0.17828820698196068,
+      "candidate_median_s": 0.12643485749140382,
+      "ratio": 0.7091599586516487,
+      "u95": 0.7227074603687165
+    },
+    {
+      "report": "issue17-domains-t4-v3.json",
+      "case": "packed2",
+      "agg": "count",
+      "rows": 1000000,
+      "threads": 4,
+      "mode": "warm",
+      "pairs": 40,
+      "baseline_median_s": 0.17312006547581404,
+      "candidate_median_s": 0.1251841964549385,
+      "ratio": 0.7231062217477472,
+      "u95": 0.7354781398837258
+    },
+    {
+      "report": "issue17-domains-t4-v3.json",
+      "case": "packed10",
+      "agg": "max",
+      "rows": 1000000,
+      "threads": 4,
+      "mode": "cold",
+      "pairs": 40,
+      "baseline_median_s": 0.43851522501790896,
+      "candidate_median_s": 0.28033330908510834,
+      "ratio": 0.6392783946638558,
+      "u95": 0.6487570654977252
+    },
+    {
+      "report": "issue17-domains-t4-v3.json",
+      "case": "packed10",
+      "agg": "max",
+      "rows": 1000000,
+      "threads": 4,
+      "mode": "warm",
+      "pairs": 40,
+      "baseline_median_s": 0.433010415523313,
+      "candidate_median_s": 0.28183790849288926,
+      "ratio": 0.650880206085286,
+      "u95": 0.6665041778653826
+    },
+    {
+      "report": "issue17-domains-t4-v3.json",
+      "case": "packed10",
+      "agg": "count",
+      "rows": 1000000,
+      "threads": 4,
+      "mode": "cold",
+      "pairs": 40,
+      "baseline_median_s": 0.4249779134988785,
+      "candidate_median_s": 0.2781707910471596,
+      "ratio": 0.6545535243395506,
+      "u95": 0.6615167396625456
+    },
+    {
+      "report": "issue17-domains-t4-v3.json",
+      "case": "packed10",
+      "agg": "count",
+      "rows": 1000000,
+      "threads": 4,
+      "mode": "warm",
+      "pairs": 40,
+      "baseline_median_s": 0.41691568947862834,
+      "candidate_median_s": 0.277633338002488,
+      "ratio": 0.6659220197485992,
+      "u95": 0.6744062247722296
+    },
+    {
+      "report": "issue17-domains-t4-v3.json",
+      "case": "fused3",
+      "agg": "max",
+      "rows": 1000000,
+      "threads": 4,
+      "mode": "cold",
+      "pairs": 40,
+      "baseline_median_s": 1.1560825830092654,
+      "candidate_median_s": 1.043171216500923,
+      "ratio": 0.9023327847268179,
+      "u95": 0.9116547636528194
+    },
+    {
+      "report": "issue17-domains-t4-v3.json",
+      "case": "fused3",
+      "agg": "max",
+      "rows": 1000000,
+      "threads": 4,
+      "mode": "warm",
+      "pairs": 40,
+      "baseline_median_s": 1.140831304481253,
+      "candidate_median_s": 1.0260237444308586,
+      "ratio": 0.8993649984888883,
+      "u95": 0.9092034453122282
+    },
+    {
+      "report": "issue17-domains-t4-v3.json",
+      "case": "fused3",
+      "agg": "count",
+      "rows": 1000000,
+      "threads": 4,
+      "mode": "cold",
+      "pairs": 40,
+      "baseline_median_s": 1.1529861054732464,
+      "candidate_median_s": 1.0374814349925146,
+      "ratio": 0.8998212815120415,
+      "u95": 0.908866322494453
+    },
+    {
+      "report": "issue17-domains-t4-v3.json",
+      "case": "fused3",
+      "agg": "count",
+      "rows": 1000000,
+      "threads": 4,
+      "mode": "warm",
+      "pairs": 40,
+      "baseline_median_s": 1.13867387449136,
+      "candidate_median_s": 1.0362836364656687,
+      "ratio": 0.9100793999761972,
+      "u95": 0.9173392690815083
+    }
+  ],
+  "memory": [
+    {
+      "case": "fused3",
+      "agg": "count",
+      "threads": 1,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 353400832.0,
+      "baseline_max_hwm_bytes": 353595392,
+      "candidate_max_hwm_bytes": 323477504
+    },
+    {
+      "case": "fused3",
+      "agg": "count",
+      "threads": 4,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 354676736.0,
+      "baseline_max_hwm_bytes": 354844672,
+      "candidate_max_hwm_bytes": 324284416
+    },
+    {
+      "case": "fused3",
+      "agg": "max",
+      "threads": 1,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 353171456.0,
+      "baseline_max_hwm_bytes": 353357824,
+      "candidate_max_hwm_bytes": 323543040
+    },
+    {
+      "case": "fused3",
+      "agg": "max",
+      "threads": 4,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 354543616.0,
+      "baseline_max_hwm_bytes": 354762752,
+      "candidate_max_hwm_bytes": 324337664
+    },
+    {
+      "case": "low",
+      "agg": "count",
+      "threads": 1,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 324282368.0,
+      "baseline_max_hwm_bytes": 324550656,
+      "candidate_max_hwm_bytes": 324947968
+    },
+    {
+      "case": "low",
+      "agg": "count",
+      "threads": 4,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 324438016.0,
+      "baseline_max_hwm_bytes": 324767744,
+      "candidate_max_hwm_bytes": 325599232
+    },
+    {
+      "case": "low",
+      "agg": "max",
+      "threads": 1,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 323944448.0,
+      "baseline_max_hwm_bytes": 324284416,
+      "candidate_max_hwm_bytes": 324796416
+    },
+    {
+      "case": "low",
+      "agg": "max",
+      "threads": 4,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 324145152.0,
+      "baseline_max_hwm_bytes": 324284416,
+      "candidate_max_hwm_bytes": 325173248
+    },
+    {
+      "case": "ordinary",
+      "agg": "count",
+      "threads": 1,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 324947968.0,
+      "baseline_max_hwm_bytes": 325074944,
+      "candidate_max_hwm_bytes": 325754880
+    },
+    {
+      "case": "ordinary",
+      "agg": "count",
+      "threads": 4,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 325083136.0,
+      "baseline_max_hwm_bytes": 325468160,
+      "candidate_max_hwm_bytes": 326275072
+    },
+    {
+      "case": "ordinary",
+      "agg": "max",
+      "threads": 1,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 324734976.0,
+      "baseline_max_hwm_bytes": 324939776,
+      "candidate_max_hwm_bytes": 325464064
+    },
+    {
+      "case": "ordinary",
+      "agg": "max",
+      "threads": 4,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 325046272.0,
+      "baseline_max_hwm_bytes": 325435392,
+      "candidate_max_hwm_bytes": 325980160
+    },
+    {
+      "case": "packed10",
+      "agg": "count",
+      "threads": 1,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 362418176.0,
+      "baseline_max_hwm_bytes": 362708992,
+      "candidate_max_hwm_bytes": 347803648
+    },
+    {
+      "case": "packed10",
+      "agg": "count",
+      "threads": 4,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 444325888.0,
+      "baseline_max_hwm_bytes": 444649472,
+      "candidate_max_hwm_bytes": 348512256
+    },
+    {
+      "case": "packed10",
+      "agg": "max",
+      "threads": 1,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 362551296.0,
+      "baseline_max_hwm_bytes": 362872832,
+      "candidate_max_hwm_bytes": 347742208
+    },
+    {
+      "case": "packed10",
+      "agg": "max",
+      "threads": 4,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 444542976.0,
+      "baseline_max_hwm_bytes": 444805120,
+      "candidate_max_hwm_bytes": 348344320
+    },
+    {
+      "case": "packed2",
+      "agg": "count",
+      "threads": 1,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 236859392.0,
+      "baseline_max_hwm_bytes": 237113344,
+      "candidate_max_hwm_bytes": 198492160
+    },
+    {
+      "case": "packed2",
+      "agg": "count",
+      "threads": 4,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 238022656.0,
+      "baseline_max_hwm_bytes": 238321664,
+      "candidate_max_hwm_bytes": 199135232
+    },
+    {
+      "case": "packed2",
+      "agg": "max",
+      "threads": 1,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 237012992.0,
+      "baseline_max_hwm_bytes": 237297664,
+      "candidate_max_hwm_bytes": 198537216
+    },
+    {
+      "case": "packed2",
+      "agg": "max",
+      "threads": 4,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 238356480.0,
+      "baseline_max_hwm_bytes": 238587904,
+      "candidate_max_hwm_bytes": 199262208
+    },
+    {
+      "case": "primary",
+      "agg": "count",
+      "threads": 1,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 638537728.0,
+      "baseline_max_hwm_bytes": 757936128,
+      "candidate_max_hwm_bytes": 562475008
+    },
+    {
+      "case": "primary",
+      "agg": "count",
+      "threads": 4,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 756406272.0,
+      "baseline_max_hwm_bytes": 757002240,
+      "candidate_max_hwm_bytes": 563265536
+    },
+    {
+      "case": "primary",
+      "agg": "max",
+      "threads": 1,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 638007296.0,
+      "baseline_max_hwm_bytes": 638144512,
+      "candidate_max_hwm_bytes": 562315264
+    },
+    {
+      "case": "primary",
+      "agg": "max",
+      "threads": 4,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 756781056.0,
+      "baseline_max_hwm_bytes": 757288960,
+      "candidate_max_hwm_bytes": 563126272
+    },
+    {
+      "case": "unsorted",
+      "agg": "count",
+      "threads": 1,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 725329920.0,
+      "baseline_max_hwm_bytes": 792498176,
+      "candidate_max_hwm_bytes": 793366528
+    },
+    {
+      "case": "unsorted",
+      "agg": "count",
+      "threads": 4,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 644884480.0,
+      "baseline_max_hwm_bytes": 699146240,
+      "candidate_max_hwm_bytes": 687931392
+    },
+    {
+      "case": "unsorted",
+      "agg": "max",
+      "threads": 1,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 749424640.0,
+      "baseline_max_hwm_bytes": 793747456,
+      "candidate_max_hwm_bytes": 750080000
+    },
+    {
+      "case": "unsorted",
+      "agg": "max",
+      "threads": 4,
+      "baseline_workers": 10,
+      "candidate_workers": 10,
+      "baseline_median_hwm_bytes": 689522688.0,
+      "baseline_max_hwm_bytes": 706555904,
+      "candidate_max_hwm_bytes": 742301696
+    }
+  ],
+  "raw_reports": [
+    {
+      "file": "issue17-local-v3.json",
+      "sha256": "29a205629942a775847732605fda4694854d5f7fdcecbf30ab101185e66f033c",
+      "bytes": 4237458,
+      "observations": 1208,
+      "status": "DRAFT"
+    },
+    {
+      "file": "issue17-controls-sorted-t4-v3.json",
+      "sha256": "16681fd9b1ff0c261b8fa1e2d204bed95bbcc5cf6892f9b0b55f3d6bab64abab",
+      "bytes": 2619614,
+      "observations": 728,
+      "status": "DRAFT"
+    },
+    {
+      "file": "issue17-control-unsorted-t4-v3.json",
+      "sha256": "fcf1413dbbd48d99f3a2661773e850bee07574eaedcc69fdd7b3a33e468e65c1",
+      "bytes": 1375488,
+      "observations": 364,
+      "status": "DRAFT"
+    },
+    {
+      "file": "issue17-domains-t4-v3.json",
+      "sha256": "c30d61a95d5e579bb74508ab0d1b2fc14714bf7a65fbcfc851e7ea2bbee2756e",
+      "bytes": 3882290,
+      "observations": 1092,
+      "status": "DRAFT"
+    },
+    {
+      "file": "issue17-controls-domains-rss-t1-v3.json",
+      "sha256": "372da1604141ebb4a88a102efac3997d933ff280781590a9165a165c9bcae4c9",
+      "bytes": 1060488,
+      "observations": 264,
+      "status": "DRAFT"
+    },
+    {
+      "file": "issue17-quick-v3.json",
+      "sha256": "a99a97b14b3be0eea5d88fa9db93f4db4630139586719f6b743b26fe4e63c7a4",
+      "bytes": 744626,
+      "observations": 168,
+      "status": "UNCERTIFIED"
+    },
+    {
+      "file": "issue17-refused10-v3.json",
+      "sha256": "a50e46ff7898f00036fbf45709ee4f114faf3f58fd0b237ce9245a56e15ece66",
+      "bytes": 15834,
+      "observations": 4,
+      "status": "DRAFT"
+    }
+  ],
+  "commands": [
+    "uv sync --extra bench --extra dev",
+    "uv run --no-sync --with \"maturin>=1.13,<2.0\" maturin develop --release",
+    "cargo test; cargo clippy --all-targets -- -D warnings; cargo fmt --all -- --check",
+    "uv run --no-sync pytest tests/ -q --strict-markers -m \"not stress\"",
+    "uv run --no-sync ruff check python tests scripts benchmarks",
+    "uv run --no-sync basedpyright --project pyrightconfig.json",
+    "python benchmarks/route_evidence.py prepare --repo . --sha SHA --lock issue17-runtime.lock --cargo-lock Cargo.lock --root FRESH_ROOT",
+    "python benchmarks/route_evidence.py run --baseline BASE/runtime-v3.json --candidate CAND/runtime-v3.json --output /tmp/issue17-local-v3.json --host n100 --threads 1 2 4  # timed out at tool clamp3600s; preserved checkpoint",
+    "python benchmarks/route_evidence.py run --baseline BASE/runtime-v3.json --candidate CAND/runtime-v3.json --output /tmp/issue17-controls-sorted-t4-v3.json --host n100 --threads 4 --cases low ordinary",
+    "python benchmarks/route_evidence.py run --baseline BASE/runtime-v3.json --candidate CAND/runtime-v3.json --output /tmp/issue17-control-unsorted-t4-v3.json --host n100 --threads 4 --cases unsorted",
+    "python benchmarks/route_evidence.py run --baseline BASE/runtime-v3.json --candidate CAND/runtime-v3.json --output /tmp/issue17-domains-t4-v3.json --host n100 --threads 4 --cases packed2 packed10 fused3",
+    "python benchmarks/route_evidence.py run --baseline BASE/runtime-v3.json --candidate CAND/runtime-v3.json --output /tmp/issue17-controls-domains-rss-t1-v3.json --host n100 --threads 1 --cases low ordinary unsorted packed2 packed10 fused3 --memory-only",
+    "RUNTIME/bin/python -I issue17-resource-refusal-probe.py DRIVER_PATH candidate AGG THREADS  # run max/count at1/4 with driver.clean_env(threads)",
+    "cargo test --locked radix_groupby::sort_first_dispatch_tests::production_routing_high_ratio_count_uses_hash_first_until_sort_first_is_certified --lib -- --exact  # separate immutable baseline audit target:1passed"
+  ],
+  "refused10_direct_kernel_diagnostics": [
+    {
+      "status": "passed",
+      "diagnostic_only": true,
+      "whole_process_cap": false,
+      "kind": "refused10_direct_kernel",
+      "n": 5000000,
+      "agg": "max",
+      "threads": 1,
+      "identity": {
+        "sha": "714fc6890c67c126aff6482101d3dbd043d9a9bb",
+        "wheel_sha256": "4c0318d5242992b8c052a79957721d88a6a1969d5edf35a75677f5d07011909b",
+        "extension_sha256": "52be70d85bf8aa7c46d53d23ac6d0fcf33c5e3846c7d59c4e01dad88c96d7825",
+        "dependencies": [
+          [
+            "maturin",
+            "1.13.0"
+          ],
+          [
+            "numpy",
+            "2.4.6"
+          ],
+          [
+            "pandas",
+            "2.3.3"
+          ],
+          [
+            "pandas-booster",
+            "0.2.0"
+          ],
+          [
+            "pip",
+            "24.0"
+          ],
+          [
+            "python-dateutil",
+            "2.9.0.post0"
+          ],
+          [
+            "pytz",
+            "2026.2"
+          ],
+          [
+            "setuptools",
+            "79.0.1"
+          ],
+          [
+            "six",
+            "1.17.0"
+          ],
+          [
+            "tzdata",
+            "2026.2"
+          ]
+        ],
+        "environment": {
+          "PATH": "/bin:/usr/bin",
+          "HOME": "/home/snowy",
+          "LANG": "C.UTF-8",
+          "RAYON_NUM_THREADS": "1",
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "PANDAS_BOOSTER_STRICT_ABI": "1",
+          "PYTHONHASHSEED": "42"
+        },
+        "python": "/tmp/issue17-certified-candidate-v2/runtime/bin/python",
+        "python_identity": {
+          "implementation": "CPython",
+          "version": "3.11.15 (main, Apr  7 2026, 20:48:58) [Clang 22.1.1 ]",
+          "build": [
+            "main",
+            "Apr  7 2026 20:48:58"
+          ],
+          "executable": "/home/snowy/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11",
+          "executable_sha256": "cd947cb6d5b3f8589a2a4708198dc104474e47876c6b8215ab8b410592ab7cc1"
+        },
+        "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)\nbinary: rustc\ncommit-hash: e408947bfd200af42db322daf0fadfe7e26d3bd1\ncommit-date: 2026-03-25\nhost: x86_64-unknown-linux-gnu\nrelease: 1.94.1\nLLVM version: 21.1.8\n",
+        "cargo": "cargo 1.94.1 (29ea6fb6a 2026-03-24)\n"
+      },
+      "pre_input": {
+        "VmHWM": 99098624,
+        "VmRSS": 80343040
+      },
+      "rss": {
+        "VmHWM": 1645891584,
+        "VmRSS": 1166249984
+      },
+      "profile": {
+        "profile_kind": "multi_key_sorted",
+        "route": "hash_first",
+        "route_reason": "memory_limit",
+        "routing_s": 3.927e-06,
+        "sort_first_boundary_s": 0.0,
+        "sort_first_setup_s": 0.0,
+        "hash_first_aggregation_count": 1,
+        "post_aggregation_sort_count": 1,
+        "distinct_lower_bound": 0,
+        "estimated_peak_bytes": 880114688,
+        "rayon_threads": 1,
+        "rust_elapsed_s": 2.418269377,
+        "rust_unattributed_s": 0.005756304000000156,
+        "hash_build_s": 0.095835466,
+        "partition_scatter_s": 0.030269209,
+        "partition_aggregation_s": 1.487682475,
+        "flatten_s": 0.189640881,
+        "sort_key_construction_s": 0.26342743,
+        "radix_sort_s": 0.345653685,
+        "sorted_materialization_s": 0.0,
+        "selected_sort_strategy": "packed_u64",
+        "sort_key_bit_widths": [
+          23,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "sort_first_permutation_s": 0.0,
+        "sort_first_segment_scan_s": 0.0,
+        "sort_first_segment_scan_count": 0,
+        "conversion_s": 0.732454794,
+        "pandas_index_construction_s": 0.0,
+        "rust_total_s": 2.412513073,
+        "partial_group_total": 5000000,
+        "final_group_count": 5000000,
+        "partial_to_final_ratio": 1.0
+      }
+    },
+    {
+      "status": "passed",
+      "diagnostic_only": true,
+      "whole_process_cap": false,
+      "kind": "refused10_direct_kernel",
+      "n": 5000000,
+      "agg": "count",
+      "threads": 1,
+      "identity": {
+        "sha": "714fc6890c67c126aff6482101d3dbd043d9a9bb",
+        "wheel_sha256": "4c0318d5242992b8c052a79957721d88a6a1969d5edf35a75677f5d07011909b",
+        "extension_sha256": "52be70d85bf8aa7c46d53d23ac6d0fcf33c5e3846c7d59c4e01dad88c96d7825",
+        "dependencies": [
+          [
+            "maturin",
+            "1.13.0"
+          ],
+          [
+            "numpy",
+            "2.4.6"
+          ],
+          [
+            "pandas",
+            "2.3.3"
+          ],
+          [
+            "pandas-booster",
+            "0.2.0"
+          ],
+          [
+            "pip",
+            "24.0"
+          ],
+          [
+            "python-dateutil",
+            "2.9.0.post0"
+          ],
+          [
+            "pytz",
+            "2026.2"
+          ],
+          [
+            "setuptools",
+            "79.0.1"
+          ],
+          [
+            "six",
+            "1.17.0"
+          ],
+          [
+            "tzdata",
+            "2026.2"
+          ]
+        ],
+        "environment": {
+          "PATH": "/bin:/usr/bin",
+          "HOME": "/home/snowy",
+          "LANG": "C.UTF-8",
+          "RAYON_NUM_THREADS": "1",
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "PANDAS_BOOSTER_STRICT_ABI": "1",
+          "PYTHONHASHSEED": "42"
+        },
+        "python": "/tmp/issue17-certified-candidate-v2/runtime/bin/python",
+        "python_identity": {
+          "implementation": "CPython",
+          "version": "3.11.15 (main, Apr  7 2026, 20:48:58) [Clang 22.1.1 ]",
+          "build": [
+            "main",
+            "Apr  7 2026 20:48:58"
+          ],
+          "executable": "/home/snowy/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11",
+          "executable_sha256": "cd947cb6d5b3f8589a2a4708198dc104474e47876c6b8215ab8b410592ab7cc1"
+        },
+        "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)\nbinary: rustc\ncommit-hash: e408947bfd200af42db322daf0fadfe7e26d3bd1\ncommit-date: 2026-03-25\nhost: x86_64-unknown-linux-gnu\nrelease: 1.94.1\nLLVM version: 21.1.8\n",
+        "cargo": "cargo 1.94.1 (29ea6fb6a 2026-03-24)\n"
+      },
+      "pre_input": {
+        "VmHWM": 99098624,
+        "VmRSS": 80285696
+      },
+      "rss": {
+        "VmHWM": 1578541056,
+        "VmRSS": 1098883072
+      },
+      "profile": {
+        "profile_kind": "multi_key_sorted",
+        "route": "hash_first",
+        "route_reason": "memory_limit",
+        "routing_s": 4.165e-06,
+        "sort_first_boundary_s": 0.0,
+        "sort_first_setup_s": 0.0,
+        "hash_first_aggregation_count": 1,
+        "post_aggregation_sort_count": 1,
+        "distinct_lower_bound": 0,
+        "estimated_peak_bytes": 880114688,
+        "rayon_threads": 1,
+        "rust_elapsed_s": 2.247269935,
+        "rust_unattributed_s": 0.006924295999999774,
+        "hash_build_s": 0.096046199,
+        "partition_scatter_s": 0.031754123,
+        "partition_aggregation_s": 1.314652595,
+        "flatten_s": 0.190894205,
+        "sort_key_construction_s": 0.263866034,
+        "radix_sort_s": 0.343128318,
+        "sorted_materialization_s": 0.0,
+        "selected_sort_strategy": "packed_u64",
+        "sort_key_bit_widths": [
+          23,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "sort_first_permutation_s": 0.0,
+        "sort_first_segment_scan_s": 0.0,
+        "sort_first_segment_scan_count": 0,
+        "conversion_s": 0.663409626,
+        "pandas_index_construction_s": 0.0,
+        "rust_total_s": 2.240345639,
+        "partial_group_total": 5000000,
+        "final_group_count": 5000000,
+        "partial_to_final_ratio": 1.0
+      }
+    },
+    {
+      "status": "passed",
+      "diagnostic_only": true,
+      "whole_process_cap": false,
+      "kind": "refused10_direct_kernel",
+      "n": 5000000,
+      "agg": "max",
+      "threads": 4,
+      "identity": {
+        "sha": "714fc6890c67c126aff6482101d3dbd043d9a9bb",
+        "wheel_sha256": "4c0318d5242992b8c052a79957721d88a6a1969d5edf35a75677f5d07011909b",
+        "extension_sha256": "52be70d85bf8aa7c46d53d23ac6d0fcf33c5e3846c7d59c4e01dad88c96d7825",
+        "dependencies": [
+          [
+            "maturin",
+            "1.13.0"
+          ],
+          [
+            "numpy",
+            "2.4.6"
+          ],
+          [
+            "pandas",
+            "2.3.3"
+          ],
+          [
+            "pandas-booster",
+            "0.2.0"
+          ],
+          [
+            "pip",
+            "24.0"
+          ],
+          [
+            "python-dateutil",
+            "2.9.0.post0"
+          ],
+          [
+            "pytz",
+            "2026.2"
+          ],
+          [
+            "setuptools",
+            "79.0.1"
+          ],
+          [
+            "six",
+            "1.17.0"
+          ],
+          [
+            "tzdata",
+            "2026.2"
+          ]
+        ],
+        "environment": {
+          "PATH": "/bin:/usr/bin",
+          "HOME": "/home/snowy",
+          "LANG": "C.UTF-8",
+          "RAYON_NUM_THREADS": "4",
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "PANDAS_BOOSTER_STRICT_ABI": "1",
+          "PYTHONHASHSEED": "42"
+        },
+        "python": "/tmp/issue17-certified-candidate-v2/runtime/bin/python",
+        "python_identity": {
+          "implementation": "CPython",
+          "version": "3.11.15 (main, Apr  7 2026, 20:48:58) [Clang 22.1.1 ]",
+          "build": [
+            "main",
+            "Apr  7 2026 20:48:58"
+          ],
+          "executable": "/home/snowy/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11",
+          "executable_sha256": "cd947cb6d5b3f8589a2a4708198dc104474e47876c6b8215ab8b410592ab7cc1"
+        },
+        "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)\nbinary: rustc\ncommit-hash: e408947bfd200af42db322daf0fadfe7e26d3bd1\ncommit-date: 2026-03-25\nhost: x86_64-unknown-linux-gnu\nrelease: 1.94.1\nLLVM version: 21.1.8\n",
+        "cargo": "cargo 1.94.1 (29ea6fb6a 2026-03-24)\n"
+      },
+      "pre_input": {
+        "VmHWM": 99106816,
+        "VmRSS": 80363520
+      },
+      "rss": {
+        "VmHWM": 1579970560,
+        "VmRSS": 1100337152
+      },
+      "profile": {
+        "profile_kind": "multi_key_sorted",
+        "route": "hash_first",
+        "route_reason": "memory_limit",
+        "routing_s": 4.31e-06,
+        "sort_first_boundary_s": 0.0,
+        "sort_first_setup_s": 0.0,
+        "hash_first_aggregation_count": 1,
+        "post_aggregation_sort_count": 1,
+        "distinct_lower_bound": 0,
+        "estimated_peak_bytes": 880139264,
+        "rayon_threads": 4,
+        "rust_elapsed_s": 1.765292866,
+        "rust_unattributed_s": 0.009131478000000026,
+        "hash_build_s": 0.034962604,
+        "partition_scatter_s": 0.017556149,
+        "partition_aggregation_s": 0.938949821,
+        "flatten_s": 0.236875387,
+        "sort_key_construction_s": 0.311709724,
+        "radix_sort_s": 0.216103393,
+        "sorted_materialization_s": 0.0,
+        "selected_sort_strategy": "packed_u64",
+        "sort_key_bit_widths": [
+          23,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "sort_first_permutation_s": 0.0,
+        "sort_first_segment_scan_s": 0.0,
+        "sort_first_segment_scan_count": 0,
+        "conversion_s": 0.44951892,
+        "pandas_index_construction_s": 0.0,
+        "rust_total_s": 1.756161388,
+        "partial_group_total": 5000000,
+        "final_group_count": 5000000,
+        "partial_to_final_ratio": 1.0
+      }
+    },
+    {
+      "status": "passed",
+      "diagnostic_only": true,
+      "whole_process_cap": false,
+      "kind": "refused10_direct_kernel",
+      "n": 5000000,
+      "agg": "count",
+      "threads": 4,
+      "identity": {
+        "sha": "714fc6890c67c126aff6482101d3dbd043d9a9bb",
+        "wheel_sha256": "4c0318d5242992b8c052a79957721d88a6a1969d5edf35a75677f5d07011909b",
+        "extension_sha256": "52be70d85bf8aa7c46d53d23ac6d0fcf33c5e3846c7d59c4e01dad88c96d7825",
+        "dependencies": [
+          [
+            "maturin",
+            "1.13.0"
+          ],
+          [
+            "numpy",
+            "2.4.6"
+          ],
+          [
+            "pandas",
+            "2.3.3"
+          ],
+          [
+            "pandas-booster",
+            "0.2.0"
+          ],
+          [
+            "pip",
+            "24.0"
+          ],
+          [
+            "python-dateutil",
+            "2.9.0.post0"
+          ],
+          [
+            "pytz",
+            "2026.2"
+          ],
+          [
+            "setuptools",
+            "79.0.1"
+          ],
+          [
+            "six",
+            "1.17.0"
+          ],
+          [
+            "tzdata",
+            "2026.2"
+          ]
+        ],
+        "environment": {
+          "PATH": "/bin:/usr/bin",
+          "HOME": "/home/snowy",
+          "LANG": "C.UTF-8",
+          "RAYON_NUM_THREADS": "4",
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "PANDAS_BOOSTER_STRICT_ABI": "1",
+          "PYTHONHASHSEED": "42"
+        },
+        "python": "/tmp/issue17-certified-candidate-v2/runtime/bin/python",
+        "python_identity": {
+          "implementation": "CPython",
+          "version": "3.11.15 (main, Apr  7 2026, 20:48:58) [Clang 22.1.1 ]",
+          "build": [
+            "main",
+            "Apr  7 2026 20:48:58"
+          ],
+          "executable": "/home/snowy/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11",
+          "executable_sha256": "cd947cb6d5b3f8589a2a4708198dc104474e47876c6b8215ab8b410592ab7cc1"
+        },
+        "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)\nbinary: rustc\ncommit-hash: e408947bfd200af42db322daf0fadfe7e26d3bd1\ncommit-date: 2026-03-25\nhost: x86_64-unknown-linux-gnu\nrelease: 1.94.1\nLLVM version: 21.1.8\n",
+        "cargo": "cargo 1.94.1 (29ea6fb6a 2026-03-24)\n"
+      },
+      "pre_input": {
+        "VmHWM": 98971648,
+        "VmRSS": 80297984
+      },
+      "rss": {
+        "VmHWM": 1511849984,
+        "VmRSS": 1032183808
+      },
+      "profile": {
+        "profile_kind": "multi_key_sorted",
+        "route": "hash_first",
+        "route_reason": "memory_limit",
+        "routing_s": 4.302e-06,
+        "sort_first_boundary_s": 0.0,
+        "sort_first_setup_s": 0.0,
+        "hash_first_aggregation_count": 1,
+        "post_aggregation_sort_count": 1,
+        "distinct_lower_bound": 0,
+        "estimated_peak_bytes": 880139264,
+        "rayon_threads": 4,
+        "rust_elapsed_s": 1.535630881,
+        "rust_unattributed_s": 0.008527549999999717,
+        "hash_build_s": 0.049508283,
+        "partition_scatter_s": 0.024117376,
+        "partition_aggregation_s": 0.793438301,
+        "flatten_s": 0.207952024,
+        "sort_key_construction_s": 0.279517868,
+        "radix_sort_s": 0.172565177,
+        "sorted_materialization_s": 0.0,
+        "selected_sort_strategy": "packed_u64",
+        "sort_key_bit_widths": [
+          23,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "sort_first_permutation_s": 0.0,
+        "sort_first_segment_scan_s": 0.0,
+        "sort_first_segment_scan_count": 0,
+        "conversion_s": 0.322502574,
+        "pandas_index_construction_s": 0.0,
+        "rust_total_s": 1.5271033310000002,
+        "partial_group_total": 5000000,
+        "final_group_count": 5000000,
+        "partial_to_final_ratio": 1.0
+      }
+    }
+  ],
+  "archive": {
+    "path": "benchmarks/evidence/issue17-n100-raw.tar.gz",
+    "sha256": "e0c6624ae3c57e9c6edad88035715cd1ff7f658680e4c90f1a7e9d680a9bc697",
+    "bytes": 699971
+  }
+}
