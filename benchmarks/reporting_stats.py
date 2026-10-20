@@ -6,6 +6,10 @@ from bench_utils import BenchmarkStats
 from reporting_constants import BACKEND_DISPLAY_ORDER
 
 
+def _zero_phase_stats() -> BenchmarkStats:
+    return BenchmarkStats(0.0, 0.0, 0.0, 0.0, [])
+
+
 def render_stats_evidence_section(evidence: list[dict[str, Any]]) -> str:
     if not evidence:
         return ""
@@ -25,8 +29,9 @@ def render_stats_evidence_section(evidence: list[dict[str, Any]]) -> str:
         _stats_evidence_summary(evidence_aggs),
         _stats_overhead_summary(),
         "",
-        "| Workload | Agg | Sort | Backend | Execution | Cold | Warm |",
-        "|----------|-----|------|---------|-----------|------|------|",
+        "| Workload | Agg | Sort | Backend | Execution | Cold | Warm | "
+        "Cold correctness | Warm correctness |",
+        "|----------|-----|------|---------|-----------|------|------|------------------|------------------|",
     ]
 
     for item in evidence:
@@ -35,9 +40,11 @@ def render_stats_evidence_section(evidence: list[dict[str, Any]]) -> str:
     lines.extend(["", "### Booster conversion vs compute breakdown", ""])
     lines.append(
         "The table below isolates the Rust-first Booster path for the same single-key datasets. "
-        "`local_build`, `merge`, `reorder`, and `materialize` come from the internal Rust "
-        "profiling hook, while the Python-side phases measure post-kernel normalization and "
-        "final pandas Series assembly."
+        "Legacy mergeable `std`/`var` phases (`local_build`, `merge`, `reorder`, and "
+        "`materialize`) and direct median phases (`unique_build`, `key_sort`, `count`, "
+        "`buffer_setup`, `scatter`, and `median_select`) come from the internal Rust profiling "
+        "hook, while the Python-side phases measure post-kernel normalization and final pandas "
+        "Series assembly."
     )
     lines.append("")
     _append_breakdown_table(lines, evidence)
@@ -46,6 +53,26 @@ def render_stats_evidence_section(evidence: list[dict[str, Any]]) -> str:
 
 
 def _stats_evidence_summary(evidence_aggs: list[str]) -> str:
+    if evidence_aggs == ["median"]:
+        return (
+            "`median` profile evidence is emitted only when explicitly selected. "
+            "Markdown reports collect it with `--agg median --sort-mode sorted --output <dir>` "
+            "without requiring `--profile-json`. JSON output uses "
+            "`--agg median --sort-mode sorted --profile-json <path>` and adds median diagnostic "
+            "workloads. It reports the sorted single-key Rust path so "
+            "benchmark reports can show whether median work is dominated by direct kernel phases, "
+            "conversion, or Series assembly; `count_s` is zero when accepted-value counting is "
+            "fused into `unique_build_s`."
+        )
+
+    if "median" in evidence_aggs:
+        agg_phrase = ", ".join(f"`{agg}`" for agg in evidence_aggs)
+        return (
+            f"{agg_phrase} evidence includes mergeable `std`/`var` phase diagnostics and "
+            "selected-only `median` phase diagnostics from Rust profile hooks; `count_s` is zero "
+            "when accepted-value counting is fused into `unique_build_s`."
+        )
+
     agg_phrase = (
         "`std` and `var`"
         if evidence_aggs == ["std", "var"]
@@ -85,6 +112,9 @@ def _append_backend_evidence_rows(lines: list[str], item: dict[str, Any]) -> Non
             cold_stats.format_ms(2),
             warm_stats.format_ms(2),
         ]
+        for phase in ("cold", "warm"):
+            status = str(backend_data.get(f"{phase}_correctness", "not_checked"))
+            row.append(status.replace("|", "\\|").replace("\n", " "))
         lines.append("| " + " | ".join(row) + " |")
 
 
@@ -94,7 +124,15 @@ def _append_breakdown_table(lines: list[str], evidence: list[dict[str, Any]]) ->
         "Agg",
         "Sort",
         "Execution",
+        "Route",
+        "Route reason",
         "Prepare inputs",
+        "Unique build",
+        "Key sort",
+        "Count",
+        "Buffer setup",
+        "Scatter",
+        "Median select",
         "Local build",
         "Merge",
         "Reorder",
@@ -124,15 +162,23 @@ def _append_breakdown_table(lines: list[str], evidence: list[dict[str, Any]]) ->
             f"`{item['agg']}`",
             "True" if item["sort"] else "False",
             f"`{breakdown['execution']}`",
-            phases["prepare_inputs_s"].format_ms(2),
-            phases["local_build_s"].format_ms(2),
-            phases["merge_s"].format_ms(2),
-            phases["reorder_s"].format_ms(2),
-            phases["materialize_s"].format_ms(2),
-            phases["python_normalize_s"].format_ms(2),
-            phases["python_series_build_s"].format_ms(2),
-            phases["rust_total_s"].format_ms(2),
-            phases["total_pipeline_s"].format_ms(2),
+            f"`{breakdown.get('route_kind', '')}`",
+            f"`{breakdown.get('route_reason', '')}`",
+            phases.get("prepare_inputs_s", _zero_phase_stats()).format_ms(2),
+            phases.get("unique_build_s", _zero_phase_stats()).format_ms(2),
+            phases.get("key_sort_s", _zero_phase_stats()).format_ms(2),
+            phases.get("count_s", _zero_phase_stats()).format_ms(2),
+            phases.get("buffer_setup_s", _zero_phase_stats()).format_ms(2),
+            phases.get("scatter_s", _zero_phase_stats()).format_ms(2),
+            phases.get("median_select_s", _zero_phase_stats()).format_ms(2),
+            phases.get("local_build_s", _zero_phase_stats()).format_ms(2),
+            phases.get("merge_s", _zero_phase_stats()).format_ms(2),
+            phases.get("reorder_s", _zero_phase_stats()).format_ms(2),
+            phases.get("materialize_s", _zero_phase_stats()).format_ms(2),
+            phases.get("python_normalize_s", _zero_phase_stats()).format_ms(2),
+            phases.get("python_series_build_s", _zero_phase_stats()).format_ms(2),
+            phases.get("rust_total_s", _zero_phase_stats()).format_ms(2),
+            phases.get("total_pipeline_s", _zero_phase_stats()).format_ms(2),
             f"{breakdown['partial_group_total']:,}",
             f"{breakdown['final_group_count']:,}",
             f"{breakdown['partial_to_final_ratio']:.3f}",

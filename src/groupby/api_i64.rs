@@ -4,18 +4,22 @@ use crate::aggregation::{
     MaxAggI64, MeanAggI64, MedianAggI64, MinAggI64, ProdAggI64, StdAggI64, SumAggI64, VarAggI64,
 };
 
+use super::deterministic::parallel_groupby_deterministic;
 use super::engine::{
     parallel_groupby_firstseen_median_impl, parallel_groupby_firstseen_std_var_impl,
-    parallel_groupby_median_impl, parallel_groupby_std_var_impl,
+    parallel_groupby_median_impl, parallel_groupby_partitioned_unordered_impl,
+    parallel_groupby_std_var_impl,
 };
 use super::legacy::{
     parallel_groupby, parallel_groupby_firstseen_u32, parallel_groupby_firstseen_u64,
 };
 use super::order::reorder_single_result_by_key;
 use super::result::{GroupByResultF64, GroupByResultI64};
+use super::routing::{sorted_median_route_decision, SortedMedianRouteKind, SortedMedianValueKind};
 use super::scalar_firstseen::{
     parallel_groupby_firstseen_legacy_low_u32, parallel_groupby_firstseen_legacy_low_u64,
 };
+use super::sorted_median::groupby_median_i64_sorted_with_decision;
 
 pub fn parallel_groupby_sum_i64(keys: &[i64], values: &[i64]) -> PyResult<GroupByResultI64> {
     parallel_groupby::<i64, SumAggI64, i64>(keys, values)
@@ -103,9 +107,31 @@ pub fn parallel_groupby_median_i64_sorted(
     keys: &[i64],
     values: &[i64],
 ) -> PyResult<GroupByResultF64> {
-    let mut result = parallel_groupby_median_i64(keys, values)?;
-    reorder_single_result_by_key(&mut result);
-    Ok(result)
+    let decision = sorted_median_route_decision(keys, SortedMedianValueKind::I64);
+    match decision.kind {
+        SortedMedianRouteKind::DirectDense | SortedMedianRouteKind::DirectSparse => {
+            groupby_median_i64_sorted_with_decision(keys, values, &decision)
+        }
+        SortedMedianRouteKind::PartitionedFallback => {
+            let mut result = if keys.len() <= u32::MAX as usize {
+                parallel_groupby_partitioned_unordered_impl::<i64, MedianAggI64, f64, u32>(
+                    keys, values,
+                )?
+            } else {
+                parallel_groupby_partitioned_unordered_impl::<i64, MedianAggI64, f64, u64>(
+                    keys, values,
+                )?
+            };
+            reorder_single_result_by_key(&mut result);
+            Ok(result)
+        }
+        SortedMedianRouteKind::ExistingSortedFallback => {
+            let mut result =
+                parallel_groupby_deterministic::<i64, MedianAggI64, f64>(keys, values)?;
+            reorder_single_result_by_key(&mut result);
+            Ok(result)
+        }
+    }
 }
 
 pub fn parallel_groupby_median_i64_firstseen_u32(

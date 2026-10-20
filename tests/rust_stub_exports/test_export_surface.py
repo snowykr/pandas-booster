@@ -65,3 +65,12 @@ def test_prod_symbols_are_registered_and_stubbed():
 
 def test_median_symbols_are_registered_and_stubbed():
     _assert_expected_groupby_exports_are_registered_and_stubbed(("median",))
+
+
+def test_profile_exports_include_only_selected_median_surface():
+    expected_exports = _expected_exports()
+
+    assert "profile_groupby_median_f64_sorted" in expected_exports
+    assert "profile_groupby_median_f64_firstseen_u32" not in expected_exports
+    assert "profile_groupby_median_f64_firstseen_u64" not in expected_exports
+    assert "profile_groupby_median_i64_sorted" not in expected_exports

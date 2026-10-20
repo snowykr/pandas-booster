@@ -49,7 +49,7 @@ def benchmark_worker(
                     f"Benchmark key column {col!r} contains nulls; semantics differ across engines"
                 )
 
-        if df[value_col].isna().any():
+        if agg != "median" and df[value_col].isna().any():
             raise ValueError(
                 f"Benchmark value column {value_col!r} contains NaNs; "
                 "semantics can diverge across engines"
@@ -81,6 +81,9 @@ def benchmark_worker(
         df_polars = pl.DataFrame(
             {**{col: df[col].values for col in key_cols}, value_col: df[value_col].values}
         )
+        if agg == "median":
+            # Match pandas' skip-NaN median semantics outside the timed region.
+            df_polars = df_polars.with_columns(pl.col(value_col).fill_nan(None))
         agg_expr = build_polars_agg_expr(value_col, agg)
 
         def run_once_polars() -> Any:

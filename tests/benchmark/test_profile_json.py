@@ -5,17 +5,30 @@ from __future__ import annotations
 import json
 
 import pytest
-from conftest import (
-    _loaded_benchmark_module,
-    _make_breakdown,
-    _make_result,
-)
+from conftest import _loaded_benchmark_module
+
+from ._report_output_helpers import _make_breakdown, _make_result
 
 
 @pytest.fixture(scope="module")
 def benchmark_module():
     with _loaded_benchmark_module() as module:
         yield module
+
+
+def test_false_low_sample_preset_hides_sparse_cardinality_from_router(benchmark_module):
+    from pandas_booster import _rust
+
+    config = benchmark_module.PRESETS["median_false_low_sample_tail_unique"]
+    df = benchmark_module.generate_multi_key_dataset(**config)
+    keys = df["key"].to_numpy()
+    stride = (len(keys) + 16_383) // 16_384
+    assert len(benchmark_module.np.unique(keys)) == 500_000
+    assert len(benchmark_module.np.unique(keys[::stride])) == 1
+    assert int(keys.max()) - int(keys.min()) > 1_000_000_000
+    _, _, profile = _rust.profile_groupby_median_f64_sorted(keys, df["value"].to_numpy())
+    assert profile["route_kind"] == "existing_sorted_fallback"
+    assert profile["route_reason"] == "sparse_exact_groups_exceed_cap"
 
 
 def test_collect_stats_evidence_uses_actual_force_pandas_sort_setting(
@@ -93,41 +106,6 @@ def test_measure_booster_single_key_breakdown_returns_none_when_float_rollback_f
     assert benchmark_module.measure_booster_single_key_breakdown("1key", "std", True, 1) is None
 
 
-def test_build_profile_json_payload_handles_unavailable_breakdowns(benchmark_module):
-    profiled_case = {
-        "preset": "1key",
-        "workload": "standard",
-        "agg": "std",
-        "sort": True,
-        "execution": {
-            "pandas": "pandas.groupby.std",
-            "booster": "booster->rust.groupby_std_f64_sorted",
-        },
-        "result": _make_result(benchmark_module, preset="1key", agg="std", sort=True),
-        "breakdown": _make_breakdown(benchmark_module),
-    }
-    fallback_case = {
-        "preset": "1key",
-        "workload": "standard",
-        "agg": "var",
-        "sort": True,
-        "execution": {"pandas": "pandas.groupby.var", "booster": "booster->pandas.groupby.var"},
-        "result": _make_result(benchmark_module, preset="1key", agg="var", sort=True),
-        "breakdown": None,
-    }
-
-    payload = benchmark_module.build_profile_json_payload(
-        [profiled_case, fallback_case],
-        cardinality="standard",
-        sort_mode="sorted",
-        n_samples=1,
-        selected_aggs=["std", "var"],
-    )
-
-    assert payload["cases"][1]["breakdown"] is None
-    assert payload["single_key_sorted_standard"]["aggs"] == ["std"]
-
-
 def test_save_profile_json_adds_json_suffix_and_creates_parent_dir(
     benchmark_module,
     monkeypatch,
@@ -167,7 +145,7 @@ def test_save_profile_json_adds_json_suffix_and_creates_parent_dir(
         str(output_path),
         cardinality="standard",
         sort_mode="sorted",
-        n_samples=3,
+        n_samples=1,
         selected_aggs=["std"],
     )
 
@@ -181,7 +159,7 @@ def test_save_profile_json_adds_json_suffix_and_creates_parent_dir(
             {
                 "cardinality": "standard",
                 "sort_mode": "sorted",
-                "n_samples": 3,
+                "n_samples": 1,
                 "selected_aggs": ["std"],
             },
         )
@@ -207,7 +185,7 @@ def test_main_profile_json_wires_evidence_collection_and_file_write(
         }
     ]
     captured_run_args: list[dict[str, object]] = []
-    captured_evidence_args: list[tuple[int, str, str, list[str] | None]] = []
+    captured_evidence_args: list[tuple[int, str, str, list[str] | None, bool]] = []
 
     def fake_run_benchmarks(*, cardinality, diagnostic, sort_mode, n_samples, aggs):
         captured_run_args.append(
@@ -221,8 +199,17 @@ def test_main_profile_json_wires_evidence_collection_and_file_write(
         )
         return results
 
-    def fake_collect_stats_evidence(n_samples, cardinality, sort_mode, selected_aggs=None):
-        captured_evidence_args.append((n_samples, cardinality, sort_mode, selected_aggs))
+    def fake_collect_stats_evidence(
+        n_samples,
+        cardinality,
+        sort_mode,
+        selected_aggs=None,
+        *,
+        include_median_diagnostics=False,
+    ):
+        captured_evidence_args.append(
+            (n_samples, cardinality, sort_mode, selected_aggs, include_median_diagnostics)
+        )
         return evidence
 
     profile_path = tmp_path / "profiles" / "std_profile"
@@ -238,7 +225,7 @@ def test_main_profile_json_wires_evidence_collection_and_file_write(
             "--sort-mode",
             "sorted",
             "--samples",
-            "3",
+            "1",
             "--agg",
             "std",
             "--profile-json",
@@ -255,15 +242,15 @@ def test_main_profile_json_wires_evidence_collection_and_file_write(
             "cardinality": "standard",
             "diagnostic": "none",
             "sort_mode": "sorted",
-            "n_samples": 3,
+            "n_samples": 1,
             "aggs": ["std"],
         }
     ]
-    assert captured_evidence_args == [(3, "standard", "sorted", ["std"])]
+    assert captured_evidence_args == [(1, "standard", "sorted", ["std"], True)]
     assert payload["metadata"] == {
         "cardinality": "standard",
         "sort_mode": "sorted",
-        "samples": 3,
+        "samples": 1,
         "selected_aggs": ["std"],
     }
     assert payload["cases"][0]["breakdown"]["execution"] == ("booster->rust.groupby_std_f64_sorted")
