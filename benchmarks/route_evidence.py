@@ -498,14 +498,34 @@ def create_dataset(case: dict[str, Any], directory: Path) -> dict[str, Any]:
 
 def rss() -> dict[str, int]:
     """Read Linux resident and high-water bytes (not ru_maxrss platform units)."""
+    if sys.platform != "linux":
+        raise ValueError("Linux RSS evidence unavailable: requires Linux procfs")
     values = {}
     for line in Path("/proc/self/status").read_text().splitlines():
         key, _, value = line.partition(":")
         if key in ("VmRSS", "VmHWM"):
-            values[key] = int(value.split()[0]) * 1024
+            fields = value.split()
+            if len(fields) != 2 or fields[1] != "kB" or int(fields[0]) <= 0:
+                raise ValueError("Invalid Linux RSS evidence: " + line)
+            values[key] = int(fields[0]) * 1024
     if set(values) != {"VmRSS", "VmHWM"}:
         raise ValueError("Linux RSS evidence unavailable")
     return values
+
+
+def record_rss(result: dict[str, Any], field: str, sample: str) -> None:
+    """Record memory capability errors without masking an independent work failure."""
+    result.pop(field, None)
+    try:
+        result[field] = rss()
+    except (OSError, ValueError) as error:
+        result.setdefault("memory_errors", []).append(
+            {
+                "sample": sample,
+                "field": field,
+                "error": {"type": type(error).__name__, "message": str(error)},
+            }
+        )
 
 
 def exact_equal(actual: Any, expected: Any) -> None:
@@ -599,6 +619,9 @@ def worker(request_path: Path, response_path: Path) -> None:
     result: dict[str, Any] = {"status": "failed", "stage": "startup"}
     try:
         _worker(request_path, result)
+        if result.get("memory_errors"):
+            result["stage"] = "memory_validation"
+            raise ValueError("Required Linux RSS evidence unavailable; see memory_errors")
         result.update(status="passed", stage="complete")
     except Exception as error:
         result["error"] = {"type": type(error).__name__, "message": str(error)}
@@ -619,7 +642,7 @@ def _worker(request_path: Path, result: dict[str, Any]) -> None:
 
     result["stage"] = "runtime_validation"
     identity = validate_runtime(request["runtime"], request["threads"])
-    pre_input = rss()
+    record_rss(result, "pre_input", "pre_input")
     result["stage"] = "dataset_validation"
     directory = Path(request["dataset"])
     manifest = json.loads((directory / "dataset.json").read_text())
@@ -640,7 +663,6 @@ def _worker(request_path: Path, result: dict[str, Any]) -> None:
         identity=identity,
         fingerprint=manifest["fingerprint"],
         groups=manifest["groups"],
-        pre_input=pre_input,
     )
 
     def public_call() -> Any:
@@ -657,9 +679,9 @@ def _worker(request_path: Path, result: dict[str, Any]) -> None:
         result.update(
             elapsed_s=time.perf_counter() - start,
             cpu_s=time.process_time() - cpu_start,
-            rss=rss(),
             output_groups=len(output),
         )
+        record_rss(result, "rss", "ordinary")
         result["cpu_to_wall_ratio"] = result["cpu_s"] / result["elapsed_s"]
         result["thread_saturation"] = result["cpu_to_wall_ratio"] / request["threads"]
         result["stage"] = "ordinary_output_validation"
@@ -676,7 +698,8 @@ def _worker(request_path: Path, result: dict[str, Any]) -> None:
         result["stage"] = "public_call"
         public_output = public_call()
         result["public_pipeline_s"] = time.perf_counter() - public_start
-        result.update(public_cpu_s=time.process_time() - public_cpu_start, rss=rss())
+        result["public_cpu_s"] = time.process_time() - public_cpu_start
+        record_rss(result, "rss", "public")
         result["stage"] = "public_parity"
         exact_equal(public_output, reference)
         result["parity"] = True
@@ -704,9 +727,9 @@ def _worker(request_path: Path, result: dict[str, Any]) -> None:
                 profile=profile,
                 profile_outer_s=outer,
                 profile_cpu_s=time.process_time() - cpu_start,
-                rss=rss(),
                 prepare_inputs_s=preparation_s,
             )
+            record_rss(result, "rss", "profile")
             result["stage"] = "profile_normalization"
             normalize_start = time.perf_counter()
             columns = list(out_keys)

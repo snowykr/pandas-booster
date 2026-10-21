@@ -2,18 +2,29 @@ from __future__ import annotations
 
 import json
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from . import test_route_evidence
+from . import _route_evidence_helpers, test_route_evidence
 
 driver = test_route_evidence.driver
+procfs = _route_evidence_helpers.procfs
 
 
 @pytest.fixture
-def worker_case(driver, tmp_path, monkeypatch):
+def memory_mode(request, driver, procfs, monkeypatch):
+    mode = request.param
+    if mode == "missing":
+        procfs.fail_on = {1, 2, 3}
+    else:
+        monkeypatch.setattr(driver.sys, "platform", mode)
+    return mode
+
+
+@pytest.fixture
+def worker_case(driver, tmp_path, monkeypatch, procfs):
     import numpy as np
     import pandas as pd
 
@@ -58,8 +69,9 @@ def worker_case(driver, tmp_path, monkeypatch):
     return request, rust, expected
 
 
+@pytest.mark.parametrize("memory_mode", ["linux", "missing", "win32", "darwin"], indirect=True)
 def test_profile_parity_failure_preserves_raw_profile_and_measurements(
-    driver, worker_case, tmp_path
+    driver, worker_case, tmp_path, memory_mode
 ):
     request, rust, expected = worker_case
     profile = {"route": "sort_first", "routing_s": 0.0123}
@@ -79,13 +91,23 @@ def test_profile_parity_failure_preserves_raw_profile_and_measurements(
     assert result["profile"] == profile
     for field in ("profile_outer_s", "profile_cpu_s", "public_pipeline_s", "public_cpu_s"):
         assert result[field] >= 0
-    assert result["rss"]["VmHWM"] > 0
+    if memory_mode == "linux":
+        assert result["rss"] == {"VmRSS": 100 * 1024, "VmHWM": 200 * 1024}
+        assert "memory_errors" not in result
+    else:
+        assert "rss" not in result and "pre_input" not in result
+        assert [error["sample"] for error in result["memory_errors"]] == [
+            "pre_input",
+            "public",
+            "profile",
+        ]
     assert not {"reference", "public_output", "profiled_output", "out_keys"} & result.keys()
 
 
 @pytest.mark.parametrize("kind", ["cold", "warm", "rss", "scaling"])
+@pytest.mark.parametrize("memory_mode", ["linux", "missing", "win32", "darwin"], indirect=True)
 def test_count_failure_preserves_ordinary_measurements(
-    driver, worker_case, tmp_path, monkeypatch, kind
+    driver, worker_case, tmp_path, monkeypatch, kind, memory_mode
 ):
     import pandas as pd
 
@@ -106,14 +128,20 @@ def test_count_failure_preserves_ordinary_measurements(
     assert result["output_groups"] == 0
     assert result["elapsed_s"] > 0
     assert result["cpu_s"] >= 0
-    assert result["rss"]["VmHWM"] > 0
+    if memory_mode == "linux":
+        assert result["rss"] == {"VmRSS": 100 * 1024, "VmHWM": 200 * 1024}
+        assert "memory_errors" not in result
+    else:
+        assert "rss" not in result and "pre_input" not in result
+        assert [error["sample"] for error in result["memory_errors"]] == ["pre_input", "ordinary"]
     assert "reference" not in result
 
 
 @pytest.mark.parametrize("nonzero_exit", [False, True])
 @pytest.mark.parametrize("bounded", ["full", "cases", "memory"])
+@pytest.mark.parametrize("failure_stage", ["ordinary_output_validation", "memory_validation"])
 def test_failed_partial_responses_never_enter_accepted_pairs(
-    driver, tmp_path, monkeypatch, nonzero_exit, bounded
+    driver, tmp_path, monkeypatch, nonzero_exit, bounded, failure_stage
 ):
     case = {
         "name": "primary",
@@ -144,24 +172,42 @@ def test_failed_partial_responses_never_enter_accepted_pairs(
         )
     monkeypatch.setattr(driver, "validate_acceptance", lambda *a: None)
     monkeypatch.setattr(driver, "validate_comparison", lambda *a: None)
+    monkeypatch.setattr(driver.os, "uname", lambda: ("Linux", "test", "", "", ""), raising=False)
+    monkeypatch.setattr(driver.os, "sched_getaffinity", lambda pid: {0}, raising=False)
+    read_text = Path.read_text
+
+    def read_cpuinfo(path, *args, **kwargs):
+        if path.as_posix() == "/proc/cpuinfo":
+            return "model name: Intel N100\n"
+        return read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_cpuinfo)
+    assert Path.read_text(PureWindowsPath("/proc/cpuinfo")) == "model name: Intel N100\n"
     other_case = dict(case, name="low")
     monkeypatch.setattr(driver, "case_specs", lambda *a: [case, other_case])
 
     def fail_worker(args, cwd, env):
-        driver.save(
-            Path(args[-1]),
-            {
-                "status": "failed",
-                "stage": "ordinary_output_validation",
-                "error": {"type": "ValueError", "message": "count mismatch"},
-                "elapsed_s": 1.0,
-                "cpu_s": 0.5,
-                "rss": {"VmHWM": 123},
-                "profile": {"routing_s": 0.1},
-            },
-        )
+        result = {
+            "status": "failed",
+            "stage": failure_stage,
+            "error": {"type": "ValueError", "message": "required evidence failed"},
+            "elapsed_s": 1.0,
+            "cpu_s": 0.5,
+            "profile": {"routing_s": 0.1},
+        }
+        if failure_stage == "memory_validation":
+            result["memory_errors"] = [
+                {
+                    "sample": "pre_input",
+                    "field": "pre_input",
+                    "error": {"type": "FileNotFoundError", "message": "no procfs"},
+                }
+            ]
+        else:
+            result["rss"] = {"VmHWM": 123}
+        driver.save(Path(args[-1]), result)
         if nonzero_exit:
-            raise RuntimeError("worker exited with count mismatch")
+            raise RuntimeError("worker exited with required evidence failure")
         return ""
 
     monkeypatch.setattr(driver, "command", fail_worker)
@@ -185,6 +231,9 @@ def test_failed_partial_responses_never_enter_accepted_pairs(
     assert all(
         observation["result"]["profile"] == {"routing_s": 0.1} for observation in report["raw"]
     )
+    if failure_stage == "memory_validation":
+        assert all(observation["result"]["memory_errors"] for observation in report["raw"])
+        assert all("rss" not in observation["result"] for observation in report["raw"])
     assert report["summary"] == []
     if bounded == "memory":
         assert {row["kind"] for row in report["raw"]} == {"evidence", "rss"}
