@@ -18,6 +18,14 @@ _CARGO_PATH: Final = _REPO_ROOT / "Cargo.toml"
 _PYPROJECT_PATH: Final = _REPO_ROOT / "pyproject.toml"
 _CI_WORKFLOW_PATH: Final = _REPO_ROOT / ".github" / "workflows" / "ci.yml"
 _PUBLISH_WORKFLOW_PATH: Final = _REPO_ROOT / ".github" / "workflows" / "publish.yml"
+_RUST_CI_EXPORT: Final = (
+    "uv export --locked --no-dev --no-emit-project --format requirements-txt "
+    '--output-file "$RUNNER_TEMP/rust-requirements.txt"'
+)
+_RUST_CI_INSTALL: Final = (
+    "uv pip install --system --python \"$(python -c 'import sys; print(sys.executable)')\" "
+    '--require-hashes -r "$RUNNER_TEMP/rust-requirements.txt"'
+)
 _CI_WHEEL_BUILD_JOBS: Final = (
     "build-wheel-smoke",
     "release-matrix",
@@ -114,17 +122,21 @@ def _assert_ci_wheel_job_uses_release_build(workflow_text: str, job_name: str) -
 
 def _assert_rust_ci_installs_numpy(workflow_text: str) -> None:
     job_block = _job_block(workflow_text, "rust-checks")
-    dependencies = tomllib.loads(_PYPROJECT_PATH.read_text(encoding="utf-8"))["project"][
-        "dependencies"
-    ]
-    numpy_requirement = next(
-        dependency for dependency in dependencies if dependency.startswith("numpy")
+    assert _RUST_CI_EXPORT in job_block, "rust-checks must export locked dependency hashes"
+    assert _RUST_CI_INSTALL in job_block, (
+        "rust-checks must require hashes and install into the selected standalone Python"
     )
-    install = f'run: python -m pip install "{numpy_requirement}"'
-    assert install in job_block, "rust-checks must install NumPy into the selected Python"
+    assert "python -m pip install" not in job_block, "must not bypass locked provisioning"
+    assert 'python -c "import sys, os;' in job_block, "PYO3_PYTHON must use the selected Python"
     assert "PYO3_PYTHON={sys.executable}" in job_block
     setup_position = job_block.index("uses: actions/setup-python@v5")
-    install_position = job_block.index(install)
+    uv_position = job_block.index("uses: astral-sh/setup-uv@v5")
+    export_position = job_block.index(_RUST_CI_EXPORT)
+    install_position = job_block.index(_RUST_CI_INSTALL)
+    interpreter_position = job_block.index('python -c "import sys, os;')
+    assert setup_position < uv_position < export_position < install_position, (
+        "NumPy installation must follow Python and uv setup and locked export"
+    )
     for command in (
         "cargo fmt --all -- --check",
         "cargo clippy --all-targets -- -D warnings",
@@ -134,6 +146,18 @@ def _assert_rust_ci_installs_numpy(workflow_text: str) -> None:
         assert gate in job_block, f"rust-checks must retain {command}"
         assert setup_position < install_position < job_block.index(gate), (
             "NumPy installation must follow Python setup and precede every Rust gate"
+        )
+        assert interpreter_position < job_block.index(gate), "Select PYO3_PYTHON before Rust gates"
+
+
+def _assert_ci_credential_contract(workflow_text: str) -> None:
+    header = workflow_text.split("jobs:", 1)[0]
+    assert "permissions:\n  contents: read\n" in header, "CI must restrict token permissions"
+    checkout = "uses: actions/checkout@v4"
+    assert checkout in workflow_text
+    for step in workflow_text.split(checkout)[1:]:
+        assert step.startswith("\n        with:\n          persist-credentials: false\n"), (
+            "CI checkouts must not persist credentials"
         )
 
 
@@ -230,14 +254,16 @@ def test_rust_ci_numpy_guard_rejects_missing_or_misordered_runtime(placement: st
     workflow = _CI_WORKFLOW_PATH.read_text(encoding="utf-8")
     job_block = _job_block(workflow, "rust-checks")
     install_step = (
-        "      - name: Install NumPy for embedded converter tests\n"
-        '        run: python -m pip install "numpy>=1.21.0,<3.0.0"\n\n'
+        "      - name: Install locked dependencies for embedded converter tests\n"
+        "        run: |\n"
+        f"          {_RUST_CI_EXPORT}\n"
+        f"          {_RUST_CI_INSTALL}\n\n"
     )
     assert install_step in job_block
     mutated_job = job_block.replace(install_step, "", 1)
     if placement == "before-setup":
         mutated_job = mutated_job.replace(
-            "      - name: Setup Python", install_step + "      - name: Setup Python", 1
+            "      - name: Install uv", install_step + "      - name: Install uv", 1
         )
     elif placement == "after-gate":
         mutated_job = mutated_job.replace(
@@ -251,18 +277,60 @@ def test_rust_ci_numpy_guard_rejects_missing_or_misordered_runtime(placement: st
         mutated = mutated.replace(
             other_job, other_job.replace("    steps:\n", "    steps:\n" + install_step, 1), 1
         )
-    with pytest.raises(AssertionError, match="install NumPy|installation must follow"):
+    with pytest.raises(AssertionError, match="locked dependency|installation must follow"):
         _assert_rust_ci_installs_numpy(mutated)
 
 
-def test_rust_ci_numpy_guard_rejects_a_different_installer_interpreter() -> None:
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    (
+        ("uv export --locked", "uv export --frozen", "locked dependency"),
+        ("--no-emit-project ", "", "locked dependency"),
+        ("--require-hashes ", "", "require hashes"),
+        ("--system ", "", "standalone Python"),
+        (
+            _RUST_CI_INSTALL,
+            'python -m pip install "numpy>=1.21.0,<3.0.0"',
+            "require hashes",
+        ),
+        (
+            "\"$(python -c 'import sys; print(sys.executable)')\"",
+            "python3.12",
+            "selected standalone Python",
+        ),
+    ),
+)
+def test_rust_ci_numpy_guard_rejects_unlocked_or_mismatched_runtime(
+    old: str,
+    new: str,
+    message: str,
+) -> None:
+    mutated = _mutated_file_text(_CI_WORKFLOW_PATH, old, new)
+    with pytest.raises(AssertionError, match=message):
+        _assert_rust_ci_installs_numpy(mutated)
+
+
+def test_ci_restricts_checkout_credentials_and_token_permissions() -> None:
+    _assert_ci_credential_contract(_CI_WORKFLOW_PATH.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    (
+        ("permissions:\n  contents: read\n", ""),
+        ("contents: read", "contents: write"),
+        ("          persist-credentials: false\n", ""),
+        ("persist-credentials: false", "persist-credentials: true"),
+    ),
+)
+def test_ci_credential_guard_rejects_unsafe_mutations(old: str, new: str) -> None:
     mutated = _mutated_file_text(
         _CI_WORKFLOW_PATH,
-        'python -m pip install "numpy>=1.21.0,<3.0.0"',
-        'pip install "numpy>=1.21.0,<3.0.0"',
+        old,
+        new,
     )
-    with pytest.raises(AssertionError, match="selected Python"):
-        _assert_rust_ci_installs_numpy(mutated)
+    with pytest.raises(AssertionError, match="permissions|credentials"):
+        _assert_ci_credential_contract(mutated)
 
 
 def test_ci_wheel_build_jobs_keep_release_wheel_commands() -> None:
