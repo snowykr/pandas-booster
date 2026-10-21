@@ -38,8 +38,10 @@ import statistics
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 import zipfile
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -75,9 +77,23 @@ def digest(path: Path) -> str:
 def save(path: Path, value: Any) -> None:
     """Atomically persist evidence, including adverse and incomplete results."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n")
-    temporary.replace(path)
+    temp_name = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temp_name = handle.name
+            handle.write(json.dumps(value, indent=2, allow_nan=False) + "\n")
+        os.replace(temp_name, path)
+    finally:
+        if temp_name is not None:
+            with suppress(FileNotFoundError):
+                Path(temp_name).unlink()
 
 
 def clean_env(threads: int = 1) -> dict[str, str]:
