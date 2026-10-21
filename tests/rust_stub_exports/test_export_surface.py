@@ -69,6 +69,8 @@ def test_multi_key_sorted_profile_symbols_are_registered_and_stubbed():
     expected_multi_key_sorted_exports = {
         "profile_groupby_multi_max_f64_sorted",
         "profile_groupby_multi_max_i64_sorted",
+        "profile_groupby_multi_count_f64_sorted",
+        "profile_groupby_multi_count_i64_sorted",
     }
     registered_exports = _registered_exports()
     stubbed_exports = _stubbed_exports()

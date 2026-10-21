@@ -59,16 +59,15 @@ def _profile_evidence_aggs(
 ) -> list[str]:
     evidence_aggs = resolve_stats_evidence_aggs(selected_aggs)
     selected = selected_aggs if selected_aggs is not None else []
-    should_profile_multi_key_max = (
-        "max" in selected and cardinality in {"all", "high"} and sort_mode in {"all", "sorted"}
-    )
-    if should_profile_multi_key_max and "max" not in evidence_aggs:
-        evidence_aggs.append("max")
+    if cardinality in {"all", "high"} and sort_mode in {"all", "sorted"}:
+        for agg in ("max", "count"):
+            if agg in selected and agg not in evidence_aggs:
+                evidence_aggs.append(agg)
     return evidence_aggs
 
 
 def _stats_evidence_preset_name(preset_name: str, agg: str, sort: bool) -> str:
-    if preset_name == STATS_EVIDENCE_PRESETS["high"] and agg == "max" and sort:
+    if preset_name == STATS_EVIDENCE_PRESETS["high"] and agg in {"max", "count"} and sort:
         return MULTI_KEY_SORTED_HIGH_PRESET
     return preset_name
 

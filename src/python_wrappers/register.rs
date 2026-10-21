@@ -174,6 +174,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         groupby_multi_max_f64_sorted,
         profile_groupby_multi_max_f64_sorted,
         groupby_multi_count_f64_sorted,
+        profile_groupby_multi_count_f64_sorted,
         groupby_multi_sum_i64_sorted,
         groupby_multi_prod_i64_sorted,
         groupby_multi_mean_i64_sorted,
@@ -184,6 +185,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         groupby_multi_max_i64_sorted,
         profile_groupby_multi_max_i64_sorted,
         groupby_multi_count_i64_sorted,
+        profile_groupby_multi_count_i64_sorted,
     );
 
     // Helper and ABI marker exports.

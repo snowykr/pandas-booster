@@ -1,6 +1,161 @@
 use crate::radix_sort::i64_to_sortable_u64;
 use crate::radix_sort_digit::radix_sort_perm_by_digit_par;
 
+fn checked_columnar_base(n: usize, threads: usize, k: usize) -> Result<usize, String> {
+    use crate::radix_sort_digit::checked_route_digit_workspace_bytes;
+    let threads = threads.max(1);
+    let chunk_size = (n / threads).max(1024);
+    let chunks = n / chunk_size + usize::from(!n.is_multiple_of(chunk_size));
+    let workspace = checked_route_digit_workspace_bytes(n, threads)?;
+    let extra = threads
+        .checked_add(chunks)
+        .and_then(|sum| sum.checked_add(k))
+        .and_then(|sum| sum.checked_mul(4096))
+        .and_then(|sum| sum.checked_add(65536))
+        .ok_or_else(|| "columnar route workspace overflow".to_string())?;
+    let permutations = n
+        .checked_mul(2 * std::mem::size_of::<usize>())
+        .ok_or_else(|| "columnar route workspace overflow".to_string())?;
+    check_columnar_base(permutations, workspace, extra)
+}
+
+fn check_columnar_base(permutations: usize, digits: usize, extra: usize) -> Result<usize, String> {
+    crate::radix_sort_digit::check_route_workspace(&[permutations, digits, extra])
+}
+
+fn check_columnar_packed(base: usize, packed: usize) -> Result<usize, String> {
+    crate::radix_sort_digit::check_route_workspace(&[base, packed])
+}
+
+pub(crate) struct ColumnarPermutation {
+    pub(crate) permutation: Vec<usize>,
+    // Injective packed tuple encoding in original row order. Empty for fused
+    // layouts and zero-width (all-constant) tuples; consult the proof first.
+    #[cfg(not(test))]
+    pub(crate) packed: Vec<u64>,
+    #[cfg(test)]
+    pub(crate) packed: crate::radix_sort_digit::route_allocation_test::Scratch<u64>,
+    pub(crate) proof: MultiKeySortProof,
+    pub(crate) layout_s: f64,
+    pub(crate) radix_s: f64,
+}
+
+impl std::fmt::Debug for ColumnarPermutation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ColumnarPermutation")
+            .field("permutation", &self.permutation)
+            .field("packed", &self.packed.as_slice())
+            .field("proof", &self.proof)
+            .field("layout_s", &self.layout_s)
+            .field("radix_s", &self.radix_s)
+            .finish()
+    }
+}
+
+/// Sort input rows directly from columns, without an n-by-k key copy.
+/// Layout/packing and radix timings are disjoint; ties retain input row order.
+pub(crate) fn sort_first_columnar_permutation(
+    key_slices: &[&[i64]],
+) -> Result<ColumnarPermutation, String> {
+    use crate::radix_sort_digit::{radix_sort_perm_by_digit_checked, scratch_vec as route_vec};
+    use rayon::prelude::*;
+    use std::time::Instant;
+
+    let layout_start = Instant::now();
+    let k = key_slices.len();
+    if !(2..=10).contains(&k) {
+        return Err("columnar route requires 2..=10 key columns".to_string());
+    }
+    let n = key_slices[0].len();
+    if key_slices.iter().any(|column| column.len() != n) {
+        return Err("columnar key lengths differ".to_string());
+    }
+    let threads = rayon::current_num_threads().max(1);
+    let base = checked_columnar_base(n, threads, k)?;
+
+    let mut ranges = route_vec(k)?;
+    ranges.resize(k, (0i64, 0i64));
+    ranges
+        .par_iter_mut()
+        .zip(key_slices.par_iter())
+        .for_each(|(range, column)| {
+            if !column.is_empty() {
+                *range = column.par_iter().copied().map(|key| (key, key)).reduce(
+                    || (i64::MAX, i64::MIN),
+                    |left, right| (left.0.min(right.0), left.1.max(right.1)),
+                );
+            }
+        });
+    let mut bit_widths = route_vec(k)?;
+    let mut total_bit_width = 0u32;
+    for &(min, max) in ranges.iter() {
+        let width = bit_width_for_inclusive_range(i128::from(max) - i128::from(min))
+            .ok_or_else(|| "columnar key range overflow".to_string())?;
+        total_bit_width = total_bit_width
+            .checked_add(width)
+            .ok_or_else(|| "columnar key width overflow".to_string())?;
+        bit_widths.push(width);
+    }
+    let strategy = if total_bit_width <= 64 {
+        MultiKeySortStrategy::PackedU64
+    } else {
+        MultiKeySortStrategy::FusedMultiKeyRadix
+    };
+    let mut packed = route_vec::<u64>(0)?;
+    if strategy == MultiKeySortStrategy::PackedU64 && total_bit_width != 0 {
+        let packed_bytes = n
+            .checked_mul(std::mem::size_of::<u64>())
+            .ok_or_else(|| "columnar packing workspace overflow".to_string())?;
+        check_columnar_packed(base, packed_bytes)?;
+        packed = route_vec(n)?;
+        packed.resize(n, 0);
+        packed.par_iter_mut().enumerate().for_each(|(row, slot)| {
+            let mut remaining = total_bit_width;
+            let mut key = 0u64;
+            for col in 0..k {
+                let width = bit_widths[col];
+                if width != 0 {
+                    remaining -= width;
+                    let offset =
+                        (i128::from(key_slices[col][row]) - i128::from(ranges[col].0)) as u64;
+                    key |= offset << remaining;
+                }
+            }
+            *slot = key;
+        });
+    }
+    let layout_s = layout_start.elapsed().as_secs_f64();
+    let radix_start = Instant::now();
+    let permutation = match strategy {
+        MultiKeySortStrategy::PackedU64 => radix_sort_perm_by_digit_checked(
+            n,
+            total_bit_width.div_ceil(8) as usize,
+            |row, pass| ((packed[row] >> (pass * 8)) & 255) as usize,
+        )?,
+        MultiKeySortStrategy::FusedMultiKeyRadix => {
+            radix_sort_perm_by_digit_checked(n, k * 8, |row, pass| {
+                let col = k - 1 - pass / 8;
+                ((i64_to_sortable_u64(key_slices[col][row]) >> ((pass % 8) * 8)) & 255) as usize
+            })?
+        }
+    };
+    let radix_s = radix_start.elapsed().as_secs_f64();
+    #[cfg(test)]
+    let bit_widths = bit_widths.into_vec();
+    Ok(ColumnarPermutation {
+        permutation,
+        packed,
+        proof: MultiKeySortProof {
+            strategy,
+            bit_widths,
+            total_bit_width,
+        },
+        layout_s,
+        radix_s,
+    })
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MultiKeySortProof {
     pub(crate) strategy: MultiKeySortStrategy,
@@ -261,4 +416,148 @@ fn radix_sort_perm_by_u64_significant_bits_par(keys: &[u64], significant_bits: u
     radix_sort_perm_by_digit_par(keys.len(), passes, |idx, pass| {
         ((keys[idx] >> (pass * 8)) & 0xFF) as usize
     })
+}
+
+#[cfg(test)]
+mod columnar_tests {
+    use super::{sort_first_columnar_permutation, MultiKeySortStrategy};
+
+    #[test]
+    fn columnar_base_and_packing_guards_include_exact_cap_and_reject_overflow() {
+        const K: usize = 512 * 1024 * 1024;
+        for live in [K - 1, K, K + 1] {
+            assert_eq!(
+                super::check_columnar_base(live - 30, 10, 20).is_ok(),
+                live <= K
+            );
+            assert_eq!(super::check_columnar_packed(live - 8, 8).is_ok(), live <= K);
+        }
+        assert!(super::check_columnar_base(usize::MAX, 1, 0).is_err());
+        assert!(super::check_columnar_packed(usize::MAX, 1).is_err());
+        use crate::radix_sort_digit::route_allocation_test::{with_failure, Failure};
+        let (result, snapshot) = with_failure(1, Failure::Reserve, || {
+            super::checked_columnar_base(usize::MAX, 4, 2)
+        });
+        assert!(result.is_err());
+        assert_eq!(snapshot.attempts, 0);
+    }
+
+    #[test]
+    fn columnar_allocation_failures_release_layout_packing_and_radix_scratch() {
+        use crate::radix_sort_digit::route_allocation_test::{with_failure, Failure};
+        let first: Vec<i64> = (0..4097).map(|row| row % 31).collect();
+        let second: Vec<i64> = (0..4097).map(|row| row % 7).collect();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
+        pool.install(|| {
+            let (success, snapshot) = with_failure(usize::MAX, Failure::Reserve, || {
+                sort_first_columnar_permutation(&[&first, &second]).map(drop)
+            });
+            assert!(success.is_ok());
+            assert_eq!(snapshot.live, 0);
+            for failure in [Failure::Reserve, Failure::Capacity] {
+                for at in 1..=snapshot.attempts {
+                    let (result, failed) = with_failure(at, failure, || {
+                        sort_first_columnar_permutation(&[&first, &second])
+                    });
+                    assert!(result.is_err(), "missing failure at allocation {at}");
+                    let error = result.unwrap_err();
+                    match failure {
+                        Failure::Reserve => assert!(error.contains("injected route reserve")),
+                        Failure::Capacity => assert!(error.contains("exceeded modeled capacity")),
+                    }
+                    assert_eq!(failed.attempts, at, "allocation retried after error");
+                    assert_eq!(failed.live, 0, "scratch retained after allocation {at}");
+                    if at > 1 {
+                        assert!(failed.peak > 0);
+                    }
+                }
+            }
+        });
+    }
+
+    fn check(columns: &[Vec<i64>], strategy: MultiKeySortStrategy) {
+        let slices: Vec<&[i64]> = columns.iter().map(Vec::as_slice).collect();
+        let mut expected: Vec<usize> = (0..columns[0].len()).collect();
+        expected.sort_by(|&left, &right| {
+            columns
+                .iter()
+                .map(|column| column[left])
+                .cmp(columns.iter().map(|column| column[right]))
+        });
+        for threads in [1, 2, 4] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap();
+            let actual = pool.install(|| sort_first_columnar_permutation(&slices).unwrap());
+            assert_eq!(actual.permutation, expected);
+            assert_eq!(actual.proof.strategy, strategy);
+            assert!(actual.layout_s >= 0.0 && actual.radix_s >= 0.0);
+            if strategy == MultiKeySortStrategy::PackedU64 && actual.proof.total_bit_width != 0 {
+                assert_eq!(actual.packed.len(), columns[0].len());
+                for pair in actual.permutation.windows(2) {
+                    assert_eq!(
+                        actual.packed[pair[0]] == actual.packed[pair[1]],
+                        columns.iter().all(|col| col[pair[0]] == col[pair[1]])
+                    );
+                }
+            } else {
+                assert!(actual.packed.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn packed_signed_columns_keep_equal_row_order_across_uneven_chunks() {
+        check(
+            &[
+                (0..10_003).map(|row| (row * 37 % 127) - 63).collect(),
+                (0..10_003).map(|row| (row * 11 % 31) - 15).collect(),
+            ],
+            MultiKeySortStrategy::PackedU64,
+        );
+    }
+
+    #[test]
+    fn fused_columns_cover_full_signed_range_and_duplicate_tuples() {
+        let keys = [i64::MIN, i64::MAX, -1, 0, 1];
+        check(
+            &[
+                (0..10_003).map(|row| keys[row % keys.len()]).collect(),
+                (0..10_003)
+                    .map(|row| keys[(row / 3) % keys.len()])
+                    .collect(),
+            ],
+            MultiKeySortStrategy::FusedMultiKeyRadix,
+        );
+    }
+
+    #[test]
+    fn one_full_width_column_can_pack_without_shift_by_64() {
+        check(
+            &[vec![i64::MAX, i64::MIN, 0, i64::MIN], vec![7; 4]],
+            MultiKeySortStrategy::PackedU64,
+        );
+    }
+
+    #[test]
+    fn empty_singleton_and_constant_columns_are_identity() {
+        for n in [0, 1, 10_003] {
+            let column = vec![i64::MIN; n];
+            let result = sort_first_columnar_permutation(&[&column, &column]).unwrap();
+            assert_eq!(result.permutation, (0..n).collect::<Vec<_>>());
+            assert_eq!(result.proof.total_bit_width, 0);
+            assert!(result.packed.is_empty());
+        }
+    }
+
+    #[test]
+    fn malformed_column_layout_is_rejected() {
+        assert!(sort_first_columnar_permutation(&[]).is_err());
+        assert!(sort_first_columnar_permutation(&[&[1], &[]]).is_err());
+        assert!(sort_first_columnar_permutation(&[&[] as &[i64]; 11]).is_err());
+    }
 }

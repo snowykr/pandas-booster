@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from bench_utils import BenchmarkStats
-from profile_json_multi_key import REQUIRED_MULTI_KEY_SORTED_PHASES
+from profile_json_multi_key import MULTI_KEY_ROUTE_FIELDS, REQUIRED_MULTI_KEY_SORTED_PHASES
 from runner import resolve_stats_evidence_aggs
 
 PHASE_NAMES: tuple[str, ...] = (
@@ -115,6 +115,11 @@ def summarize_profile_cases(cases: list[dict[str, Any]]) -> dict[str, Any] | Non
         "sort_key_bit_widths": first_breakdown["sort_key_bit_widths"],
         "route_kind": _collapse_route_metadata(profiled_cases, "route_kind"),
         "route_reason": _collapse_route_metadata(profiled_cases, "route_reason"),
+        **{
+            field: first_breakdown[field]
+            for field in MULTI_KEY_ROUTE_FIELDS
+            if field in first_breakdown and field != "route_reason"
+        },
         "per_agg": {
             case["agg"]: {
                 "execution": case["breakdown"]["execution"],
@@ -131,6 +136,11 @@ def summarize_profile_cases(cases: list[dict[str, Any]]) -> dict[str, Any] | Non
                 "sort_key_bit_widths": case["breakdown"]["sort_key_bit_widths"],
                 "route_kind": case["breakdown"].get("route_kind", ""),
                 "route_reason": case["breakdown"].get("route_reason", ""),
+                **{
+                    field: case["breakdown"][field]
+                    for field in MULTI_KEY_ROUTE_FIELDS
+                    if field in case["breakdown"] and field != "route_reason"
+                },
             }
             for case in profiled_cases
         },
@@ -253,6 +263,11 @@ def build_profile_json_payload(
                     "execution": breakdown["execution"],
                     "route_kind": breakdown.get("route_kind", ""),
                     "route_reason": breakdown.get("route_reason", ""),
+                    **{
+                        field: breakdown[field]
+                        for field in MULTI_KEY_ROUTE_FIELDS
+                        if field in breakdown and field != "route_reason"
+                    },
                     "phases": serialize_phase_stats(breakdown["phases"], _profile_kind(item)),
                     "phase_means": stats_mean_map(breakdown["phases"], _profile_kind(item)),
                     "rust_total_s": breakdown["rust_total_s"],

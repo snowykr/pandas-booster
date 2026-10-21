@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Hashable
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -107,7 +108,23 @@ def build_series_from_multi_result(
                 f"keys_cols[{i}] length {arr.shape[0]} != result_values length {n_groups}"
             )
         index_arrays.append(arr.astype(key_dtypes[i], copy=False))
-    idx = pd.MultiIndex.from_arrays(index_arrays, names=by_cols)
+    if (
+        index_arrays
+        and all(arr.dtype.kind in "iu" for arr in index_arrays)
+        and np.all(index_arrays[0][1:] > index_arrays[0][:-1])
+    ):
+        # The final cast first key is unique, sorted and nonmissing: no factorization needed.
+        # Pandas accepts Index/ndarray here; its stubs only model Python sequences.
+        levels: list[Any] = [pd.Index(index_arrays[0], copy=False)]
+        codes: list[Any] = [np.arange(n_groups, dtype=np.intp)]
+        for arr in index_arrays[1:]:
+            categorical = pd.Categorical(arr, ordered=False)
+            levels.append(categorical.categories)
+            codes.append(categorical.codes)
+            del categorical
+        idx = pd.MultiIndex(levels=levels, codes=codes, names=by_cols, verify_integrity=False)
+    else:
+        idx = pd.MultiIndex.from_arrays(index_arrays, names=by_cols)
 
     values_arr = np.asarray(result_values)
     if agg == "count":

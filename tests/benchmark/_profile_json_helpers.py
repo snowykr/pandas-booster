@@ -4,6 +4,7 @@ from ._report_output_helpers import _make_result
 
 REQUIRED_MULTI_KEY_SORTED_PHASES = (
     "prepare_inputs_s",
+    "routing_s",
     "hash_build_s",
     "partition_scatter_s",
     "partition_aggregation_s",
@@ -11,7 +12,8 @@ REQUIRED_MULTI_KEY_SORTED_PHASES = (
     "sort_key_construction_s",
     "radix_sort_s",
     "sorted_materialization_s",
-    "sort_first_permutation_s",
+    "sort_first_boundary_s",
+    "sort_first_setup_s",
     "sort_first_segment_scan_s",
     "conversion_s",
     "python_normalize_s",
@@ -42,6 +44,12 @@ def make_multi_key_sorted_breakdown(benchmark_module) -> dict:
     return {
         "profile_kind": "multi_key_sorted",
         "route": "hash_first",
+        "route_reason": "low_cardinality",
+        "hash_first_aggregation_count": 1,
+        "post_aggregation_sort_count": 1,
+        "distinct_lower_bound": 900,
+        "estimated_peak_bytes": 123456,
+        "rayon_threads": 4,
         "execution": "booster->rust.profile_groupby_multi_max_f64_sorted",
         "phases": dict.fromkeys(REQUIRED_MULTI_KEY_SORTED_PHASES, stats),
         "rust_total_s": 0.7,

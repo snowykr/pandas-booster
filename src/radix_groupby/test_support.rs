@@ -1,6 +1,30 @@
 use super::GroupByMultiResult;
 use crate::aggregation::Aggregator;
 
+thread_local! {
+    static PHYSICAL_OPERATIONS: std::cell::Cell<(usize, usize)> = const {
+        std::cell::Cell::new((0, 0))
+    };
+}
+
+pub(super) fn observe_hash_aggregation() {
+    PHYSICAL_OPERATIONS.with(|counts| {
+        let (hashes, sorts) = counts.get();
+        counts.set((hashes + 1, sorts));
+    });
+}
+
+pub(super) fn observe_output_sort() {
+    PHYSICAL_OPERATIONS.with(|counts| {
+        let (hashes, sorts) = counts.get();
+        counts.set((hashes, sorts + 1));
+    });
+}
+
+pub(super) fn take_physical_operations() -> (usize, usize) {
+    PHYSICAL_OPERATIONS.with(|counts| counts.replace((0, 0)))
+}
+
 #[derive(Clone, Default)]
 pub(super) struct OwnedOnlyAgg {
     values: Vec<i64>,

@@ -1,0 +1,93 @@
+{
+  "schema": "pandas-booster.issue17.oci-handoff.v1",
+  "recipient": "Keultamong",
+  "status": "OCI UNMEASURED; execution instructions, not certification",
+  "baseline_sha": "291bc4af284119fd84e5408fd411dd6b4e0171d4",
+  "candidate_source_sha": "3828bb117451b7ce52e5c80f9631e319ba258295",
+  "scope": "Real OCI hardware; native 1/2/4/8/16/32/64-worker observations and T32/T64 acceptance. Intel N100 evidence cannot substitute.",
+  "safety": [
+    "Use a fresh dedicated worktree and fresh output roots. Preserve host checkout/user changes. No force push, merge, global configuration changes or destructive cleanup.",
+    "Do not inspect, print, copy or publish credentials. Ordinary configured authentication only when separately authorized.",
+    "Run measurement batches sequentially, without builds/tests/other benchmark batches competing for CPU or memory.",
+    "Verify genuine OCI identity and at least 64 available hardware threads/CPU affinity and adequate cgroup CPU/memory limits before claiming 64-thread evidence. Setting RAYON_NUM_THREADS alone is not host attestation.",
+    "Record actual OS, architecture, CPU/topology, affinity/cgroup limits, Python and Rust identities. Preserve all raw reports, failed workers and interrupted checkpoints. Do not reuse output names or select only passing repetitions."
+  ],
+  "inputs": {
+    "dependency_and_cargo_locks_archive": "benchmarks/evidence/issue17-n100-raw.tar.gz",
+    "archive_sha256": "e0c6624ae3c57e9c6edad88035715cd1ff7f658680e4c90f1a7e9d680a9bc697",
+    "dependency_lock_member": "locks/issue17-runtime.lock",
+    "cargo_lock_member": "locks/Cargo.lock",
+    "cargo_lock_sha256": "c9da7e4fdb548b4377ba3b987385ff2d770715ce5ede9fa50d0de3e7fb91c4dc",
+    "n100_reference_toolchain": "CPython 3.11.15, rustc/cargo 1.94.1; record actual OCI identities and require exact baseline/candidate interpreter/toolchain equality on that host",
+    "dependency_versions": "maturin 1.13.0, numpy 2.4.6, pandas 2.3.3, plus the unchanged hash-locked transitive inventory"
+  },
+  "host_receipt_shell_after_preparation": [
+    "uname -a > \"$ROOT/host-uname.txt\"",
+    "lscpu --json > \"$ROOT/host-lscpu.json\"",
+    ".venv/bin/python -c 'import json,os,platform; a=sorted(os.sched_getaffinity(0)); assert len(a)>=64, \"Insufficient available threads\"; print(json.dumps({\"platform\":platform.platform(),\"machine\":platform.machine(),\"cpu_count\":os.cpu_count(),\"affinity\":a}))' > \"$ROOT/host-affinity.json\"",
+    ".venv/bin/python -c 'import json,pathlib; names=[\"/proc/self/cgroup\",\"/sys/fs/cgroup/cpu.max\",\"/sys/fs/cgroup/cpuset.cpus.effective\",\"/sys/fs/cgroup/memory.max\"]; print(json.dumps({n:pathlib.Path(n).read_text() if pathlib.Path(n).is_file() else None for n in names}))' > \"$ROOT/host-cgroup.json\"",
+    "rustc -Vv > \"$ROOT/host-rustc.txt\"",
+    "cargo -V > \"$ROOT/host-cargo.txt\""
+  ],
+  "host_attestation_note": "Obtain a separately redacted OCI instance/shape attestation; inspect the current cgroup path and verify its effective quota, not only the mount-root values. Do not collect metadata credentials or user-data.",
+  "preparation_shell": [
+    "set -euo pipefail",
+    "ROOT=$(mktemp -d /tmp/issue17-oci.XXXXXX)",
+    "git worktree add --detach \"$ROOT/checkout\" 3828bb117451b7ce52e5c80f9631e319ba258295",
+    "mkdir \"$ROOT/original\" \"$ROOT/reports\"",
+    "uv run --no-project --python 3.11.15 python -I -c 'import hashlib,pathlib,sys; assert hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest()==\"e0c6624ae3c57e9c6edad88035715cd1ff7f658680e4c90f1a7e9d680a9bc697\", \"Evidence archive hash mismatch\"' \"$ROOT/checkout/benchmarks/evidence/issue17-n100-raw.tar.gz\"",
+    "tar -xzf \"$ROOT/checkout/benchmarks/evidence/issue17-n100-raw.tar.gz\" -C \"$ROOT/original\"",
+    "cd \"$ROOT/checkout\"",
+    "uv sync --locked --python 3.11.15 --extra bench --extra dev --no-install-project",
+    ".venv/bin/python benchmarks/route_evidence.py prepare --repo . --sha 291bc4af284119fd84e5408fd411dd6b4e0171d4 --lock \"$ROOT/original/locks/issue17-runtime.lock\" --cargo-lock \"$ROOT/original/locks/Cargo.lock\" --root \"$ROOT/base-acceptance\"",
+    ".venv/bin/python benchmarks/route_evidence.py prepare --repo . --sha 3828bb117451b7ce52e5c80f9631e319ba258295 --lock \"$ROOT/original/locks/issue17-runtime.lock\" --cargo-lock \"$ROOT/original/locks/Cargo.lock\" --root \"$ROOT/new-acceptance\""
+  ],
+  "collection_shell_in_order": [
+    ".venv/bin/python benchmarks/route_evidence.py run --baseline \"$ROOT/base-acceptance/runtime.json\" --candidate \"$ROOT/new-acceptance/runtime.json\" --host oci --threads 1 2 --cases primary --output \"$ROOT/reports/oci-primary-t1-t2.json\"",
+    ".venv/bin/python benchmarks/route_evidence.py run --baseline \"$ROOT/base-acceptance/runtime.json\" --candidate \"$ROOT/new-acceptance/runtime.json\" --host oci --threads 4 8 16 --cases primary --output \"$ROOT/reports/oci-primary-t4-t16.json\"",
+    ".venv/bin/python benchmarks/route_evidence.py run --baseline \"$ROOT/base-acceptance/runtime.json\" --candidate \"$ROOT/new-acceptance/runtime.json\" --host oci --threads 32 64 --cases primary --output \"$ROOT/reports/oci-primary-t32-t64.json\"",
+    ".venv/bin/python benchmarks/route_evidence.py run --baseline \"$ROOT/base-acceptance/runtime.json\" --candidate \"$ROOT/new-acceptance/runtime.json\" --host oci --threads 32 --cases low ordinary unsorted --output \"$ROOT/reports/oci-controls-t32.json\"",
+    ".venv/bin/python benchmarks/route_evidence.py run --baseline \"$ROOT/base-acceptance/runtime.json\" --candidate \"$ROOT/new-acceptance/runtime.json\" --host oci --threads 64 --cases low ordinary unsorted --output \"$ROOT/reports/oci-controls-t64.json\"",
+    ".venv/bin/python benchmarks/route_evidence.py run --baseline \"$ROOT/base-acceptance/runtime.json\" --candidate \"$ROOT/new-acceptance/runtime.json\" --host oci --threads 32 --cases packed2 packed10 fused3 --output \"$ROOT/reports/oci-domains-t32.json\"",
+    ".venv/bin/python benchmarks/route_evidence.py run --baseline \"$ROOT/base-acceptance/runtime.json\" --candidate \"$ROOT/new-acceptance/runtime.json\" --host oci --threads 64 --cases packed2 packed10 fused3 --output \"$ROOT/reports/oci-domains-t64.json\"",
+    ".venv/bin/python benchmarks/route_evidence.py run --baseline \"$ROOT/base-acceptance/runtime.json\" --candidate \"$ROOT/new-acceptance/runtime.json\" --host oci --threads 1 32 64 --memory-only --output \"$ROOT/reports/oci-memory.json\""
+  ],
+  "collection_boundaries": [
+    "These are bounded subsets rather than one monolithic run. Their DRAFT/incomplete-matrix labels must remain unchanged; review the candidate-bound union without relabeling any individual report as complete certification.",
+    "Each OCI non-memory primary subset also automatically collects 40 paired T1/T32 third-call scaling samples. Prespecify oci-primary-t1-t2.json as the first scaling report; retain and review all later automatically repeated scaling observations, including adverse ones. Never choose a passing repetition after seeing results.",
+    "The full memory-only command additionally collects actual refused 5m-row ten-key diagnostics at T1/T64. The 512 MiB route payload limit is not a process/fallback cap.",
+    "Use explicit per-job wall budgets and retained checkpoints. If a host cannot finish a subset in its budget, preserve it as interrupted; do not overwrite it or present partial samples as 40 pairs.",
+    "Baseline count profile exports do not exist. Independent audit below supplies physical-operation evidence, not fabricated baseline phase timings. Unsorted allocator/model bounds remain unknown and must not be replaced with sorted diagnostics."
+  ],
+  "independent_audit_shell": [
+    ".venv/bin/python benchmarks/operation_audit.py prepare --repo . --sha 291bc4af284119fd84e5408fd411dd6b4e0171d4 --lock \"$ROOT/original/locks/issue17-runtime.lock\" --cargo-lock \"$ROOT/original/locks/Cargo.lock\" --root \"$ROOT/base-audit\"",
+    ".venv/bin/python benchmarks/operation_audit.py prepare --repo . --sha 3828bb117451b7ce52e5c80f9631e319ba258295 --lock \"$ROOT/original/locks/issue17-runtime.lock\" --cargo-lock \"$ROOT/original/locks/Cargo.lock\" --root \"$ROOT/new-audit\"",
+    ".venv/bin/python benchmarks/operation_audit.py run --baseline \"$ROOT/base-audit/runtime.json\" --candidate \"$ROOT/new-audit/runtime.json\" --output \"$ROOT/reports/oci-operation-audit-t32.json\" --threads 32 --rows 5000000",
+    ".venv/bin/python benchmarks/operation_audit.py run --baseline \"$ROOT/base-audit/runtime.json\" --candidate \"$ROOT/new-audit/runtime.json\" --output \"$ROOT/reports/oci-operation-audit-t64.json\" --threads 64 --rows 5000000"
+  ],
+  "audit_boundary": "Audit-only wheels/overlays must never enter timing, RSS or scaling comparisons. Audit uses exact primary key generation with NaNs deliberately added every 97 float rows; expect 5,000,000 rows / 4,901,309 groups and matching key-byte fingerprints. Require baseline physical hash/output-sort positives, candidate admitted zeros with positive sort-first observation, and public-u32/native-u64 appearance-order parity. Bounded native-u64 is not >2**32-row validation.",
+  "unchanged_gates": {
+    "pairs": "40 adjacent alternating AB/BA fresh-process pairs per case/reducer/cold-or-warm/thread cell; never pool revisions or exploratory pairs",
+    "bootstrap": "10000 paired draws, seed42, ratio of medians, one-sided nearest-rank U95",
+    "primary": "T32 AND T64 max/count warm ratio <=0.90 AND U95<1.00; cold U95<=1.05",
+    "control": "T32 AND T64 low/ordinary/unsorted max/count cold and warm U95<=1.05",
+    "domain": "Preserve existing driver distinction: T32 packed2/packed10/fused3 max/count cold/warm U95<=1.05; T64 domain observations retained but driver does not enforce a domain-T64 threshold",
+    "scaling": "40 paired candidate T1/T32 third-call warm measurements for max and count; U95<1.00 for T32/T1 ratio",
+    "memory": "Every isolated candidate worker must satisfy min(pre_input_RSS + normalized_inputs + admitted modeled_peak + 128MiB + 8MiB*threads, 1.10*baseline_median_HWM + 32MiB); modeled admitted route payload<=512MiB and bitmap<=64MiB. Preserve unknown unsorted model as a gap.",
+    "extra_conservative_local_check": "N100 additionally reports warm U95<=0.90; this is not a rewritten binding historical gate"
+  },
+  "return_receipt": [
+    "Exact baseline/candidate source SHAs, wheel/extension hashes, dependency/Cargo locks, complete nonempty build transcripts and interpreter/toolchain/host identities.",
+    "All raw requests/responses, reports, driver snapshots, dataset manifests/hashes, observer overlays and provenance; preserve failed/interrupted/adverse observations.",
+    "Actual per-cell ratios/U95, medians, cold/warm samples, CPU/wall scaling and per-worker RSS/headroom; unresolved diagnostic gaps remain explicit.",
+    "No merge or issue17 closure. Coordinator owns the operational Parang request after local review/publication."
+  ],
+  "optional_mac_authorization": {
+    "host": "snowymac14",
+    "used_by_this_lane": false,
+    "reason": "Additional Mac evidence is unnecessary: repaired N100 T4 primary/control/domain gates pass, and Mac cannot address missing OCI 32/64-thread certification.",
+    "scope": "Snowy's immediately preceding grant is current-task/opportunity-only, not standing permission. No remote run or recurring job was launched/scheduled by this lane; no Mac result branch exists.",
+    "future_boundary": "Fresh occasions require fresh explicit authorization; necessity alone never grants execution. Any separately authorized Mac evidence must use a dedicated worktree and a separate develop-based results branch, never develop or PR20. Do not inspect credential contents.",
+    "verification": "Lane tool-command history and background-job inventory checked; jobs are local route_evidence runs. Existing unrelated ssh processes were observed by PID/parent/elapsed/command-name only, without arguments or credentials; they were not launched or modified by this lane."
+  }
+}

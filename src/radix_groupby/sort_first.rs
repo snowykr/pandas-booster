@@ -1,15 +1,207 @@
 #[cfg(test)]
 use std::cmp::Ordering;
-#[cfg(test)]
 use std::time::Instant;
 
-#[cfg(test)]
-use crate::aggregation::{Aggregator, CountAggI64, MaxAggF64, MinAggF64, SumAggF64};
+use super::result::GroupByMultiResult;
+use super::sort_first_routing::{checked_route_vec, memory_budget};
+use crate::aggregation::Aggregator;
+use crate::radix_sort_multi_key::{
+    sort_first_columnar_permutation, ColumnarPermutation, MultiKeySortProof, MultiKeySortStrategy,
+};
+use rayon::prelude::*;
 
 #[cfg(test)]
-use super::result::GroupByMultiResult;
+use crate::aggregation::{CountAggI64, MaxAggF64, MinAggF64, SumAggF64};
+
 #[cfg(test)]
 use super::sort_first_routing::MAX_KEY_COLUMNS;
+
+#[derive(Debug, Clone, Default)]
+pub(super) struct ProductionSortFirstTimings {
+    pub layout_s: f64,
+    pub radix_s: f64,
+    pub boundary_discovery_s: f64,
+    pub starts_setup_s: f64,
+    pub reduction_emission_s: f64,
+}
+
+// This is independent of the comparison-sort test prototype below. The radix
+// permutation is stable, and each accumulator owns an entire group: no merge
+// can change NaN or first-equal-maximum (signed zero) semantics.
+pub(super) fn production_sort_first_groupby<T, A, O>(
+    key_slices: &[&[i64]],
+    values: &[T],
+) -> Result<
+    (
+        GroupByMultiResult<O>,
+        SortFirstDiagnostics,
+        ProductionSortFirstTimings,
+        MultiKeySortProof,
+    ),
+    String,
+>
+where
+    T: Copy + Send + Sync,
+    O: Copy + Send + Sync,
+    A: Aggregator<T, O>,
+{
+    let budget = memory_budget(values.len(), key_slices.len())
+        .map_err(|reason| format!("sort-first resource refusal: {reason:?}"))?;
+    let ColumnarPermutation {
+        permutation,
+        packed,
+        proof,
+        layout_s,
+        radix_s,
+    } = sort_first_columnar_permutation(key_slices)?;
+    let n = permutation.len();
+    #[cfg(test)]
+    super::sort_first_routing::observe_scratch(
+        "radix_returned",
+        permutation.capacity() * std::mem::size_of::<usize>()
+            + packed.capacity() * std::mem::size_of::<u64>(),
+    );
+    let mut timings = ProductionSortFirstTimings {
+        layout_s,
+        radix_s,
+        ..Default::default()
+    };
+    let clock = Instant::now();
+    let mut flags = checked_route_vec::<u8>(n)?;
+    flags.resize(n, 0);
+    #[cfg(test)]
+    super::sort_first_routing::observe_scratch(
+        "boundary_live",
+        permutation.capacity() * std::mem::size_of::<usize>()
+            + packed.capacity() * std::mem::size_of::<u64>()
+            + flags.capacity(),
+    );
+    match proof.strategy {
+        MultiKeySortStrategy::PackedU64 if proof.total_bit_width == 0 => {
+            // No packed allocation exists for constant tuples.
+            if let Some(first) = flags.first_mut() {
+                *first = 1;
+            }
+        }
+        MultiKeySortStrategy::PackedU64 => {
+            flags.par_iter_mut().enumerate().for_each(|(idx, flag)| {
+                *flag =
+                    u8::from(idx == 0 || packed[permutation[idx - 1]] != packed[permutation[idx]]);
+            });
+        }
+        MultiKeySortStrategy::FusedMultiKeyRadix => {
+            flags.par_iter_mut().enumerate().for_each(|(idx, flag)| {
+                *flag = u8::from(
+                    idx == 0
+                        || !key_slices
+                            .iter()
+                            .all(|col| col[permutation[idx - 1]] == col[permutation[idx]]),
+                );
+            });
+        }
+    }
+    // Packed keys never overlap counts, starts, or reduction/output storage.
+    drop(packed);
+    #[cfg(test)]
+    super::sort_first_routing::observe_scratch(
+        "packed_released",
+        permutation.capacity() * std::mem::size_of::<usize>() + flags.capacity(),
+    );
+    timings.boundary_discovery_s = clock.elapsed().as_secs_f64();
+    let clock = Instant::now();
+    let mut counts = checked_route_vec::<usize>(budget.chunks)?;
+    counts.resize(budget.chunks, 0);
+    counts
+        .par_iter_mut()
+        .zip(flags.par_chunks(budget.chunk_size))
+        .for_each(|(count, block)| *count = block.iter().map(|flag| *flag as usize).sum());
+    let groups = counts
+        .iter()
+        .try_fold(0usize, |sum, count| sum.checked_add(*count))
+        .ok_or("sort-first group count overflow")?;
+    let mut starts =
+        checked_route_vec::<usize>(groups.checked_add(1).ok_or("sort-first starts overflow")?)?;
+    starts.resize(groups + 1, n);
+    #[cfg(test)]
+    super::sort_first_routing::observe_scratch(
+        "starts_live",
+        (permutation.capacity() + counts.capacity() + starts.capacity())
+            * std::mem::size_of::<usize>()
+            + flags.capacity(),
+    );
+    rayon::scope(|scope| {
+        let mut remaining = &mut starts[..groups];
+        for (block_idx, (block, count)) in flags.chunks(budget.chunk_size).zip(&counts).enumerate()
+        {
+            let (destination, rest) = remaining.split_at_mut(*count);
+            remaining = rest;
+            scope.spawn(move |_| {
+                for (slot, (offset, _)) in destination
+                    .iter_mut()
+                    .zip(block.iter().enumerate().filter(|(_, flag)| **flag != 0))
+                {
+                    *slot = block_idx * budget.chunk_size + offset;
+                }
+            });
+        }
+    });
+    drop(counts);
+    drop(flags);
+    #[cfg(test)]
+    super::sort_first_routing::observe_scratch(
+        "boundary_released",
+        (permutation.capacity() + starts.capacity()) * std::mem::size_of::<usize>(),
+    );
+    timings.starts_setup_s = clock.elapsed().as_secs_f64();
+    let clock = Instant::now();
+    let k = key_slices.len();
+    let key_len = groups
+        .checked_mul(k)
+        .ok_or("sort-first output size overflow")?;
+    let mut keys_flat = checked_route_vec::<i64>(key_len)?;
+    keys_flat.resize(key_len, 0);
+    let mut out_values = checked_route_vec::<O>(groups)?;
+    if let Some(&value) = values.first() {
+        let mut initial = A::init();
+        initial.update(value);
+        out_values.resize(groups, initial.finalize_owned());
+    }
+    keys_flat
+        .par_chunks_mut(k)
+        .zip(out_values.par_iter_mut())
+        .enumerate()
+        .for_each(|(group, (keys, output))| {
+            let first = permutation[starts[group]];
+            for (slot, col) in keys.iter_mut().zip(key_slices) {
+                *slot = col[first];
+            }
+            let mut accumulator = A::init();
+            for row in &permutation[starts[group]..starts[group + 1]] {
+                accumulator.update(values[*row]);
+            }
+            *output = accumulator.finalize_owned();
+        });
+    drop(starts);
+    drop(permutation);
+    #[cfg(test)]
+    super::sort_first_routing::observe_scratch("conversion_ready", 0);
+    timings.reduction_emission_s = clock.elapsed().as_secs_f64();
+    Ok((
+        GroupByMultiResult {
+            keys_flat,
+            n_keys: k,
+            values: out_values,
+            perm: None,
+        },
+        SortFirstDiagnostics {
+            lexicographic_permutation_built: true,
+            segment_scan_count: 1,
+            post_aggregation_sort_count: 0,
+        },
+        timings,
+        proof,
+    ))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct SortFirstDiagnostics {

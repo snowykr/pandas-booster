@@ -57,6 +57,17 @@ def test_build_profile_json_payload_exposes_multi_key_sorted_profile_section(
     assert case_breakdown["selected_sort_strategy"] == "packed_u64"
     assert case_breakdown["sort_key_bit_widths"] == [9, 9, 9]
     assert payload["metadata"]["selected_aggs"] == ["max"]
+    for metadata in (
+        case_breakdown,
+        payload["multi_key_sorted_high"],
+        payload["multi_key_sorted_high"]["per_agg"]["max"],
+    ):
+        assert metadata["route_reason"] == "low_cardinality"
+        assert metadata["hash_first_aggregation_count"] == 1
+        assert metadata["post_aggregation_sort_count"] == 1
+        assert metadata["distinct_lower_bound"] == 900
+        assert metadata["estimated_peak_bytes"] == 123456
+        assert metadata["rayon_threads"] == 4
 
 
 def test_mixed_profiles_preserve_kind_specific_phases_through_json(benchmark_module):
@@ -188,9 +199,11 @@ def test_build_profile_json_payload_requires_explicit_sort_strategy_evidence(
         )
 
 
-def test_collect_stats_evidence_requests_multi_key_sorted_profile_for_high_max(
+@pytest.mark.parametrize("agg", ["max", "count"])
+def test_collect_stats_evidence_requests_multi_key_sorted_profile_for_high_reducer(
     benchmark_module,
     monkeypatch,
+    agg,
 ):
     breakdown_requests: list[tuple[str, str, bool, int]] = []
 
@@ -206,18 +219,18 @@ def test_collect_stats_evidence_requests_multi_key_sorted_profile_for_high_max(
         key_columns = {col_name: [0, 1, 2] for col_name, _cardinality in kwargs["key_configs"]}
         return benchmark_module.pd.DataFrame({**key_columns, "value": [1.0, 2.0, 3.0]})
 
-    def fake_describe_booster_execution(_df, key_cols, _value_col, agg, sort):
+    def fake_describe_booster_execution(_df, key_cols, _value_col, requested_agg, sort):
         assert key_cols == ["k1", "k2", "k3"], (
             "missing multi-key sorted profile collection contract: "
             "high cardinality profile evidence must inspect the 3-key preset"
         )
-        assert agg == "max"
+        assert requested_agg == agg
         assert sort is True
-        return "booster->rust.groupby_multi_max_f64_sorted"
+        return f"booster->rust.groupby_multi_{agg}_f64_sorted"
 
-    def fake_measure_breakdown(preset_name, agg, sort, n_samples):
-        breakdown_requests.append((preset_name, agg, sort, n_samples))
-        if (preset_name, agg, sort) != ("high_cardinality_3key", "max", True):
+    def fake_measure_breakdown(preset_name, requested_agg, sort, n_samples):
+        breakdown_requests.append((preset_name, requested_agg, sort, n_samples))
+        if (preset_name, requested_agg, sort) != ("high_cardinality_3key", agg, True):
             return None
         return make_multi_key_sorted_breakdown(benchmark_module)
 
@@ -238,10 +251,10 @@ def test_collect_stats_evidence_requests_multi_key_sorted_profile_for_high_max(
         n_samples=1,
         cardinality="high",
         sort_mode="sorted",
-        selected_aggs=["max"],
+        selected_aggs=[agg],
     )
 
-    assert breakdown_requests == [("high_cardinality_3key", "max", True, 1)], (
+    assert breakdown_requests == [("high_cardinality_3key", agg, True, 1)], (
         "missing multi-key sorted profile collection contract: "
         "collect_stats_evidence must request high_cardinality_3key/max/sort=True breakdown"
     )
