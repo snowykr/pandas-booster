@@ -1,0 +1,127 @@
+{
+  "schema": "pandas-booster.issue17.local-acceptance.v1",
+  "status": "Four original criteria supported by archived local evidence in the observed domain; not expanded certification or merge readiness",
+  "certified": false,
+  "merge_authorized": false,
+  "issue_closure_authorized": false,
+  "scope": "Retrospective accounting only. No product changes, new benchmark observations, remote access or remote compute. Existing DRAFT reports, unmet gates, failures and thresholds remain unchanged.",
+  "original_issue": "https://github.com/snowykr/pandas-booster/issues/17",
+  "pr20": {
+    "url": "https://github.com/snowykr/pandas-booster/pull/20",
+    "observed_state": "OPEN",
+    "base_sha": "291bc4af284119fd84e5408fd411dd6b4e0171d4",
+    "head_sha": "0f6a78d34874f3b8cd6dc71e8cd5c7286aa88dd3"
+  },
+  "source_equivalence": {
+    "baseline_sha": "291bc4af284119fd84e5408fd411dd6b4e0171d4",
+    "measured_candidate_sha": "3828bb117451b7ce52e5c80f9631e319ba258295",
+    "reviewed_pr20_sha": "0f6a78d34874f3b8cd6dc71e8cd5c7286aa88dd3",
+    "identical_src_tree": "3741df1d741bb935984117bd4276fec0dc5a0c4b",
+    "identical_python_tree": "7428f6f48965209b425068c17e776df8086110f7",
+    "verification": "git rev-parse <measured>:src <measured>:python <pr20>:src <pr20>:python; git diff <measured> <pr20> -- src python (empty); git diff <pr20> -- src python (empty in this follow-up worktree)",
+    "boundary": "Point-in-time src/python source equivalence only, not whole-commit, build, wheel, toolchain or binary equivalence. Archived measurements belong to the measured revision and recorded runtime identities; no current-checkout benchmark is claimed. Future product edits require their own assessment."
+  },
+  "provenance": {
+    "recovery_summary": {
+      "path": "benchmarks/evidence/issue17-recovery-summary.json",
+      "sha256": "323f99c21fa36fd495cebb00b2721b32b796a3598f29653704c1f0de2051792c"
+    },
+    "historical_summary": {
+      "path": "benchmarks/evidence/issue17-n100-summary.json",
+      "sha256": "35274a0df258cecb95ffba5628d5209dad8c65da53dfa4bd417d20fd38d25358"
+    },
+    "recovery_archive": {
+      "path": "benchmarks/evidence/issue17-recovery-raw.tar.xz",
+      "sha256": "6c3decca70f16afe9ff608a30573873699ee8fd14e6a61e3542e290d9ae021f7"
+    },
+    "historical_archive": {
+      "path": "benchmarks/evidence/issue17-n100-raw.tar.gz",
+      "sha256": "e0c6624ae3c57e9c6edad88035715cd1ff7f658680e4c90f1a7e9d680a9bc697"
+    },
+    "validated_recovery_members": [
+      "recovery/sampler-primary-t1.json",
+      "recovery/sampler-primary-t2.json",
+      "recovery/sampler-primary-t4.json",
+      "recovery/sampler-controls-t4.json",
+      "recovery/sampler-unsorted-t4.json",
+      "recovery/sampler-domains-t4.json",
+      "recovery/sampler-memory-t1.json",
+      "recovery/operation-audit-3828bb1-t1.json",
+      "recovery/operation-audit-3828bb1-t4.json"
+    ],
+    "verification_boundary": "Focused tests hash both summaries and both archives, check these nine unique member hashes against the pinned recovery summary, and cross-check referenced identities, phase fields, parity, operation events and timing summaries. They do not rebuild wheels, rerun historical tests, all bootstraps or benchmarks, or certify every archive payload. Compiled binaries and large input arrays are not embedded in the archives; see recovery archive omissions."
+  },
+  "observed_domain": {
+    "host": "Intel N100, local Linux x86_64; not OCI evidence",
+    "rayon_threads": [1, 2, 4],
+    "primary": "RandomState seed42, 5000000 rows, three int64 keys of cardinality500 each, float64 values, sort=True, 4901309 output groups",
+    "reducers": ["max", "count"],
+    "other_cases": ["low", "ordinary", "unsorted", "packed2", "packed10", "fused3"],
+    "boundary": "Observed public-call parity, recorded focused/full historical tests, and bounded native-u64 audits support semantics in tested domains, not all Pandas inputs or >2**32 rows."
+  },
+  "original_acceptance": [
+    {
+      "id": "phase_attribution",
+      "requirement": "Multi-key sorted phase profiling can attribute the time for high_cardinality_3key, sort=True, max across Rust and Python phases.",
+      "status": "supported_locally",
+      "evidence": "recovery/sampler-primary-t4.json: raw kind=evidence, agg=max, roles=baseline/candidate; each includes profile, prepare_inputs_s, python_normalize_s, pandas_index_construction_s, profile_pipeline_s and ordinary public_pipeline_s",
+      "boundary": "Diagnostic profile/index reconstruction is separate from ordinary-call performance. The primary generic index builder matches this construction, unlike the optimized unique-first domain. Inclusive sort_first_permutation_s overlaps key construction/radix sorting and is not added to disjoint leaves. Baseline count phase timings are unavailable and are not needed for this max criterion."
+    },
+    {
+      "id": "sort_first_route",
+      "requirement": "A high-cardinality sorted multi-key route avoids the hash-first-then-sort-output pattern when groups / rows is near 1.0.",
+      "status": "supported_locally",
+      "evidence": "Six primary candidate profiles at T1/T2/T4: sort_first, hash_first_aggregation_count=0, post_aggregation_sort_count=0. Independent audit-only T1/T4 ordinary sorted count calls for float64/int64: sort_first=1, hash_vectors=0, hash_maps=0, output_sort=0; baseline controls use hash maps and output sort.",
+      "boundary": "Physical audit events are operation evidence, not acceptance-purpose timings or phase durations. The route remains bounded; refusals retain hash fallback. No claim that every aggregation or high-cardinality input is admitted."
+    },
+    {
+      "id": "pandas_semantics",
+      "requirement": "The fix preserves Pandas semantics for sorted multi-key groupby output ordering and dtype/index construction.",
+      "status": "supported_locally",
+      "evidence": "All 26 recovery candidate profile/parity observations have public_parity=true; both independent audit reports contain 20 exact-parity observations each. Recovery verification records 1058 passed final-wheel nonstress tests, with one intentional skip and four stress deselections; these are historical results, not rerun by this accounting follow-up.",
+      "boundary": "Exact parity checks include values, dtype, names, index type and signed zeros. Test coverage and measured domains, not universal compatibility. Unsorted analytical memory certification is unrelated to this sorted-output semantics criterion."
+    },
+    {
+      "id": "plateau_improvement",
+      "requirement": "Benchmarks show improvement for sorted high-cardinality 3-key max and at least one adjacent aggregation, confirming the plateau moved rather than only a single aggregator changed.",
+      "status": "supported_locally",
+      "evidence": "Archived primary max and adjacent count ordinary public-call comparisons at T1/T2/T4; T4 cold/warm observations below. Forty adjacent alternating AB/BA pairs per cell, matching interpreter/toolchain/dependencies, paired nearest-rank one-sided U95, seed42 and 10000 bootstrap draws as recorded in recovery evidence.",
+      "boundary": "Original criterion specifies neither OCI hardware nor a numerical improvement threshold. The later unchanged local T4 thresholds also pass, but this does not certify OCI or an expanded full-matrix run."
+    }
+  ],
+  "primary_t4_performance": [
+    {"agg": "max", "mode": "cold", "pairs": 40, "baseline_median_s": 0.9545603694859892, "candidate_median_s": 0.7918790124822408, "ratio": 0.8295745746375905, "u95": 0.8396185655203626},
+    {"agg": "max", "mode": "warm", "pairs": 40, "baseline_median_s": 0.9404356949962676, "candidate_median_s": 0.7939186380244792, "ratio": 0.8442030031916538, "u95": 0.8561162629735787},
+    {"agg": "count", "mode": "cold", "pairs": 40, "baseline_median_s": 0.9403977670008317, "candidate_median_s": 0.7858601245097816, "ratio": 0.8356677908924539, "u95": 0.8563719376637804},
+    {"agg": "count", "mode": "warm", "pairs": 40, "baseline_median_s": 0.9314508024835959, "candidate_median_s": 0.7896087614935823, "ratio": 0.8477192347552767, "u95": 0.8577349028836255}
+  ],
+  "expanded_goals_not_original_requirements": {
+    "local_performance_thresholds": {
+      "primary_T4_warm": "ratio<=0.90 AND U95<1.00",
+      "primary_T4_cold_and_control_domain": "U95<=1.05",
+      "supplementary": "primary warm U95<=0.90; separate, not the historical binding gate",
+      "status": "All 36 recovery timing cells retained; T4 binding primary/control/domain gates pass. T1/T2 primary cells are descriptive, not binding passes."
+    },
+    "memory": {
+      "sorted_full_envelope_cells_passed": 26,
+      "unsorted_measured_regression_cells_passed": 4,
+      "workers_per_candidate_cell": 10,
+      "unsorted_allocator_live_payload_model": "UNKNOWN",
+      "unsorted_full_envelope_pass": null,
+      "unsorted_analytical_limit_bytes": null,
+      "inventory": [
+        "Row hashes and stable partition scatter buffers",
+        "Parallel per-partition hash maps with unobserved capacities, accumulator and first-seen vectors",
+        "Overlapping partition outputs, flattened keys/values and first-seen buffers",
+        "Appearance-order reordering/permutation scratch and NumPy/Pandas construction"
+      ],
+      "reason_not_implemented": "A descriptive inventory is feasible, but archived RSS and operation counts do not establish capacities, concurrent live allocation peaks or allocator overhead across these phases. A numeric allocator/live-payload bound would need separately justified modeling/instrumentation; substituting the sorted admission budget would be invalid. No runtime change or new campaign is justified for the four original criteria.",
+      "boundary": "Sorted model is a route-payload admission estimate, not an allocator/fallback/whole-process cap. Unsorted measured-regression success cannot establish the full min(analytical,measured) envelope. Historical fused3 T1 failures remain failures in the old archive; later candidate-bound recovery is separate."
+    },
+    "baseline_count_phase_timings": "UNAVAILABLE; physical operation-traced baseline controls exist, but no phase durations are invented. Not required by original max profiling criterion.",
+    "oci_or_high_performance_remote_validation": "UNMEASURED and EXCLUDED from this authorized follow-up; Snowy decides separately. Original issue's OCI motivating observation is context, not an explicit acceptance hardware requirement.",
+    "over_2_pow_32_rows": "UNMEASURED; bounded actual native-u64 tests are not a >2**32-row certificate.",
+    "release_or_full_matrix_certification": "NOT CLAIMED. Seven bounded reports remain DRAFT/incomplete. Their source-bound union supports local retrospective accounting, not a newly completed single certification run."
+  },
+  "historical_record": "Historical primary T4 10% failures, 20 fused3 T1 RSS failures, interrupted/quick runs, intermediate failed observations and empty old build logs remain untouched. Recovery observations refer to a later measured candidate and do not reclassify any historical failure. No thresholds, archives, reports, issue state or PR20 branch are modified."
+}
